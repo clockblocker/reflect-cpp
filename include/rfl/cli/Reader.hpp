@@ -24,6 +24,7 @@ static constexpr char path_separator = '.';
 
 /// Character used to delimit array elements in CLI argument values.
 /// Example: `--ports=8080,8081,8082` for an array of ports.
+/// rfl::cli::ListDelimiter replaces it.
 static constexpr char array_delimiter = ',';
 
 namespace internal {
@@ -31,7 +32,7 @@ namespace internal {
 /// The occurrences after the first of the list options given more than
 /// once, by path, in argv order. The argument map holds the first one:
 /// `--ports 80 --ports 81,82` is held as "80" in the argument map and
-/// {"81,82"} here. Each occurrence is split at array_delimiter.
+/// {"81,82"} here. Each occurrence is split at the list delimiter.
 using CliLaterOccurrencesType =
     std::map<std::string, std::vector<std::string>>;
 
@@ -159,6 +160,13 @@ struct Reader {
   template <class T>
   static constexpr bool has_custom_constructor = false;
 
+  Reader() = default;
+
+  /// @param _list_delimiter The character at which list values are split
+  /// into items, or std::nullopt to not split them, see ListDelimiter.
+  explicit Reader(const std::optional<char> _list_delimiter) noexcept
+      : list_delimiter_(_list_delimiter) {}
+
   /// Gets a specific element from a CLI array by index.
   /// @param _idx The index of the element to retrieve
   /// @param _arr The CLI array
@@ -277,9 +285,9 @@ struct Reader {
     return parse_value<T>(*str, _var.path);
   }
 
-  /// Converts a CLI variable to an array by splitting the value on commas.
-  /// The items of every occurrence of a repeated list option are added in
-  /// order (see internal::CliLaterOccurrencesType).
+  /// Converts a CLI variable to an array by splitting the value on commas,
+  /// or on the list delimiter. The items of every occurrence of a repeated
+  /// list option are added in order (see internal::CliLaterOccurrencesType).
   /// @param _var The CLI variable containing a comma-delimited string
   /// @return A Result containing a CliArrayType with the split values
   rfl::Result<InputArrayType> to_array(
@@ -337,33 +345,6 @@ struct Reader {
     return it->second;
   }
 
-  /// Splits a list into its items: those of _first, the occurrence that
-  /// get_value returns for _var, then those of its later occurrences.
-  static std::vector<std::string> split_items(const std::string& _first,
-                                              const InputVarType& _var) {
-    std::vector<std::string> items;
-    add_items(_first, &items);
-    if (_var.direct_value || !_var.later_occurrences) {
-      return items;
-    }
-    const auto it = _var.later_occurrences->find(_var.path);
-    if (it != _var.later_occurrences->end()) {
-      for (const auto& occurrence : it->second) {
-        add_items(occurrence, &items);
-      }
-    }
-    return items;
-  }
-
-  /// Adds the items of one occurrence of a list, split at array_delimiter,
-  /// to _items.
-  static void add_items(const std::string& _occurrence,
-                        std::vector<std::string>* _items) {
-    for (auto& item : split(_occurrence, array_delimiter)) {
-      _items->emplace_back(std::move(item));
-    }
-  }
-
   static std::vector<std::string> split(
       const std::string& _str, char _delim
   ) {
@@ -388,6 +369,40 @@ struct Reader {
     return result;
   }
 
+  /// Splits a list into its items: those of _first, the occurrence that
+  /// get_value returns for _var, then those of its later occurrences.
+  std::vector<std::string> split_items(const std::string& _first,
+                                       const InputVarType& _var) const {
+    std::vector<std::string> items;
+    add_items(_first, &items);
+    if (_var.direct_value || !_var.later_occurrences) {
+      return items;
+    }
+    const auto it = _var.later_occurrences->find(_var.path);
+    if (it != _var.later_occurrences->end()) {
+      for (const auto& occurrence : it->second) {
+        add_items(occurrence, &items);
+      }
+    }
+    return items;
+  }
+
+  /// Adds the items of one occurrence of a list, split at the list
+  /// delimiter, to _items. Without a delimiter, the occurrence is one item,
+  /// even if it is empty.
+  void add_items(const std::string& _occurrence,
+                 std::vector<std::string>* _items) const {
+    if (!list_delimiter_) {
+      _items->push_back(_occurrence);
+      return;
+    }
+    for (auto& item : split(_occurrence, *list_delimiter_)) {
+      _items->emplace_back(std::move(item));
+    }
+  }
+
+  /// The character at which list values are split, see ListDelimiter.
+  std::optional<char> list_delimiter_ = array_delimiter;
 };
 
 }  // namespace rfl::cli

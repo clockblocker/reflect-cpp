@@ -320,6 +320,29 @@ Any other option can be given only once. That includes nested
 fields and map entries: `Duplicate argument: --output`,
 `Duplicate short argument: -o`, `Conflict: '-o' and '--output' both provided.`
 
+### List delimiter
+
+`rfl::cli::ListDelimiter<"x">` splits lists at another character, and
+`rfl::cli::ListDelimiter<"">` does not split them at all:
+
+```cpp
+rfl::cli::read<Config, rfl::cli::ListDelimiter<";">>(argc, argv);
+// ./app --report 'a;b' --report c,d    ->  report = {"a", "b", "c,d"}
+
+rfl::cli::read<Config, rfl::cli::ListDelimiter<"">>(argc, argv);
+// ./app --report a,b --report ''       ->  report = {"a,b", ""}
+```
+
+- The delimiter is a single ASCII character, such as `;`, `:` or a space,
+  as in clap and CLI11. A longer one would make values such as `a;;;b`
+  ambiguous; repeat the option instead.
+- It applies to every list option and list positional argument of the
+  struct. Other fields are never split.
+- Without a delimiter, each occurrence, and each positional argument, is
+  exactly one item, even if it is empty.
+- Other formats ignore it: `rfl::json::write`, `rfl::json::read` and
+  `rfl::json::to_schema` give the same results with it.
+
 ### A list as the last positional argument
 
 If the last positional field is a list, it takes all remaining positional
@@ -437,6 +460,7 @@ Parsing proceeds in three stages:
 - `include/rfl/cli/parse_argv.hpp` — `argv` -> `ParsedArgs`
 - `include/rfl/cli/options.hpp` — the internal option table: the long, short and positional options of a struct
 - `include/rfl/cli/NoAbbreviations.hpp` — `NoAbbreviations` processor
+- `include/rfl/cli/ListDelimiter.hpp` — `ListDelimiter<"x">` processor
 - `include/rfl/cli/resolve_args.hpp` — `ParsedArgs` -> `map<string, string>`
 - `include/rfl/cli.hpp` — aggregator header
 - `include/rfl/SnakeCaseToKebabCase.hpp` — processor

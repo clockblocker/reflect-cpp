@@ -7,6 +7,7 @@
 
 #include "../Processors.hpp"
 #include "../SnakeCaseToKebabCase.hpp"
+#include "ListDelimiter.hpp"
 #include "Parser.hpp"
 #include "Reader.hpp"
 #include "options.hpp"
@@ -16,6 +17,8 @@
 namespace rfl::cli {
 
 namespace internal {
+
+static_assert(list_delimiter_v<Processors<>> == array_delimiter);
 
 /// Categorizes the arguments with `_parse`, which takes the options of T
 /// (see make_options) and returns ParsedArgs, and turns them into a struct.
@@ -29,7 +32,7 @@ rfl::Result<T> parse_and_read(const ParseFn& _parse) {
         return resolve_args(std::move(_parsed), options);
       })
       .and_then([](auto _args) -> rfl::Result<T> {
-        const auto r = Reader();
+        const auto r = Reader(internal::list_delimiter_v<ProcessorsType>);
         const auto var = CliVarType{&_args.values, "", std::nullopt,
                                     &_args.later_occurrences};
         return Parser<T, ProcessorsType>::read(r, var);
@@ -58,7 +61,9 @@ rfl::Result<T> parse_and_read(const ParseFn& _parse) {
 /// yourself: `std::span(argv, argc)` would parse the program name as an
 /// argument.
 /// @tparam T The struct type to parse into
-/// @tparam Ps Optional processors to apply during parsing
+/// @tparam Ps Optional processors to apply during parsing, including the
+/// settings rfl::NoExtraFields, rfl::cli::NoAbbreviations and
+/// rfl::cli::ListDelimiter
 /// @param _args The command-line arguments to parse
 /// @return A Result containing the parsed struct or an error
 template <class T, class... Ps,
@@ -74,7 +79,9 @@ rfl::Result<T> read(R&& _args) {
 /// argv[0] is skipped as the program name. See the sequence overload above
 /// for the supported syntax.
 /// @tparam T The struct type to parse into
-/// @tparam Ps Optional processors to apply during parsing
+/// @tparam Ps Optional processors to apply during parsing, including the
+/// settings rfl::NoExtraFields, rfl::cli::NoAbbreviations and
+/// rfl::cli::ListDelimiter
 /// @param argc Number of command-line arguments
 /// @param argv Array of command-line argument strings
 /// @return A Result containing the parsed struct or an error
