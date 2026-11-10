@@ -30,7 +30,8 @@ rfl::Result<T> parse_and_read(const ParseFn& _parse) {
       })
       .and_then([](auto _args) -> rfl::Result<T> {
         const auto r = Reader();
-        const auto var = CliVarType{&_args, "", std::nullopt};
+        const auto var = CliVarType{&_args.values, "", std::nullopt,
+                                    &_args.later_occurrences};
         return Parser<T, ProcessorsType>::read(r, var);
       });
 }

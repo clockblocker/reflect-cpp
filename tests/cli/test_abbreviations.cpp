@@ -186,6 +186,11 @@ TEST(cli, test_abbreviation_duplicate) {
   const auto both_short =
       read<Export>({"--format-v=a", "--format-ver", "b"});
   EXPECT_EQ(error_of(both_short), "Duplicate argument: --format-ver");
+
+  // A list option adds the values of every spelling.
+  const auto list = read<Export>({"--rep=a", "--report=b", "--re", "c"});
+  ASSERT_TRUE(list) << list.error().what();
+  EXPECT_EQ(list.value().report, (std::vector<std::string>{"a", "b", "c"}));
 }
 
 TEST(cli, test_abbreviation_missing_value_names_the_option) {

@@ -65,6 +65,11 @@ struct Option {
   /// For OptionKind::implicit_value: the value that the option stands for
   /// when it is given without one.
   std::string implicit_value = {};
+
+  /// Whether the field is a list (see is_option_list_v). Every
+  /// occurrence of a list option adds to it, however the option is spelled,
+  /// so it may be repeated. Any other option may be given only once.
+  bool is_list = false;
 };
 
 /// The options that a target struct accepts, built from its fields by
@@ -419,6 +424,20 @@ using option_fields_t = typename std::conditional_t<
     rfl::internal::is_named_tuple_v<T>, std::type_identity<T>,
     rfl::internal::Processed<T, ProcessorsType>>::type;
 
+/// Whether the reader reads T as a list, through Reader::to_array: vectors,
+/// sets, deques and the like, std::array, rfl::Array, C arrays, tuples and
+/// pairs. Maps are not lists, even those whose keys are not strings. The
+/// value of a list option is split into items at the list delimiter, and
+/// repeating the option adds the items of every occurrence, so `--x a --x b`
+/// is `--x a,b`.
+template <class T>
+constexpr bool is_option_list_v =
+    (parsing::is_vector_like_v<T> && !parsing::is_map_like_v<T>
+     && !parsing::is_bytestring_v<T> && !parsing::is_vectorstring_v<T>)
+    || parsing::is_array_v<T> || parsing::is_rfl_array_v<T>
+    || parsing::is_c_array_v<T> || parsing::is_tuple_v<T>
+    || parsing::is_rfl_tuple_v<T> || parsing::is_pair_v<T>;
+
 /// The option for a field of type T wrapped in rfl::ImplicitValue.
 template <class T, class ProcessorsType>
 Option implicit_value_option() {
@@ -434,7 +453,8 @@ Option implicit_value_option() {
                 "rfl::ImplicitValue on a number needs an implicit value, such "
                 "as rfl::ImplicitValue<int, \"1\">.");
   return Option{OptionKind::implicit_value,
-                std::string(Annotations::implicit_value.string_view())};
+                std::string(Annotations::implicit_value.string_view()),
+                is_option_list_v<U>};
 }
 
 /// The option for a key of a map or of rfl::ExtraFields with values of
@@ -453,7 +473,7 @@ Option sub_key_option() {
     return Option{OptionKind::other};
   }
   else {
-    return Option{OptionKind::value};
+    return Option{OptionKind::value, "", is_option_list_v<U>};
   }
 }
 
@@ -509,7 +529,8 @@ void add_option(const std::string& _path, Options* _options) {
     }
   }
   else {
-    _options->long_options[_path] = Option{OptionKind::value};
+    _options->long_options[_path] =
+        Option{OptionKind::value, "", is_option_list_v<U>};
   }
 }
 

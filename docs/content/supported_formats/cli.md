@@ -288,6 +288,38 @@ to `false`).
   negative positionals after `--` (`./app -1 -- -1.5 -10`). An option still
   takes a negative number as its value (`-n -5`).
 
+## Lists and repeated options
+
+A field that is read as a list (`std::vector`, `std::set`, `std::deque` and
+the like, `std::array`, `rfl::Array`, tuples and pairs, inside any of the
+wrappers above) takes comma-separated items. Its option can also be
+repeated, like Boost's composing options and argparse's `extend`: every
+occurrence is split at the commas, and the items are added in argv order.
+
+```cpp
+struct Config {
+  rfl::Short<"r", std::vector<std::string>> report;
+};
+
+// ./app --report a,b --report c        ->  report = {"a", "b", "c"}
+// ./app -r a --report b --rep=c        ->  report = {"a", "b", "c"}
+```
+
+- Long, abbreviated and short spellings of a field all add to it.
+- Repeating is the same as joining with a comma, so the size of a
+  `std::array` and validators such as `rfl::Size` see all items. An empty
+  occurrence (`--report=`) adds none.
+- A bare occurrence of an `rfl::ImplicitValue` list adds its implicit value:
+  with `rfl::ImplicitValue<std::optional<std::vector<std::string>>, "all">`,
+  `--help-reports --help-reports=cpu` gives `{"all", "cpu"}`.
+- Nested lists (`--database.replicas a --database.replicas b`) and map
+  entries whose values are lists (`--groups.x a --groups.x b`) work the
+  same way.
+
+Any other option can be given only once. That includes nested
+fields and map entries: `Duplicate argument: --output`,
+`Duplicate short argument: -o`, `Conflict: '-o' and '--output' both provided.`
+
 ## Combining wrappers
 
 `Short`, `Positional` and `ImplicitValue` can be nested with each other and
@@ -335,7 +367,7 @@ leaving out `-o` gives `"out"`.
 | `bool` | `--flag` or `--flag=true` | No `=` implies `true` |
 | `enum` | `--key=value_name` | Via `rfl::string_to_enum` |
 | `std::optional<T>` | omit for `nullopt` | |
-| `std::vector<T>` | `--key=a,b,c` | Comma-separated; empty elements skipped |
+| `std::vector<T>` | `--key=a,b,c` or `--key a --key b,c` | Comma-separated; empty elements skipped; [repeatable](#lists-and-repeated-options) |
 | Nested struct | `--parent.child=val` | Dot-separated path |
 | `rfl::Flatten<T>` | fields inlined | No prefix needed |
 | `rfl::Rename<"x", T>` | `--x=val` | Bypasses kebab conversion |
@@ -357,7 +389,10 @@ Parsing proceeds in three stages:
    one short option `abc`, and `-5` the short option `5`.
 2. **`resolve_args`** — uses the same table to map short aliases to long
    names and to merge positional arguments. Produces a flat
-   `map<string, string>`.
+   `map<string, string>`. A list option given more than once keeps its
+   first occurrence there and the others, in argv order, beside it. The
+   public `resolve_args<T, ProcessorsType>(parsed)`, for arguments parsed
+   without the table, returns the flat map alone.
 3. **`Reader`** — implements reflect-cpp's `IsReader` concept by presenting
    virtual tree nodes over the flat map. Each node is a `{map*, path}` pair —
    no data copying, just prefix-based lookup via `lower_bound`.
