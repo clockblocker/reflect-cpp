@@ -131,16 +131,17 @@ struct Config {
 // ./app --help-reports            ->  help_reports = "all"
 // ./app --help-reports=memory     ->  help_reports = "memory"
 // ./app --help-reports in.txt     ->  help_reports = "all", input = "in.txt"
-// ./app -h  /  -h=tag             ->  help = ""  /  "tag"
+// ./app -h  /  -h=tag  /  -htag   ->  help = ""  /  "tag"  /  "tag"
 // ./app --verbosity               ->  verbosity = 2
 ```
 
 A bare option stands for the text, which is parsed like any other value
-(the default text is empty). A value can only be given after `=`: the next
-token is never taken. If the option is absent, the field is read as usual:
-`std::optional` gives `std::nullopt`, `rfl::DefaultVal` its default, and any
-other field is required. Other formats read and write `rfl::ImplicitValue`
-as its inner type, as they do `rfl::Short`.
+(the default text is empty). A value can only be given after `=` or attached
+to a short option (`-htag`): the next token is never taken. If the option is
+absent, the field is read as usual: `std::optional` gives `std::nullopt`,
+`rfl::DefaultVal` its default, and any other field is required. Other formats
+read and write `rfl::ImplicitValue` as its inner type, as they do
+`rfl::Short`.
 
 ## Unknown options
 
@@ -212,6 +213,45 @@ flag to `false`. Write `-v -- 1` to pass such a token as a positional
 argument. To explicitly set a bool short flag, use `=` syntax: `-v=true`,
 `-v=false`.
 
+### Grouped short options
+
+As in getopt, short options can share one token, and a value can be
+attached to its option:
+
+```cpp
+struct Config {
+  rfl::Short<"q", std::optional<bool>> quiet;
+  rfl::Short<"v", std::optional<bool>> verbose;
+  rfl::Short<"f", std::optional<std::string>> format;
+  rfl::Short<"h", rfl::ImplicitValue<std::optional<std::string>>> help;
+};
+
+// ./app -qv -fcsv     ->  quiet, verbose, format = "csv"
+// ./app -qvfcsv       ->  the same
+// ./app -qf csv       ->  quiet, format = "csv"
+// ./app -qh  /  -htag ->  quiet, help = ""  /  help = "tag"
+```
+
+Flags are set up to the first option that takes a value. That option takes
+the rest of the token, or the next token if nothing is left. An
+`rfl::ImplicitValue` option takes the rest of the token if there is any and
+its implicit value otherwise, never the next token. The last option in a
+token treats the next token as it would alone (`-qv false` sets `verbose`
+to `false`).
+
+- `-f=csv` and `-qf=csv` give `csv`, where getopt gives `=csv`.
+- A flag inside a group takes no value: `-vq=false` is an error.
+- A letter that is not a short option is an error:
+  `Unknown short argument: -x (in '-qxf').`
+- A token like `-42`, `-1.5` or `-.5` is a negative number, so `-p -42`,
+  `-p-42` and a positional `-42` work.
+- As in argparse, that changes if a short option's name is a digit, such as
+  `rfl::Short<"1", bool>` for `ls -1`. Then such a token is a group of
+  short options: `-15` is `-1 -5`, and `-10` and `-1.5` fail with
+  `Unknown short argument: -0 (in '-10').` and `-. (in '-1.5')`. Pass
+  negative positionals after `--` (`./app -1 -- -1.5 -10`). An option still
+  takes a negative number as its value (`-n -5`).
+
 ## Combining wrappers
 
 `Short`, `Positional` and `ImplicitValue` can be nested with each other and
@@ -264,7 +304,7 @@ leaving out `-o` gives `"out"`.
 | `rfl::Flatten<T>` | fields inlined | No prefix needed |
 | `rfl::Rename<"x", T>` | `--x=val` | Bypasses kebab conversion |
 | `rfl::Positional<T>` | bare token | Matched in declaration order |
-| `rfl::Short<"x", T>` | `-x value` or `-x=value` | Single-character alias |
+| `rfl::Short<"x", T>` | `-x value`, `-x=value` or `-xvalue` | Single-character alias, can be grouped (`-qv`) |
 | `rfl::ImplicitValue<T, "x">` | `--key` or `--key=value` | Bare means `x` |
 
 ## Architecture
@@ -275,9 +315,9 @@ Parsing proceeds in three stages:
    and `positional` buckets (`ParsedArgs` struct). `rfl::cli::read` gives
    it an internal option table derived from the target struct, which says
    which long and short options are flags, take a value or have an implicit
-   value, so that `--key value` works, and whether a short option's name
-   looks like a number. The public `parse_argv`, which has no table, reads
-   `-5` as a short option.
+   value, so that `--key value` and grouped short options work, and whether
+   a short option's name looks like a number. The public `parse_argv`, which
+   has no table, reads `-5` as a short option.
 2. **`resolve_args`** — uses the same table to map short aliases to long
    names and to merge positional arguments. Produces a flat
    `map<string, string>`.

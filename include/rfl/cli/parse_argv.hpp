@@ -49,11 +49,16 @@ namespace internal {
 /// implicit value. Other long options never consume it. Short options
 /// missing from `_options` consume it unless it looks like an option, as
 /// they do without `_options`.
+/// Short options known to `_options` can be grouped as in getopt: in `-qvf`
+/// every flag is set until the first option that takes a value, which
+/// takes the rest of the token (`-qfcsv`) or, if nothing is left, the next
+/// token (`-qf csv`). An rfl::ImplicitValue option takes the rest of the
+/// token if there is one, and never the next token. A token that looks like
+/// a negative number (`-42`, `-.5`) is a positional argument, unless a short
+/// option's name looks like a number (`-1`), as in argparse. Without
+/// `_options` from make_options, short options are not grouped: `-abc` is
+/// the short option `abc`, and `-42` the short option `42`.
 /// Every element of `_args` is parsed; nothing is skipped as the program name.
-/// A token that looks like a negative number (-5, -.5) is a positional
-/// argument unless `_options` has a short option whose name looks like a
-/// number (rfl::Short<"1", ...>). Then such tokens are short options, as in
-/// argparse.
 /// @param _args The command-line arguments to parse
 /// @param _options The options of the target struct (see make_options)
 /// @return A Result containing ParsedArgs with categorized arguments or an error
@@ -165,44 +170,88 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       continue;
     }
 
-    // Short argument: -x value, -x=value, or -x (bool).
-    // A negative number such as -5 or -.5 is not an option; it falls through
-    // to positional, unless the struct has a short option such as -1.
-    if (looks_like_option(arg_raw)
-        || (negative_numbers_are_options && arg_raw.size() >= 2
-            && arg_raw[0] == '-')) {
-      const auto arg = arg_raw.substr(1);
-      const auto eq = arg.find('=');
+    // Short options: -x, -x value, -x=value, and groups of them in one
+    // token, as in getopt: -qv, -fvalue, -qfvalue, -qf value.
+    if (arg_raw.size() >= 2 && arg_raw[0] == '-') {
+      const auto group = arg_raw.substr(1);
 
-      // -x=value
-      if (eq != std::string_view::npos) {
-        const auto r = add_short(
-            std::string(arg.substr(0, eq)),
-            std::string(arg.substr(eq + 1)), arg_raw);
-        if (!r) { return error(r.error().what()); }
+      // A negative number such as -42 or -.5 is a positional argument,
+      // unless, as in argparse, a short option's name looks like a number
+      // (-1). Then -42 is a group of short options. Without a table, it is
+      // the short option "42".
+      if (!looks_like_option(arg_raw) && !negative_numbers_are_options) {
+        result.positional.emplace_back(arg_raw);
         continue;
       }
 
-      auto key = std::string(arg);
-      const auto option = _options.find_short(key);
-      const auto start = i;
-      auto val = std::string();
-      if (option.kind == OptionKind::unknown) {
-        // Not in `_options`: consume the next token as the value if it
-        // doesn't look like an option. resolve_args reports unknown short
-        // options.
-        if (i + 1 < _args.size() && !looks_like_option(_args[i + 1])) {
-          val = std::string(_args[++i]);
+      // Without a table, the short options are not known, so -abc is the one
+      // short option "abc": -abc value, -abc=value or -abc.
+      for (size_t j = 0; j < group.size(); ++j) {
+        // Short names are single ASCII characters. An unknown character may
+        // take several bytes in UTF-8, so take them all for the message.
+        const auto c = static_cast<unsigned char>(group[j]);
+        auto key = std::string(
+            _options.group_short_options
+                ? group.substr(
+                      j, c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 1)
+                : group.substr(0, group.find('=')));
+        const auto option = _options.find_short(key);
+        const auto rest = group.substr(j + key.size());
+        const auto name = "-" + key;
+        const bool alone = j == 0 && rest.empty();
+        auto val = std::string();
+
+        if (j == 0 && rest.starts_with('=')) {
+          // -x=value, whatever -x is. Unlike getopt, where -f=csv gives
+          // "=csv", the '=' is not part of the value.
+          val = std::string(rest.substr(1));
         }
+        else if (option.kind == OptionKind::unknown) {
+          if (!alone) {
+            return error("Unknown short argument: " + name + " (in '"
+                         + std::string(arg_raw) + "').");
+          }
+          // Not in `_options`: consume the next token as the value if it
+          // doesn't look like an option. resolve_args reports unknown short
+          // options.
+          const bool takes_next =
+              i + 1 < _args.size() && !looks_like_option(_args[i + 1]);
+          if (takes_next) {
+            val = std::string(_args[++i]);
+          }
+          result.short_without_equals[key] = takes_next;
+        }
+        else if (option.kind == OptionKind::flag && !rest.empty()) {
+          // -qv: a flag followed by more options. Like getopt, a flag in a
+          // group takes no value: -vq=false is an error, -q=false is not.
+          if (rest.starts_with('=')) {
+            return error("Option '" + name + "' does not take a value in '"
+                         + std::string(arg_raw) + "'. Write '" + name
+                         + std::string(rest) + "' on its own.");
+          }
+          const auto r = add_short(std::move(key), "", arg_raw);
+          if (!r) { return error(r.error().what()); }
+          continue;
+        }
+        else if (!rest.empty()) {
+          // -fvalue, -qfvalue, -hvalue: the rest of the token is the value.
+          // -qf=value is the same as -qfvalue, as -f=value is.
+          val = std::string(rest.starts_with('=') ? rest.substr(1) : rest);
+        }
+        else {
+          // The last option of the token handles the next one as it would
+          // alone: -qf csv takes "csv", -vq false takes "false".
+          const auto start = i;
+          auto v = take_value(option, name, true, &i);
+          if (!v) { return error(v.error().what()); }
+          val = std::move(*v);
+          result.short_without_equals[key] = i != start;
+        }
+
+        const auto r = add_short(std::move(key), std::move(val), arg_raw);
+        if (!r) { return error(r.error().what()); }
+        break;
       }
-      else {
-        auto v = take_value(option, arg_raw, true, &i);
-        if (!v) { return error(v.error().what()); }
-        val = std::move(*v);
-      }
-      result.short_without_equals[key] = i != start;
-      const auto r = add_short(std::move(key), std::move(val), arg_raw);
-      if (!r) { return error(r.error().what()); }
       continue;
     }
 
