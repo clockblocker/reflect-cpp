@@ -421,6 +421,33 @@ arguments unchanged.
 - Without `OptionsFirst`, options and positional arguments can be mixed.
   Other formats ignore the setting.
 
+## Blank list items
+
+By default, blank items in a list are skipped: `--tags=a,,b` gives `[a, b]`.
+Pass `rfl::cli::BlankItemsAsMissing` to keep each blank item as a missing
+value at its index. The element type then decides, as it does for a missing
+field:
+
+```cpp
+const auto result =
+    rfl::cli::read<Config, rfl::cli::BlankItemsAsMissing>(argc, argv);
+```
+
+| Element type | `--tags=a,,b` |
+|---|---|
+| `std::vector<std::optional<T>>` | `[a, nullopt, b]` |
+| `std::vector<rfl::DefaultVal<T>>` | `[a, T{}, b]` |
+| `std::vector<T>` | Error: `Blank item at index 1 of '--tags'.` |
+
+`T` is any type that needs a value, such as `std::string`, `std::wstring`,
+a number or a `bool`. Smart pointers (`std::shared_ptr<T>`,
+`std::unique_ptr<T>`) are never required, so a blank one is null, as a
+missing field of that type is.
+
+Leading and trailing blanks (`,b`, `a,`) are blank items, too. An empty
+value (`--tags=`) is still an empty list. Other list types, such as
+`std::set`, `std::deque` and `std::array`, behave the same way.
+
 ## Combining wrappers
 
 `Short`, `Positional` and `ImplicitValue` can be nested with each other and
@@ -468,7 +495,7 @@ leaving out `-o` gives `"out"`.
 | `bool` | `--flag` or `--flag=true` | No `=` implies `true` |
 | `enum` | `--key=value_name` | Via `rfl::string_to_enum` |
 | `std::optional<T>` | omit for `nullopt` | |
-| `std::vector<T>` | `--key=a,b,c` or `--key a --key b,c` | Comma-separated; empty elements skipped; [repeatable](#lists-and-repeated-options) |
+| `std::vector<T>` | `--key=a,b,c` or `--key a --key b,c` | Comma-separated; blank items skipped unless [kept](#blank-list-items); [repeatable](#lists-and-repeated-options) |
 | Nested struct | `--parent.child=val` | Dot-separated path |
 | `rfl::Flatten<T>` | fields inlined | No prefix needed |
 | `rfl::Rename<"x", T>` | `--x=val` | Bypasses kebab conversion |
@@ -502,8 +529,9 @@ Parsing proceeds in three stages:
 ## Files
 
 - `include/rfl/cli/read.hpp` — public API
+- `include/rfl/cli/BlankItemsAsMissing.hpp` — setting for blank list items
 - `include/rfl/cli/Reader.hpp` — Reader + `parse_value` overloads
-- `include/rfl/cli/Parser.hpp` — Parser type alias
+- `include/rfl/cli/Parser.hpp` — Parser type alias + blank `DefaultVal` and `std::wstring` items
 - `include/rfl/cli/parse_argv.hpp` — `argv` -> `ParsedArgs`
 - `include/rfl/cli/options.hpp` — the internal option table: the long, short and positional options of a struct
 - `include/rfl/cli/NoAbbreviations.hpp` — `NoAbbreviations` processor

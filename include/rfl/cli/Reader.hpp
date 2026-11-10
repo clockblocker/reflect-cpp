@@ -41,12 +41,17 @@ using CliLaterOccurrencesType =
 /// Represents a CLI variable that can be a direct value or a path in the argument map.
 /// The `path` represents the hierarchical key (e.g., "database.host").
 /// The `direct_value` is used when parsing array elements directly.
+/// A blank array element kept by BlankItemsAsMissing has neither: it is a
+/// missing value, see `blank_item_index`.
 struct CliVarType {
   const std::map<std::string, std::string>* const args = nullptr;
   const std::string path;
   const std::optional<std::string> direct_value;
   /// The later occurrences of repeated list options, if any.
   const internal::CliLaterOccurrencesType* const later_occurrences = nullptr;
+  /// Only set for a blank array element: its index. `path` is then the key
+  /// of the array.
+  const std::optional<size_t> blank_item_index = std::nullopt;
 };
 
 /// Represents a CLI object with a prefix path for accessing nested fields.
@@ -62,6 +67,8 @@ struct CliObjectType {
 /// Typically created by splitting a comma-delimited argument value.
 struct CliArrayType {
   const std::vector<std::string> values;
+  /// The key the values were read from, used to report blank items.
+  const std::string path = "";
 };
 
 // --- Constrained overloads for string-to-type parsing ---
@@ -164,8 +171,12 @@ struct Reader {
 
   /// @param _list_delimiter The character at which list values are split
   /// into items, or std::nullopt to not split them, see ListDelimiter.
-  explicit Reader(const std::optional<char> _list_delimiter) noexcept
-      : list_delimiter_(_list_delimiter) {}
+  /// @param _blank_items_as_missing Whether to keep blank items in lists
+  /// and read them as missing values, see BlankItemsAsMissing.
+  explicit Reader(const std::optional<char> _list_delimiter,
+                  const bool _blank_items_as_missing = false) noexcept
+      : list_delimiter_(_list_delimiter),
+        blank_items_as_missing_(_blank_items_as_missing) {}
 
   /// Gets a specific element from a CLI array by index.
   /// @param _idx The index of the element to retrieve
@@ -177,7 +188,7 @@ struct Reader {
       return error(
           std::string("Index ") + std::to_string(_idx) + " out of bounds.");
     }
-    return InputVarType{nullptr, "", _arr.values[_idx]};
+    return get_element(_idx, _arr);
   }
 
   /// Gets a specific field from a CLI object by name.
@@ -196,6 +207,7 @@ struct Reader {
 
   /// Checks if a CLI variable is empty (has no value).
   /// A variable is empty if there's no direct value and no matching key in the argument map.
+  /// This includes blank array elements, which are missing values.
   /// @param _var The CLI variable to check
   /// @return true if the variable is empty, false otherwise
   bool is_empty(const InputVarType& _var) const noexcept {
@@ -224,9 +236,8 @@ struct Reader {
       const ArrayReader& _array_reader,
       const InputArrayType& _arr
   ) const noexcept {
-    for (const auto& val : _arr.values) {
-      auto err = _array_reader.read(
-          InputVarType{nullptr, "", val});
+    for (size_t i = 0; i < _arr.values.size(); ++i) {
+      auto err = _array_reader.read(get_element(i, _arr));
       if (err) {
         return err;
       }
@@ -278,6 +289,9 @@ struct Reader {
   /// @return A Result containing the converted value or an error
   template <class T>
   rfl::Result<T> to_basic_type(const InputVarType& _var) const noexcept {
+    if (_var.blank_item_index) {
+      return blank_item_error(_var);
+    }
     const auto str = get_value(_var);
     if (!str) {
       return error("No value for key '" + _var.path + "'.");
@@ -292,11 +306,14 @@ struct Reader {
   /// @return A Result containing a CliArrayType with the split values
   rfl::Result<InputArrayType> to_array(
       const InputVarType& _var) const noexcept {
+    if (_var.blank_item_index) {
+      return blank_item_error(_var);
+    }
     const auto str = get_value(_var);
     if (!str) {
       return InputArrayType{{}};
     }
-    return InputArrayType{split_items(*str, _var)};
+    return InputArrayType{split_items(*str, _var), _var.path};
   }
 
   /// Converts a CLI variable to an object for reading nested fields.
@@ -305,6 +322,9 @@ struct Reader {
   /// @return A Result containing a CliObjectType or an error
   rfl::Result<InputObjectType> to_object(
       const InputVarType& _var) const noexcept {
+    if (_var.blank_item_index) {
+      return blank_item_error(_var);
+    }
     if (!_var.args) {
       return error("Cannot convert to object: no argument map available"
                    + (_var.path.empty()
@@ -329,6 +349,25 @@ struct Reader {
   }
 
  private:
+  /// Returns the element at _idx, which must be in bounds. A blank element
+  /// kept by BlankItemsAsMissing is a missing value, the others are direct
+  /// values.
+  InputVarType get_element(
+      const size_t _idx, const InputArrayType& _arr
+  ) const noexcept {
+    if (blank_items_as_missing_ && _arr.values[_idx].empty()) {
+      return InputVarType{.path = _arr.path,
+                          .direct_value = std::nullopt,
+                          .blank_item_index = _idx};
+    }
+    return InputVarType{nullptr, "", _arr.values[_idx]};
+  }
+
+  static rfl::Unexpected<Error> blank_item_error(const InputVarType& _var) {
+    return error("Blank item at index " + std::to_string(*_var.blank_item_index)
+                 + " of '--" + _var.path + "'.");
+  }
+
   static std::optional<std::string> get_value(
       const InputVarType& _var
   ) noexcept {
@@ -345,8 +384,10 @@ struct Reader {
     return it->second;
   }
 
+  /// Splits _str at _delim. An empty _str has no pieces. Otherwise, empty
+  /// pieces are skipped, unless _keep_blank_items is set.
   static std::vector<std::string> split(
-      const std::string& _str, char _delim
+      const std::string& _str, char _delim, const bool _keep_blank_items
   ) {
     std::vector<std::string> result;
     if (_str.empty()) {
@@ -356,12 +397,12 @@ struct Reader {
     while (true) {
       const auto pos = _str.find(_delim, start);
       if (pos == std::string::npos) {
-        if (start < _str.size()) {
+        if (start < _str.size() || _keep_blank_items) {
           result.emplace_back(_str.substr(start));
         }
         break;
       }
-      if (pos > start) {
+      if (pos > start || _keep_blank_items) {
         result.emplace_back(_str.substr(start, pos - start));
       }
       start = pos + 1;
@@ -389,21 +430,37 @@ struct Reader {
 
   /// Adds the items of one occurrence of a list, split at the list
   /// delimiter, to _items. Without a delimiter, the occurrence is one item,
-  /// even if it is empty.
+  /// even if it is empty. With a delimiter, an empty occurrence has no
+  /// items, and blank items are skipped, unless blank_items_as_missing_ is
+  /// set.
   void add_items(const std::string& _occurrence,
                  std::vector<std::string>* _items) const {
     if (!list_delimiter_) {
       _items->push_back(_occurrence);
       return;
     }
-    for (auto& item : split(_occurrence, *list_delimiter_)) {
+    for (auto& item :
+         split(_occurrence, *list_delimiter_, blank_items_as_missing_)) {
       _items->emplace_back(std::move(item));
     }
   }
 
   /// The character at which list values are split, see ListDelimiter.
   std::optional<char> list_delimiter_ = array_delimiter;
+
+  /// Whether blank items in lists are kept and read as missing values, see
+  /// BlankItemsAsMissing.
+  bool blank_items_as_missing_ = false;
 };
+
+namespace internal {
+
+/// Whether _var is a blank array element kept by BlankItemsAsMissing.
+inline bool is_blank_item(const CliVarType& _var) noexcept {
+  return _var.blank_item_index.has_value();
+}
+
+}  // namespace internal
 
 }  // namespace rfl::cli
 
