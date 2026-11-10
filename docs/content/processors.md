@@ -310,6 +310,10 @@ have gotten had you read the following JSON string:
 Because you have not passed a default value to town, the default value
 of the type is used instead.
 
+A Validator whose default value is invalid, such as
+`rfl::Validator<int, rfl::Minimum<1>>`, is only checked if its field is
+missing. Then `read` returns an error (see [rfl::DefaultVal](../default_val)).
+
 ### `rfl::DurationsAsCount`
 
 By default, `std::chrono::duration` types are written as an object containing

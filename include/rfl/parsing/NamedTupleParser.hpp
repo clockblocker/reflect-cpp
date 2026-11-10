@@ -176,23 +176,25 @@ struct NamedTupleParser {
    * @param _r The reader to use.
    * @param _var The input variable to read from.
    * @param _view The view to read into.
+   * @param _found If not null, receives which fields the input contained.
+   * Only meaningful if no error is returned.
    * @return An optional error.
    */
   static std::optional<Error> read_view_with_default(
-      const R& _r, const InputVarType& _var,
-      NamedTuple<FieldTypes...>* _view) noexcept {
+      const R& _r, const InputVarType& _var, NamedTuple<FieldTypes...>* _view,
+      std::array<bool, size_>* _found = nullptr) noexcept {
     if constexpr (_no_field_names) {
       auto arr = _r.to_array(_var);
       if (!arr) [[unlikely]] {
         return arr.error();
       }
-      return read_object_or_array_with_default(_r, *arr, _view);
+      return read_object_or_array_with_default(_r, *arr, _view, _found);
     } else {
       auto obj = _r.to_object(_var);
       if (!obj) [[unlikely]] {
         return obj.error();
       }
-      return read_object_or_array_with_default(_r, *obj, _view);
+      return read_object_or_array_with_default(_r, *obj, _view, _found);
     }
   }
 
@@ -420,7 +422,7 @@ struct NamedTupleParser {
 
   static std::optional<Error> read_object_or_array_with_default(
       const R& _r, const InputObjectOrArrayType& _obj_or_arr,
-      NamedTupleType* _view) noexcept {
+      NamedTupleType* _view, std::array<bool, size_>* _found) noexcept {
     FieldErrors<ProcessorsType> errors;
     const auto reader = ViewReaderWithDefaultType(&_r, _view, &errors);
     if constexpr (_no_field_names) {
@@ -433,6 +435,9 @@ struct NamedTupleParser {
       if (err) [[unlikely]] {
         return err;
       }
+    }
+    if (_found) {
+      *_found = reader.found();
     }
     if constexpr (internal::has_default_val_v<NamedTupleType> &&
                   !internal::default_if_missing_v<ProcessorsType>) {

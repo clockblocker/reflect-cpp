@@ -1,11 +1,16 @@
 #ifndef RFL_PARSING_PARSER_DEFAULT_HPP_
 #define RFL_PARSING_PARSER_DEFAULT_HPP_
 
+#include <array>
+#include <atomic>
 #include <map>
+#include <new>
+#include <optional>
 #include <type_traits>
 
 #include "../Result.hpp"
 #include "../always_false.hpp"
+#include "../internal/DeferredValidation.hpp"
 #include "../internal/HasFromReflectionMethod.hpp"
 #include "../internal/always_inline.hpp"
 #include "../internal/default_if_missing_v.hpp"
@@ -64,6 +69,7 @@
 #include "Parser_base.hpp"
 #include "VectorParser.hpp"
 #include "call_destructors_where_necessary.hpp"
+#include "check_missing_defaults.hpp"
 #include "is_string_map.hpp"
 #include "make_type_name.hpp"
 #include "schema/Type.hpp"
@@ -77,6 +83,10 @@ template <class R, class W, class T, class ProcessorsType>
   requires AreReaderAndWriter<R, W, T>
 struct Parser {
  public:
+  /// Only this primary template defines this. The check of missing default
+  /// values uses it to decompose only what this Parser reads as a struct.
+  using DefaultParserFor = T;
+
   using InputVarType = typename R::InputVarType;
 
   using ParentType = Parent<W>;
@@ -716,22 +726,103 @@ struct Parser {
   /// This is actually more straight-forward than the standard case - we
   /// just allocate a struct and then fill it. But it is less efficient and
   /// it assumes that all values on the struct have a default constructor,
-  /// so we only use it when the DefaultIfMissing preprocessor is added.
+  /// so we only use it when the DefaultIfMissing processor is added or T
+  /// contains an rfl::DefaultVal.
   static Result<T> read_struct_with_default(const R& _r,
                                             const InputVarType& _var) {
+    if constexpr (missing_defaults::may_contain_validator_v<
+                      R, W, ProcessorsType, T>) {
+      return read_struct_with_deferred_default(_r, _var);
+    } else {
+      try {
+        auto t = T{};  // This might fail, but in that case we will just
+                       // return the error.
+        auto view = ProcessorsType::template process<T>(to_view(t));
+        using ViewType = decltype(view);
+        auto err =
+            Parser<R, W, ViewType, ProcessorsType>::read_view_with_default(
+                _r, _var, &view);
+        if (err) [[unlikely]] {
+          return error(std::move(*err));
+        }
+        return t;
+      } catch (std::exception& e) {
+        return error(e.what());
+      }
+    }
+  }
+
+  /// Like read_struct_with_default, for a T that may hold a Validator whose
+  /// default value is invalid.
+  static Result<T> read_struct_with_deferred_default(const R& _r,
+                                                     const InputVarType& _var) {
+    alignas(T) unsigned char buf[sizeof(T)];
+    std::optional<internal::DeferredValidation> deferred;
+    bool check_defaults = false;
+    auto constructed = construct_default(&buf, &deferred, &check_defaults);
+    if (!constructed) [[unlikely]] {
+      return error(std::move(constructed).error());
+    }
+    T* ptr = *constructed;
+    struct Destroy {
+      T* ptr_;
+      ~Destroy() { ptr_->~T(); }
+    };
+    const auto destroy = Destroy{ptr};
     try {
-      auto t = T{};  // This might fail, for instance if the default value does
-                     // not satisfy the validator, but in that case we will just
-                     // return the error.
-      auto view = ProcessorsType::template process<T>(to_view(t));
+      auto view = ProcessorsType::template process<T>(to_view(*ptr));
       using ViewType = decltype(view);
-      auto err =
-          Parser<R, W, ViewType, ProcessorsType>::read_view_with_default(
-              _r, _var, &view);
+      auto found = std::array<bool, ViewType::size()>{};
+      auto err = Parser<R, W, ViewType, ProcessorsType>::read_view_with_default(
+          _r, _var, &view, &found);
       if (err) [[unlikely]] {
         return error(std::move(*err));
       }
-      return t;
+      if (check_defaults) [[unlikely]] {
+        auto invalid = check_missing_defaults<R, W, ProcessorsType>(
+            deferred ? &*deferred : nullptr, view, found);
+        if (invalid) {
+          return error(std::move(*invalid));
+        }
+      }
+      return Result<T>(std::move(*ptr));
+    } catch (std::exception& e) {
+      return error(e.what());
+    }
+  }
+
+  /// Default-constructs T in _buf, as T{}. If that throws an
+  /// internal::InvalidDefaultValue, the default value of a Validator inside
+  /// T is invalid: then constructs T{} again with the check of such default
+  /// values deferred (see internal::DeferredValidation), and sets
+  /// *_check_defaults: the fields that the input does not contain must then
+  /// be checked after reading. Any other exception is returned as an error.
+  static Result<T*> construct_default(
+      void* _buf, std::optional<internal::DeferredValidation>* _deferred,
+      bool* _check_defaults) {
+    // Once deferring has worked for T, later reads defer right away.
+    static std::atomic<bool> defer{false};
+    if (!defer.load(std::memory_order_relaxed)) {
+      try {
+        T* ptr = ::new (_buf) T{};
+        // Constructed during another struct's deferred construction, T may
+        // hold copies of that struct's unchecked defaults.
+        *_check_defaults = internal::DeferredValidation::head() != nullptr;
+        return ptr;
+      } catch (const internal::InvalidDefaultValue&) {
+        // Deferred below.
+      } catch (std::exception& e) {
+        return error(e.what());
+      }
+    }
+    try {
+      _deferred->emplace(_buf, sizeof(T));
+      const auto activation =
+          internal::DeferredValidation::Activation(&**_deferred);
+      T* ptr = ::new (_buf) T{};
+      *_check_defaults = true;
+      defer.store(true, std::memory_order_relaxed);
+      return ptr;
     } catch (std::exception& e) {
       return error(e.what());
     }
