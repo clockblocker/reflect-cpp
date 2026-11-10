@@ -9,6 +9,7 @@
 #include "../SnakeCaseToKebabCase.hpp"
 #include "Parser.hpp"
 #include "Reader.hpp"
+#include "long_options.hpp"
 #include "parse_argv.hpp"
 #include "resolve_args.hpp"
 
@@ -26,11 +27,14 @@ constexpr bool negative_numbers_are_options() {
   return has_numeric_short_name<NT>(std::make_index_sequence<NT::size()>{});
 }
 
-/// Turns categorized arguments into a struct.
-template <class T, class... Ps>
-rfl::Result<T> read_parsed(ParsedArgs _parsed) {
+/// Categorizes the arguments with `_parse`, which takes the long options of
+/// T (see make_long_options) and returns ParsedArgs, and turns them into a
+/// struct.
+template <class T, class... Ps, class ParseFn>
+rfl::Result<T> parse_and_read(const ParseFn& _parse) {
   using ProcessorsType = Processors<SnakeCaseToKebabCase, Ps...>;
-  return resolve_args<T, ProcessorsType>(std::move(_parsed))
+  return _parse(make_long_options<T, ProcessorsType>())
+      .and_then(resolve_args<T, ProcessorsType>)
       .and_then([](auto _args) -> rfl::Result<T> {
         const auto r = Reader();
         const auto var = CliVarType{&_args, "", std::nullopt};
@@ -67,9 +71,11 @@ template <class T, class... Ps,
           class R = std::initializer_list<std::string_view>>
   requires internal::StringRange<R> || internal::WideStringRange<R>
 rfl::Result<T> read(R&& _args) {
-  return internal::parse_args(std::forward<R>(_args),
-                              internal::negative_numbers_are_options<T, Ps...>())
-      .and_then(internal::read_parsed<T, Ps...>);
+  return internal::parse_and_read<T, Ps...>([&](const auto& _options) {
+    return internal::parse_args(
+        std::forward<R>(_args), _options,
+        internal::negative_numbers_are_options<T, Ps...>());
+  });
 }
 
 /// Parses command-line arguments into a struct using reflection.
@@ -82,9 +88,11 @@ rfl::Result<T> read(R&& _args) {
 /// @return A Result containing the parsed struct or an error
 template <class T, class... Ps>
 rfl::Result<T> read(int argc, const char* const argv[]) {
-  return internal::parse_args(argc, argv,
-                              internal::negative_numbers_are_options<T, Ps...>())
-      .and_then(internal::read_parsed<T, Ps...>);
+  return internal::parse_and_read<T, Ps...>([&](const auto& _options) {
+    return internal::parse_args(
+        argc, argv, _options,
+        internal::negative_numbers_are_options<T, Ps...>());
+  });
 }
 
 template <class T, class... Ps>
@@ -102,9 +110,11 @@ rfl::Result<T> read(int argc, char* argv[]) {
 /// @return A Result containing the parsed struct or an error
 template <class T, class... Ps>
 rfl::Result<T> read(int argc, const wchar_t* const argv[]) {
-  return internal::parse_args(argc, argv,
-                              internal::negative_numbers_are_options<T, Ps...>())
-      .and_then(internal::read_parsed<T, Ps...>);
+  return internal::parse_and_read<T, Ps...>([&](const auto& _options) {
+    return internal::parse_args(
+        argc, argv, _options,
+        internal::negative_numbers_are_options<T, Ps...>());
+  });
 }
 
 template <class T, class... Ps>

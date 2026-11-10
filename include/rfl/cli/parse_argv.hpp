@@ -15,6 +15,7 @@
 
 #include "../Result.hpp"
 #include "../internal/strings/utf8_conversions.hpp"
+#include "long_options.hpp"
 #include "resolve_args.hpp"
 
 namespace rfl::cli {
@@ -35,23 +36,27 @@ namespace internal {
 
 /// Parses command-line arguments into categorized buckets.
 /// Handles three types of arguments:
-/// - Long options: --key=value or --flag (stored in `named`)
+/// - Long options: --key=value, --key value or --flag (stored in `named`)
 /// - Short options: -x value, -x=value, or -x (stored in `short_args`)
 /// - Positional arguments: bare arguments not prefixed with dashes (stored in `positional`)
 /// The special argument "--" forces all subsequent arguments to be treated as positional.
+/// `_long_options` says which long options take a value. A long option that
+/// takes a value consumes the next token when it is given without '='.
+/// Others, boolean flags among them, never consume it.
 /// Every element of `_args` is parsed; nothing is skipped as the program name.
 /// A token that looks like a negative number (-5, -.5) is a positional
 /// argument unless `_negative_numbers_are_options` is true, as it is when the
 /// target struct has a short option whose name looks like a number
 /// (rfl::Short<"1", ...>). Then such tokens are short options, as in argparse.
 /// @param _args The command-line arguments to parse
+/// @param _long_options The long options of the target struct
 /// @return A Result containing ParsedArgs with categorized arguments or an error
-/// --key=value / --flag → named
+/// --key=value / --key value / --flag → named
 /// -x value / -x=value / -x → short_args
 /// bare arguments → positional
 /// -- → everything after goes to positional
 inline rfl::Result<ParsedArgs> parse_string_views(
-    std::span<const std::string_view> _args,
+    std::span<const std::string_view> _args, const LongOptions& _long_options,
     bool _negative_numbers_are_options) {
   ParsedArgs result;
 
@@ -79,16 +84,29 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       continue;
     }
 
-    // Long argument: --key=value or --flag.
+    // Long argument: --key=value, --key value or --flag.
     if (arg_raw.starts_with("--")) {
       const auto arg = arg_raw.substr(2);
       const auto eq = arg.find('=');
       auto key = std::string(
           eq == std::string_view::npos ? arg : arg.substr(0, eq));
-      auto val = std::string(
-          eq == std::string_view::npos ? "" : arg.substr(eq + 1));
       if (key.empty()) {
         return error("Empty key in argument: " + std::string(arg_raw));
+      }
+      const auto kind = _long_options.kind_of(key);
+      if (kind == LongOptionKind::unknown && _long_options.reject_unknown) {
+        return error("Unknown option '--" + key + "'.");
+      }
+      auto val = std::string();
+      if (eq != std::string_view::npos) {
+        val = std::string(arg.substr(eq + 1));
+      }
+      else if (kind == LongOptionKind::value) {
+        // --key value
+        if (i + 1 >= _args.size() || looks_like_option(_args[i + 1])) {
+          return error("Missing value for option '--" + key + "'.");
+        }
+        val = std::string(_args[++i]);
       }
       if (!result.named.emplace(std::move(key), std::move(val)).second) {
         return error("Duplicate argument: " + std::string(arg_raw));
@@ -172,6 +190,7 @@ bool is_null(const S& _str) noexcept {
 /// `_first_index` is the index of the first element in error messages.
 template <StringRange R>
 rfl::Result<ParsedArgs> parse_strings(R&& _args, size_t _first_index,
+                                      const LongOptions& _long_options,
                                       bool _negative_numbers_are_options) {
   std::vector<std::string_view> views;
   auto i = _first_index;
@@ -183,14 +202,16 @@ rfl::Result<ParsedArgs> parse_strings(R&& _args, size_t _first_index,
     views.push_back(view);
     ++i;
   }
-  return parse_string_views(views, _negative_numbers_are_options);
+  return parse_string_views(views, _long_options,
+                            _negative_numbers_are_options);
 }
 
 /// Converts every element of `_args` to UTF-8 and parses it.
 /// `_first_index` is the index of the first element in error messages.
 template <WideStringRange R>
-rfl::Result<ParsedArgs> parse_wide_strings(
-    R&& _args, size_t _first_index, bool _negative_numbers_are_options) {
+rfl::Result<ParsedArgs> parse_wide_strings(R&& _args, size_t _first_index,
+                                           const LongOptions& _long_options,
+                                           bool _negative_numbers_are_options) {
   std::vector<std::string> narrow;
   auto i = _first_index;
   for (auto&& arg : _args) {
@@ -206,7 +227,8 @@ rfl::Result<ParsedArgs> parse_wide_strings(
     narrow.emplace_back(std::move(*str));
     ++i;
   }
-  return parse_strings(narrow, _first_index, _negative_numbers_are_options);
+  return parse_strings(narrow, _first_index, _long_options,
+                       _negative_numbers_are_options);
 }
 
 /// Validates argc/argv and returns the arguments after argv[0], the program
@@ -223,31 +245,35 @@ rfl::Result<std::span<const CharT* const>> skip_program_name(
   return std::span<const CharT* const>(argv + 1, static_cast<size_t>(argc - 1));
 }
 
-/// Parses every element of `_args`, as parse_argv(_args) does.
+/// Parses every element of `_args`, as parse_argv(_args, _long_options) does.
 /// `_negative_numbers_are_options` is as for parse_string_views.
 template <class R>
   requires StringRange<R> || WideStringRange<R>
-rfl::Result<ParsedArgs> parse_args(R&& _args,
+rfl::Result<ParsedArgs> parse_args(R&& _args, const LongOptions& _long_options,
                                    bool _negative_numbers_are_options) {
   if constexpr (StringRange<R>) {
-    return parse_strings(std::forward<R>(_args), 0,
+    return parse_strings(std::forward<R>(_args), 0, _long_options,
                          _negative_numbers_are_options);
   } else {
-    return parse_wide_strings(std::forward<R>(_args), 0,
+    return parse_wide_strings(std::forward<R>(_args), 0, _long_options,
                               _negative_numbers_are_options);
   }
 }
 
-/// Parses argc/argv, skipping argv[0], as parse_argv(argc, argv) does.
+/// Parses argc/argv, skipping argv[0], as parse_argv(argc, argv,
+/// _long_options) does.
 /// `_negative_numbers_are_options` is as for parse_string_views.
 template <class CharT>
 rfl::Result<ParsedArgs> parse_args(int argc, const CharT* const argv[],
+                                   const LongOptions& _long_options,
                                    bool _negative_numbers_are_options) {
   return skip_program_name(argc, argv).and_then([&](auto _args) {
     if constexpr (std::is_same_v<CharT, char>) {
-      return parse_strings(_args, 1, _negative_numbers_are_options);
+      return parse_strings(_args, 1, _long_options,
+                           _negative_numbers_are_options);
     } else {
-      return parse_wide_strings(_args, 1, _negative_numbers_are_options);
+      return parse_wide_strings(_args, 1, _long_options,
+                                _negative_numbers_are_options);
     }
   });
 }
@@ -260,24 +286,49 @@ rfl::Result<ParsedArgs> parse_args(int argc, const CharT* const argv[],
 /// must be multi-pass and must not yield temporary `std::string`s, as for
 /// rfl::cli::read. Every element is parsed: unlike the argc/argv overloads,
 /// the first one is NOT skipped as the program name.
-/// Without the target struct, a token such as -5 or -.5 is a short option.
-/// rfl::cli::read, which knows the struct, reads it as a negative number
-/// unless the struct has a short option like rfl::Short<"1", ...>.
+/// A token such as -5 or -.5 is a negative number, so a positional argument.
+/// @param _args The command-line arguments to parse
+/// @param _long_options The long options of the target struct
+/// @return A Result containing ParsedArgs with categorized arguments or an error
+template <class R = std::initializer_list<std::string_view>>
+  requires internal::StringRange<R> || internal::WideStringRange<R>
+rfl::Result<ParsedArgs> parse_argv(R&& _args,
+                                   const LongOptions& _long_options) {
+  return internal::parse_args(std::forward<R>(_args), _long_options, false);
+}
+
+/// Parses a sequence of command-line arguments without knowing the target
+/// struct. Long options never consume the next token, so values must be
+/// passed as --key=value. A token such as -5 or -.5 is a short option, as it
+/// always was in parse_argv(argc, argv).
 /// @param _args The command-line arguments to parse
 /// @return A Result containing ParsedArgs with categorized arguments or an error
 template <class R = std::initializer_list<std::string_view>>
   requires internal::StringRange<R> || internal::WideStringRange<R>
 rfl::Result<ParsedArgs> parse_argv(R&& _args) {
-  return internal::parse_args(std::forward<R>(_args), true);
+  return internal::parse_args(std::forward<R>(_args), LongOptions{}, true);
 }
 
 /// Parses command-line arguments into categorized buckets, skipping argv[0]
 /// (the program name).
 /// @param argc Number of command-line arguments
 /// @param argv Array of command-line argument strings
+/// @param _long_options The long options of the target struct
+/// @return A Result containing ParsedArgs with categorized arguments or an error
+inline rfl::Result<ParsedArgs> parse_argv(int argc, const char* const argv[],
+                                          const LongOptions& _long_options) {
+  return internal::parse_args(argc, argv, _long_options, false);
+}
+
+/// Parses command-line arguments without knowing the target struct,
+/// skipping argv[0] (the program name). Long options never consume the next
+/// token, so values must be passed as --key=value. A token such as -5 or -.5
+/// is a short option.
+/// @param argc Number of command-line arguments
+/// @param argv Array of command-line argument strings
 /// @return A Result containing ParsedArgs with categorized arguments or an error
 inline rfl::Result<ParsedArgs> parse_argv(int argc, const char* const argv[]) {
-  return internal::parse_args(argc, argv, true);
+  return internal::parse_args(argc, argv, LongOptions{}, true);
 }
 
 inline rfl::Result<ParsedArgs> parse_argv(int argc, char* argv[]) {
@@ -288,10 +339,21 @@ inline rfl::Result<ParsedArgs> parse_argv(int argc, char* argv[]) {
 /// skipping argv[0] (the program name). Converts each wide string to UTF-8.
 /// @param argc Number of wide-character command-line arguments
 /// @param argv Array of wide-character command-line argument strings
+/// @param _long_options The long options of the target struct
+/// @return A Result containing ParsedArgs with UTF-8 encoded arguments
+inline rfl::Result<ParsedArgs> parse_argv(int argc, const wchar_t* const argv[],
+                                          const LongOptions& _long_options) {
+  return internal::parse_args(argc, argv, _long_options, false);
+}
+
+/// Parses wide-character command-line arguments without knowing the target
+/// struct. See the narrow overload.
+/// @param argc Number of wide-character command-line arguments
+/// @param argv Array of wide-character command-line argument strings
 /// @return A Result containing ParsedArgs with UTF-8 encoded arguments
 inline rfl::Result<ParsedArgs> parse_argv(int argc,
                                           const wchar_t* const argv[]) {
-  return internal::parse_args(argc, argv, true);
+  return internal::parse_args(argc, argv, LongOptions{}, true);
 }
 
 inline rfl::Result<ParsedArgs> parse_argv(int argc, wchar_t* argv[]) {
