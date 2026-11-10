@@ -35,6 +35,19 @@ inline bool looks_like_option(std::string_view _token) noexcept {
 
 namespace internal {
 
+/// The error for a long option that abbreviates several options, worded
+/// like getopt_long's: "Option '--for' is ambiguous; possibilities:
+/// '--force-export', '--format'."
+inline std::string ambiguous_option_message(
+    const std::string& _key, const std::vector<std::string>& _names
+) {
+  auto msg = "Option '--" + _key + "' is ambiguous; possibilities: ";
+  for (size_t i = 0; i < _names.size(); ++i) {
+    msg += (i == 0 ? "'--" : ", '--") + _names[i] + "'";
+  }
+  return msg + ".";
+}
+
 /// Parses command-line arguments into categorized buckets.
 /// Handles three types of arguments:
 /// - Long options: --key=value, --key value or --flag (stored in `named`)
@@ -58,6 +71,9 @@ namespace internal {
 /// option's name looks like a number (`-1`), as in argparse. Without
 /// `_options` from make_options, short options are not grouped: `-abc` is
 /// the short option `abc`, and `-42` the short option `42`.
+/// A long option that matches no field stands for the one long option it
+/// is a prefix of (`--rep` for `--report`), unless several match, which is
+/// an error, or `_options.allow_abbreviations` is false.
 /// Every element of `_args` is parsed; nothing is skipped as the program name.
 /// @param _args The command-line arguments to parse
 /// @param _options The options of the target struct (see make_options)
@@ -148,7 +164,18 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       if (key.empty()) {
         return error("Empty key in argument: " + std::string(arg_raw));
       }
-      const auto option = _options.find_long(key);
+      auto option = _options.find_long(key);
+      if (option.kind == OptionKind::unknown && _options.allow_abbreviations) {
+        // --rep for --report: a prefix of exactly one long option.
+        const auto names = _options.find_abbreviations(key);
+        if (names.size() > 1) {
+          return error(internal::ambiguous_option_message(key, names));
+        }
+        if (names.size() == 1) {
+          key = names.front();
+          option = _options.find_long(key);
+        }
+      }
       if (option.kind == OptionKind::unknown && _options.reject_unknown) {
         return error("Unknown option '--" + key + "'.");
       }
@@ -157,7 +184,7 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         val = std::string(arg.substr(eq + 1));
       }
       else {
-        auto v = take_value(option, arg_raw, false, &i);
+        auto v = take_value(option, "--" + key, false, &i);
         if (!v) { return error(v.error().what()); }
         val = std::move(*v);
         if (option.kind != OptionKind::value) {

@@ -31,6 +31,7 @@
 #include "../internal/no_extra_fields_v.hpp"
 #include "../internal/processed_t.hpp"
 #include "../parsing/is_string_map.hpp"
+#include "NoAbbreviations.hpp"
 #include "Parser.hpp"
 #include "Reader.hpp"
 
@@ -98,6 +99,10 @@ struct Options {
   /// Whether options that match no field are an error (rfl::NoExtraFields).
   bool reject_unknown = false;
 
+  /// Whether a long option that matches no field may be an abbreviation of
+  /// one (turned off by rfl::cli::NoAbbreviations).
+  bool allow_abbreviations = true;
+
   /// Whether short options can be grouped (`-qv`, `-fcsv`). make_options
   /// sets it. Without a table (the table-less parse_argv), `-abc` is the
   /// one short option `abc`.
@@ -113,6 +118,31 @@ struct Options {
   /// `rfl::Short<"o", A> a; rfl::Short<"o", B> b;`, or empty. Reading such a
   /// struct fails.
   std::string duplicate_short_name;
+
+  /// Returns the long options that `--_prefix` could abbreviate: every
+  /// long option that starts with `_prefix`, in alphabetical order. Only the
+  /// last segment of a dotted name is abbreviated, so `_prefix` must spell
+  /// out the others and end inside the last one: `database.h` abbreviates
+  /// `database.host`, but `data` and `database.` do not. Keys of maps and of
+  /// rfl::ExtraFields are not known in advance, so they are never among
+  /// them. Only meaningful if find_long(_prefix) is unknown: an exact match
+  /// always wins.
+  std::vector<std::string> find_abbreviations(
+      const std::string& _prefix
+  ) const {
+    std::vector<std::string> names;
+    if (_prefix.empty() || _prefix.back() == path_separator) {
+      return names;
+    }
+    const auto last_separator = _prefix.rfind(path_separator);
+    for (auto it = long_options.lower_bound(_prefix);
+         it != long_options.end() && it->first.starts_with(_prefix); ++it) {
+      if (it->first.rfind(path_separator) == last_separator) {
+        names.push_back(it->first);
+      }
+    }
+    return names;
+  }
 
   /// Returns the long option `--_name`.
   Option find_long(const std::string& _name) const {
@@ -602,12 +632,14 @@ void collect_short_and_positional(Options* _options) {
 /// @tparam T The target struct type
 /// @tparam ProcessorsType The processors applied to the struct
 /// @return The options, with reject_unknown set if ProcessorsType contains
-/// rfl::NoExtraFields
+/// rfl::NoExtraFields, and allow_abbreviations cleared if it contains
+/// rfl::cli::NoAbbreviations
 template <class T, class ProcessorsType>
 Options make_options() {
   Options options;
   options.group_short_options = true;
   options.reject_unknown = rfl::internal::no_extra_fields_v<ProcessorsType>;
+  options.allow_abbreviations = !no_abbreviations_v<ProcessorsType>;
   using U = unwrapped_option_t<T, ProcessorsType>;
   collect_value_options<T, ProcessorsType, type_list<>>(&options);
   if constexpr (is_option_struct_v<U>) {
