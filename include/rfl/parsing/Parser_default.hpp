@@ -1,7 +1,9 @@
 #ifndef RFL_PARSING_PARSER_DEFAULT_HPP_
 #define RFL_PARSING_PARSER_DEFAULT_HPP_
 
+#include <exception>
 #include <map>
+#include <optional>
 #include <string>
 #include <type_traits>
 
@@ -71,6 +73,7 @@
 #include "schema/Type.hpp"
 #include "schemaful/IsSchemafulReader.hpp"
 #include "schemaful/IsSchemafulWriter.hpp"
+#include "tagged_union_wrapper_no_ptr.hpp"
 
 namespace rfl::parsing {
 
@@ -267,7 +270,8 @@ struct Parser {
             .and_then(wrap_in_t);
 
       } else if constexpr (internal::default_if_missing_v<ProcessorsType> ||
-                           internal::has_default_val_v<T>) {
+                           (internal::has_default_val_v<T> &&
+                            std::is_default_constructible_v<T>)) {
         return read_struct_with_default(_r, _var);
 
       } else {
@@ -664,13 +668,29 @@ struct Parser {
 
       } else {
         using NamedTupleType = internal::processed_t<U, ProcessorsType>;
-        if constexpr (internal::has_default_val_v<U>) {
-          auto t = U{};
-          auto view = ProcessorsType::template process<U>(to_view(t));
-          (*_definitions)[name] =
-              Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-                  _definitions, &view);
-        } else {
+        // The schema takes the default values of rfl::DefaultVal fields from
+        // a default-constructed instance. A tagged union wrapper holds its
+        // alternative through a pointer that U{} leaves null, so we construct
+        // the wrapper that holds the alternative by value instead.
+        using DefaultsType = tagged_union_wrapper_no_ptr_t<U>;
+        std::optional<DefaultsType> defaults;
+        if constexpr (internal::has_default_val_v<U> &&
+                      std::is_default_constructible_v<DefaultsType>) {
+          try {
+            defaults.emplace();
+          } catch (std::exception&) {
+            // For instance a validator whose default value is invalid. The
+            // schema is still valid without the default values.
+          }
+          if (defaults) {
+            auto view = ProcessorsType::template process<DefaultsType>(
+                to_view(*defaults));
+            (*_definitions)[name] =
+                Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
+                    _definitions, &view);
+          }
+        }
+        if (!defaults) {
           (*_definitions)[name] =
               Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
                   _definitions);
@@ -739,7 +759,16 @@ struct Parser {
         return error(e.what());
       }
     } catch (std::exception& e) {
-      return error(default_construction_error(e.what()));
+      if constexpr (!internal::default_if_missing_v<ProcessorsType> &&
+                    !internal::has_unwrapped_default_val_v<T>) {
+        // Its only rfl::DefaultVal fields are inside rfl::Short,
+        // rfl::Positional, rfl::Description or rfl::Deprecated. Read it
+        // without its defaults, as a struct that cannot be
+        // default-constructed is read, with those fields required.
+        return read_struct(_r, _var);
+      } else {
+        return error(default_construction_error(e.what()));
+      }
     }
   }
 
@@ -747,7 +776,7 @@ struct Parser {
   /// own, the exception reads as if the input was wrong, so we name the struct
   /// and explain why it was default-constructed.
   RFL_COLD static Error default_construction_error(const char* _what) {
-    const std::string reason = internal::has_default_val_v<T>
+    const std::string reason = internal::has_unwrapped_default_val_v<T>
                                    ? "it contains rfl::DefaultVal"
                                    : "it is read with rfl::DefaultIfMissing";
     return Error(

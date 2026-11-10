@@ -149,6 +149,11 @@ struct Config {
 // ./app data.csv -o /tmp/out -v --count=10
 ```
 
+The type inside `rfl::Short`, `rfl::Positional` or `rfl::Description` can be
+a `std::optional` or an `rfl::DefaultVal`, so the argument may be omitted:
+with `rfl::Short<"o", rfl::DefaultVal<std::string>> output_dir = "out";`,
+leaving out `-o` gives `"out"`.
+
 ## Supported types
 
 | Type | CLI format | Notes |

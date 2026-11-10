@@ -42,4 +42,70 @@ TEST(cli, test_optional_positional_and_short_omitted) {
   EXPECT_EQ(rfl::json::write(result.value()), R"({"verbose":true})");
 }
 
+struct ConfigWithDefaults {
+  rfl::Positional<rfl::DefaultVal<std::string>> input = std::string("in.txt");
+  rfl::Short<"o", rfl::DefaultVal<std::string>> output = std::string("out.csv");
+  rfl::Short<"j", rfl::Description<"Worker threads", rfl::DefaultVal<int>>>
+      jobs = 4;
+};
+
+TEST(cli, test_short_default_val_given) {
+  const char* args[] = {
+      "program",
+      "data.csv",
+      "-o", "x.csv",
+      "-j", "8"
+  };
+  const auto result =
+      rfl::cli::read<ConfigWithDefaults>(6, const_cast<char**>(args));
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().input().value(), "data.csv");
+  EXPECT_EQ(result.value().output().value(), "x.csv");
+  EXPECT_EQ(result.value().jobs().value().value(), 8);
+}
+
+TEST(cli, test_short_default_val_given_by_long_name) {
+  const char* args[] = {
+      "program",
+      "--output=x.csv",
+      "--jobs=8"
+  };
+  const auto result =
+      rfl::cli::read<ConfigWithDefaults>(3, const_cast<char**>(args));
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().input().value(), "in.txt");
+  EXPECT_EQ(result.value().output().value(), "x.csv");
+  EXPECT_EQ(result.value().jobs().value().value(), 8);
+}
+
+TEST(cli, test_short_and_positional_default_val_omitted) {
+  const char* args[] = {"program"};
+  const auto result =
+      rfl::cli::read<ConfigWithDefaults>(1, const_cast<char**>(args));
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().input().value(), "in.txt");
+  EXPECT_EQ(result.value().output().value(), "out.csv");
+  EXPECT_EQ(result.value().jobs().value().value(), 4);
+}
+
+// ConfigWithInvalidDefault{} throws, because n's zero value is invalid. The
+// struct is then read without its defaults, so `output` is required.
+struct ConfigWithInvalidDefault {
+  rfl::Short<"o", rfl::DefaultVal<std::string>> output = std::string("out");
+  rfl::Validator<int, rfl::Minimum<1>> n;
+};
+
+TEST(cli, test_short_default_val_with_invalid_default) {
+  const char* args[] = {"program", "-o", "x", "--n=2"};
+  const auto result = rfl::cli::read<ConfigWithInvalidDefault>(4, args);
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().output().value(), "x");
+  EXPECT_EQ(result.value().n.value(), 2);
+
+  const char* missing[] = {"program", "--n=2"};
+  const auto r = rfl::cli::read<ConfigWithInvalidDefault>(2, missing);
+  ASSERT_FALSE(r);
+  EXPECT_EQ(std::string(r.error().what()), "Field named 'output' not found.");
+}
+
 }  // namespace test_optional_short_and_positional
