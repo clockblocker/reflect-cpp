@@ -49,7 +49,7 @@ class Variant {
   /// the variant.
   Variant() : index_(IndexType()), data_(DataType()) {
     using FirstAlternative = internal::nth_element_t<0, AlternativeTypes...>;
-    move_from_type(FirstAlternative());
+    new (data_.data()) FirstAlternative();
   }
 
   /// @brief Copy-constructs the Variant from another Variant.

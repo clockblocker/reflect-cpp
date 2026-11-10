@@ -9,7 +9,9 @@
 
 #include "AllOf.hpp"
 #include "Result.hpp"
+#include "internal/DeferredValidation.hpp"
 #include "internal/HasValidation.hpp"
+#include "internal/cold.hpp"
 
 namespace rfl {
 
@@ -52,8 +54,13 @@ struct Validator {
   }
 
   /// Default constructor - validates a default-constructed T.
-  /// @throws std::exception if validation of the default value fails
-  Validator() : value_(ValidationType::validate(T()).value()) {}
+  /// @throws std::exception if validation of the default value fails, unless
+  /// the Validator is part of a struct that the parser default-constructs to
+  /// obtain the default values of missing fields, and constructing that
+  /// struct normally has already failed. Then the parser checks the default
+  /// value after reading, if the field is missing (see
+  /// internal::DeferredValidation).
+  Validator() : value_(make_default(this)) {}
 
   /// Move constructor.
   /// @param _other The validator to move from
@@ -196,6 +203,27 @@ struct Validator {
   struct AlreadyValidated {};
 
   Validator(AlreadyValidated, T&& _value) : value_(std::move(_value)) {}
+
+  /// Returns the validated default value. If it is invalid, see
+  /// invalid_default.
+  static T make_default(Validator* _self) {
+    auto res = ValidationType::validate(T());
+    if (res) [[likely]] {
+      return std::move(*res);
+    }
+    return invalid_default(_self, std::move(res).error());
+  }
+
+  /// Called when the default value is invalid. Throws, unless the parser is
+  /// default-constructing a struct containing this Validator with the check
+  /// deferred: then records this Validator and returns T() unchecked.
+  RFL_COLD static T invalid_default(Validator* _self, Error&& _err) {
+    if (auto* deferred = internal::DeferredValidation::find(_self)) {
+      deferred->defer(_self, std::move(_err));
+      return T();
+    }
+    throw internal::InvalidDefaultValue(std::move(_err));
+  }
 
   /// Wraps the result of a validation without throwing if it failed.
   static Result<Validator> wrap_validated(Result<T>&& _res) {
