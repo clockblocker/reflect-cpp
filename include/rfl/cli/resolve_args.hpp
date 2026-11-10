@@ -109,10 +109,19 @@ inline rfl::Result<bool> check_short_names(const Options& _options) {
   return true;
 }
 
+/// The error for more positional arguments than positional fields.
+inline rfl::Unexpected<Error> too_many_positionals(const size_t _expected,
+                                                    const size_t _got) {
+  return rfl::error("Too many positional arguments: expected at most "
+                    + std::to_string(_expected) + ", got "
+                    + std::to_string(_got) + ".");
+}
 /// Resolves ParsedArgs into a flat key-value map using the options of the
 /// target struct.
 /// This function:
 /// 1. Maps positional arguments to their corresponding field names based on declaration order
+///    If the last positional field is a list, it takes all remaining
+///    positional arguments, as later occurrences of the list.
 /// 2. Expands short arguments (e.g., -p) to long names (e.g., --port) using Short<> annotations
 /// 3. Detects conflicts between different ways of specifying the same field
 /// The caller checks the short names first (check_short_names).
@@ -127,15 +136,19 @@ inline rfl::Result<ResolvedArgs> resolve_args(
 
   // Merge positional args.
   const auto& positional_names = _options.positionals;
-  if (_parsed.positional.size() > positional_names.size()) {
-    auto msg = std::string("Too many positional arguments: expected at most ");
-    msg += std::to_string(positional_names.size());
-    msg += ", got ";
-    msg += std::to_string(_parsed.positional.size());
-    msg += ".";
-    return rfl::error(std::move(msg));
+  if (_parsed.positional.size() > positional_names.size()
+      && !_options.last_positional_is_list()) {
+    return internal::too_many_positionals(positional_names.size(),
+                                          _parsed.positional.size());
   }
   for (size_t i = 0; i < _parsed.positional.size(); ++i) {
+    if (i >= positional_names.size()) {
+      // A list as the last positional field takes the rest, one occurrence
+      // per argument.
+      _parsed.later_occurrences[positional_names.back()].emplace_back(
+          std::move(_parsed.positional[i]));
+      continue;
+    }
     const auto& long_name = positional_names[i];
     if (result.count(long_name)) {
       return rfl::error(
@@ -173,7 +186,9 @@ inline rfl::Result<ResolvedArgs> resolve_args(
 /// are returned to the positional arguments, and rfl::ImplicitValue
 /// options given without a value get their implicit value. A flat map
 /// cannot hold the occurrences of a repeated list option, which parse_argv
-/// without the options rejects.
+/// without the options rejects, so a list as the last positional field does
+/// not take the remaining positional arguments here either: each positional
+/// field takes one.
 /// @tparam T The target struct type
 /// @tparam ProcessorsType The processors applied to the struct
 /// @param _parsed The parsed command-line arguments
@@ -192,6 +207,10 @@ rfl::Result<std::map<std::string, std::string>> resolve_args(
     return rfl::error(short_names.error().what());
   }
   internal::apply_option_kinds(options, &_parsed);
+  if (_parsed.positional.size() > options.positionals.size()) {
+    return internal::too_many_positionals(options.positionals.size(),
+                                          _parsed.positional.size());
+  }
   return internal::resolve_args(std::move(_parsed), options)
       .transform([](internal::ResolvedArgs _args) {
         return std::move(_args.values);
