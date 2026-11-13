@@ -364,7 +364,8 @@ struct Config {
 
 - A plain list needs at least one argument. With `std::optional` or
   `rfl::DefaultVal`, no arguments give `std::nullopt` or the default.
-- Options can still come anywhere: `./app run a --verbose b`.
+- Options can still come anywhere (`./app run a --verbose b`), unless the
+  struct is read with `rfl::cli::OptionsFirst` (below).
 - The long form works as for any list: `--files=a,b`, or
   `--files a --files b`. It cannot be mixed with bare arguments:
   `Conflict: positional argument and '--files' both provided.`
@@ -374,6 +375,51 @@ struct Config {
 - `resolve_args<T, ProcessorsType>`, for arguments parsed without the
   option table, cannot repeat list options, so there a list as the last
   positional field takes one argument.
+
+### Options first
+
+`rfl::cli::OptionsFirst` ends the options at the first positional argument,
+like getopt's `+` mode (`POSIXLY_CORRECT`), argparse's `REMAINDER` and
+clap's `trailing_var_arg`. Every later token is a positional argument, taken
+as it is, even `--x`, `-x`, `--` and unknown options. With
+`rfl::cli::ListDelimiter<"">`, a list as the last positional field gets the
+rest of the command line unchanged, for example to pass it on to another
+program:
+
+```cpp
+struct Recipe {
+  rfl::Short<"v", std::optional<bool>> verbose;
+  rfl::Positional<std::string> name;
+  rfl::Positional<rfl::DefaultVal<std::vector<std::string>>> args;
+};
+
+const auto result =
+    rfl::cli::read<Recipe, rfl::cli::OptionsFirst, rfl::cli::ListDelimiter<"">>(
+        argc, argv);
+
+// ./recipe -v build --jobs 4 -v -- a,b
+//   ->  verbose = true, name = "build",
+//       args = {"--jobs", "4", "-v", "--", "a,b"}
+```
+
+**Without `ListDelimiter<"">`, the passed-through arguments are lists like
+any other:** each one is split at the commas and empty items are dropped.
+`rfl::cli::read<Recipe, rfl::cli::OptionsFirst>` reads
+`./recipe build --jobs 4,5 "" x` as
+`args = {"--jobs", "4", "5", "x"}`. Pass `ListDelimiter<"">` to get the
+arguments unchanged.
+
+- Before the first positional argument, options work as usual, and `--`
+  ends them and is dropped (`./recipe -- -v` makes `-v` the name).
+- After it, `--` is an argument like any other, as in getopt's `+` mode.
+  argparse drops a `--` that is the first token of a `REMAINDER`
+  (`recipe build -- x` gives `["x"]`); rfl keeps it.
+- A token such as `-5` that is read as a positional argument (see
+  [grouped short options](#grouped-short-options)) also ends the options.
+- `rfl::NoExtraFields` rejects unknown options before the first
+  positional argument.
+- Without `OptionsFirst`, options and positional arguments can be mixed.
+  Other formats ignore the setting.
 
 ## Combining wrappers
 
@@ -437,11 +483,12 @@ Parsing proceeds in three stages:
 1. **`parse_argv`** — categorizes raw tokens into `named`, `short_args`,
    and `positional` buckets (`ParsedArgs` struct). `rfl::cli::read` gives
    it an internal option table derived from the target struct, which says
-   which long and short options are flags, take a value or have an implicit
-   value, so that `--key value`, grouped short options and abbreviated long
-   options work, and whether a short option's name looks like a number. The
-   public `parse_argv`, which has no table, does none of these: `-abc` is the
-   one short option `abc`, and `-5` the short option `5`.
+   which long and short options are flags, take a value, have an implicit
+   value or are lists, so that `--key value`, grouped short options,
+   abbreviated long options and repeated list options work, and whether a
+   short option's name looks like a number. The public `parse_argv`, which
+   has no table, does none of these: `-abc` is the one short option `abc`,
+   and `-5` the short option `5`.
 2. **`resolve_args`** — uses the same table to map short aliases to long
    names and to merge positional arguments. Produces a flat
    `map<string, string>`. A list option given more than once keeps its
@@ -461,6 +508,7 @@ Parsing proceeds in three stages:
 - `include/rfl/cli/options.hpp` — the internal option table: the long, short and positional options of a struct
 - `include/rfl/cli/NoAbbreviations.hpp` — `NoAbbreviations` processor
 - `include/rfl/cli/ListDelimiter.hpp` — `ListDelimiter<"x">` processor
+- `include/rfl/cli/OptionsFirst.hpp` — `OptionsFirst` processor
 - `include/rfl/cli/resolve_args.hpp` — `ParsedArgs` -> `map<string, string>`
 - `include/rfl/cli.hpp` — aggregator header
 - `include/rfl/SnakeCaseToKebabCase.hpp` — processor
