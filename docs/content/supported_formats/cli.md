@@ -603,10 +603,41 @@ Arguments:
   -l, --log-level=<debug|info|warn>  Minimum level to log. Default: info.
 ```
 
-The help finds `rfl::Positional` and `rfl::Short` through the other wrappers,
-as the parser does (see [Combining wrappers](#combining-wrappers)), so
+The help is built from the same internal option table that `read` parses
+with (see [Architecture](#architecture)), so it shows how each argument can
+be given:
+
+| Field | Synopsis | Detail |
+|---|---|---|
+| `bool` | `--verbose[=<bool>]` | |
+| `rfl::ImplicitValue<std::optional<Color>, "always">` | `--color[=<never\|always>]` | `Without a value: always.` |
+| list (vector, set, array, ...) | `--tags=<v1,v2,...>` | `Can be repeated.` |
+| list, with `rfl::cli::ListDelimiter<";">` | `--tags=<v1;v2;...>` | defaults joined with `;` |
+| list, with `rfl::cli::ListDelimiter<"">` | `--tags=<value>` | `Can be repeated.` |
+| list as the last `rfl::Positional` | `<files>...` | |
+
+`rfl::Positional` and `rfl::Short` are found through the other wrappers, as
+the parser does (see [Combining wrappers](#combining-wrappers)), so
 `rfl::Description<"...", rfl::Positional<std::string>>` is listed as a
-positional argument.
+positional argument. The usage line lists the positional arguments in the
+order in which the parser fills them, and leaves out a short alias that the
+parser does not give a field because another field has it.
+
+With `rfl::cli::OptionsFirst`, the options end at the first positional
+argument, so the usage line lists every option before the positional
+arguments. The rows of the detailed form keep the declaration order:
+
+```cpp
+struct Recipe {
+  rfl::Short<"v", std::optional<bool>> verbose;
+  rfl::Positional<std::string> name;
+  rfl::Positional<rfl::DefaultVal<std::vector<std::string>>> args;
+  rfl::Short<"j", std::optional<int>> jobs;
+};
+
+rfl::cli::usage<Recipe, rfl::cli::OptionsFirst>("recipe");
+// Usage: recipe [-v|--verbose[=<bool>]] [-j|--jobs=<value>] <name> [<args>...]
+```
 
 `read` does not handle `--help`. Check for it before calling `read`, and
 print the usage line when parsing fails:
@@ -684,7 +715,7 @@ Parsing proceeds in three stages:
 - `include/rfl/cli/ListDelimiter.hpp` — `ListDelimiter<"x">` processor
 - `include/rfl/cli/OptionsFirst.hpp` — `OptionsFirst` processor
 - `include/rfl/cli/resolve_args.hpp` — `ParsedArgs` -> `map<string, string>`
-- `include/rfl/cli/usage.hpp` — `usage()` help text, built on `rfl::parsing::schema`
+- `include/rfl/cli/usage.hpp` — `usage()` help text, built on `rfl::parsing::schema` and the internal option table
 - `include/rfl/cli.hpp` — aggregator header
 - `include/rfl/SnakeCaseToKebabCase.hpp` — processor
 - `include/rfl/Positional.hpp` — `Positional<T>` wrapper

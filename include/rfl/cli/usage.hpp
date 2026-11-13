@@ -30,18 +30,18 @@
 #include "../parsing/schema/ValidationType.hpp"
 #include "../parsing/schema/make.hpp"
 #include "../to_generic.hpp"
+#include "ListDelimiter.hpp"
+#include "OptionsFirst.hpp"
 #include "Reader.hpp"
-#include "resolve_args.hpp"
+#include "options.hpp"
 
 namespace rfl::cli {
 
 namespace internal {
 
-/// Metadata of a top-level field that the schema does not carry, or does not
-/// carry the way the parser sees it.
+/// Whether a top-level field is required, which the schema cannot tell the
+/// way the parser sees it.
 struct UsageFieldMeta {
-  bool positional = false;
-  std::string short_name;
   bool required = true;
 };
 
@@ -51,13 +51,24 @@ struct UsageArg {
   std::string name;
   std::string short_name;
   bool positional = false;
-  /// Booleans can be passed without a value (`--verbose`).
-  bool flag = false;
+  /// What the option does with a value, from the parser's option table:
+  /// flags (`--verbose`) and rfl::ImplicitValue (`--help`) can be given
+  /// without one.
+  OptionKind kind = OptionKind::value;
+  /// For OptionKind::implicit_value: what the option stands for without a
+  /// value.
+  std::string implicit_value;
+  /// Whether the field is a list, which can be repeated.
+  bool is_list = false;
+  /// Whether the field is the last positional one and a list, so that it
+  /// takes the remaining positional arguments.
+  bool takes_rest = false;
   bool required = true;
   /// Whether `required` was taken from the parser's compile-time traits, so
   /// that the schema must not override it.
   bool required_is_known = false;
-  /// The placeholder for the value: "<value>", "<v1,v2,...>" or "<a|b|c>".
+  /// The placeholder for one value: "<value>", "<bool>" or "<a|b|c>". Lists
+  /// are rendered from it with the list delimiter.
   std::string value = "<value>";
   /// The allowed values of enums and literals.
   std::vector<std::string> choices;
@@ -74,11 +85,6 @@ void add_usage_field_meta(const bool _default_vals_are_optional,
   using Info = field_info<NamedTupleType, _i>;
   using ValueType = std::remove_cvref_t<typename Info::InnerType>;
   auto& meta = (*_meta)[std::string(Info::name())];
-  meta.positional = Info::is_positional;
-  if constexpr (Info::is_short) {
-    meta.short_name =
-        std::string(get_short_name<NamedTupleType, _i>().string_view());
-  }
   // The same condition as in NamedTupleParser::handle_one_missing_field.
   // is_default_val_v sees a DefaultVal through Short, Positional, Rename,
   // Description and Deprecated, in any order, as the parser does. The schema
@@ -92,9 +98,10 @@ void add_usage_field_meta(const bool _default_vals_are_optional,
           || parsing::is_required<ValueType, false>());
 }
 
-/// Collects Positional, Short and whether a field is required from the same
-/// compile-time traits that resolve_args and the parser use, so the help
-/// matches what the parser accepts.
+/// Collects whether each top-level field is required from the same
+/// compile-time traits that the parser uses, so the help matches what the
+/// parser accepts. Positional, Short, flags, implicit values and lists come
+/// from the parser's option table (make_options).
 template <class NamedTupleType, class ProcessorsType, size_t... _is>
 std::map<std::string, UsageFieldMeta> collect_usage_field_meta(
     const bool _default_vals_are_optional, std::index_sequence<_is...>) {
@@ -151,10 +158,12 @@ inline std::string usage_number_to_string(
 /// Renders a default value the way it would be passed on the command line.
 /// Returns nullopt for values that cannot be rendered sensibly (null,
 /// objects, empty arrays).
+/// Lists are joined with the list delimiter, or with ", " if lists are not
+/// split (ListDelimiter<"">).
 inline std::optional<std::string> usage_default_to_string(
-    const Generic& _value) {
+    const Generic& _value, const std::optional<char> _delimiter) {
   return std::visit(
-      [](const auto& _v) -> std::optional<std::string> {
+      [&](const auto& _v) -> std::optional<std::string> {
         using V = std::remove_cvref_t<decltype(_v)>;
         if constexpr (std::is_same_v<V, bool>) {
           return _v ? "true" : "false";
@@ -170,12 +179,13 @@ inline std::optional<std::string> usage_default_to_string(
           }
           std::string joined;
           for (const auto& element : _v) {
-            const auto str = usage_default_to_string(element);
+            const auto str = usage_default_to_string(element, _delimiter);
             if (!str) {
               return std::nullopt;
             }
             if (!joined.empty()) {
-              joined += array_delimiter;
+              joined += _delimiter ? std::string(1, *_delimiter)
+                                   : std::string(", ");
             }
             joined += *str;
           }
@@ -299,10 +309,18 @@ class UsageCollector {
 
   UsageCollector(const parsing::schema::Definition* _definition,
                  const std::map<std::string, UsageFieldMeta>* _meta,
-                 const bool _optionals_are_required)
+                 const Options* _options,
+                 const bool _optionals_are_required,
+                 const std::optional<char> _delimiter)
       : definition_(_definition),
         meta_(_meta),
-        optionals_are_required_(_optionals_are_required) {}
+        options_(_options),
+        optionals_are_required_(_optionals_are_required),
+        delimiter_(_delimiter) {
+    for (const auto& [short_name, path] : _options->short_options) {
+      short_names_[path] = short_name;
+    }
+  }
 
   /// Collects the arguments.
   /// @param _all_optional Whether no argument is required
@@ -313,6 +331,7 @@ class UsageCollector {
     auto root = UsageArg{};
     root.required = !_all_optional;
     add(definition_->root_, std::move(root), _defaults, false);
+    order_positionals();
     return std::move(args_);
   }
 
@@ -381,7 +400,7 @@ class UsageCollector {
         add_leaf(std::move(_arg), std::nullopt);
 
       } else if constexpr (std::is_same_v<T, Type::Boolean>) {
-        _arg.flag = true;
+        _arg.value = "<bool>";
         add_leaf(std::move(_arg), _default);
 
       } else if constexpr (std::is_same_v<T, Type::Literal>) {
@@ -394,13 +413,9 @@ class UsageCollector {
         }
         add_choices(values, std::move(_arg), _default);
 
-      } else if constexpr (std::is_same_v<T, Type::TypedArray>
-                           || std::is_same_v<T, Type::FixedSizeTypedArray>
-                           || std::is_same_v<T, Type::Tuple>) {
-        _arg.value = "<v1,v2,...>";
-        add_leaf(std::move(_arg), _default);
-
       } else {
+        // Lists, too: whether a field is a list comes from the option table
+        // (add_leaf), which is what the parser uses.
         add_leaf(std::move(_arg), _default);
       }
     });
@@ -415,10 +430,15 @@ class UsageCollector {
       // Children of an optional object are only needed if it is given.
       arg.required = _parent.required;
       if (is_root) {
+        const auto& positionals = options_->positionals;
+        arg.positional = std::find(positionals.begin(), positionals.end(),
+                                   name) != positionals.end();
+        const auto short_name = short_names_.find(name);
+        if (short_name != short_names_.end()) {
+          arg.short_name = short_name->second;
+        }
         const auto it = meta_->find(name);
         if (it != meta_->end()) {
-          arg.positional = it->second.positional;
-          arg.short_name = it->second.short_name;
           arg.required = arg.required && it->second.required;
           arg.required_is_known = true;
         }
@@ -451,30 +471,94 @@ class UsageCollector {
     if (_arg.name.empty()) {
       return;
     }
+    // How the parser treats the option, from the table that it uses. A map
+    // key ("labels.<key>") is found through its open prefix.
+    const auto option = options_->find_long(_arg.name);
+    _arg.kind = option.kind;
+    _arg.implicit_value = option.implicit_value;
+    _arg.is_list = option.is_list;
     if (_default) {
-      _arg.default_value = usage_default_to_string(*_default);
+      _arg.default_value = usage_default_to_string(*_default, delimiter_);
     }
     args_.emplace_back(std::move(_arg));
+  }
+
+  /// Puts the positional arguments in the order in which the parser fills
+  /// them (Options::positionals: outermost rfl::Positional fields first),
+  /// in the places where positional arguments are, and marks the one that
+  /// takes the remaining arguments.
+  void order_positionals() {
+    const auto& order = options_->positionals;
+    auto slots = std::vector<size_t>();
+    auto positionals = std::vector<UsageArg>();
+    for (size_t i = 0; i < args_.size(); ++i) {
+      if (args_[i].positional) {
+        slots.push_back(i);
+        positionals.push_back(std::move(args_[i]));
+      }
+    }
+    const auto rank = [&](const UsageArg& _arg) {
+      return std::find(order.begin(), order.end(), _arg.name) - order.begin();
+    };
+    std::stable_sort(positionals.begin(), positionals.end(),
+                     [&](const UsageArg& _a, const UsageArg& _b) {
+                       return rank(_a) < rank(_b);
+                     });
+    for (size_t i = 0; i < slots.size(); ++i) {
+      positionals[i].takes_rest = options_->last_positional_is_list()
+                                  && positionals[i].name == order.back();
+      args_[slots[i]] = std::move(positionals[i]);
+    }
   }
 
  private:
   const parsing::schema::Definition* definition_;
   const std::map<std::string, UsageFieldMeta>* meta_;
+  const Options* options_;
   const bool optionals_are_required_;
+  const std::optional<char> delimiter_;
+  /// The rfl::Short aliases, by the path of their field.
+  std::map<std::string, std::string> short_names_;
   std::set<std::string> visiting_;
   std::vector<UsageArg> args_;
 };
 
-/// "<input-file>", "-p|--port=<value>", "--verbose[=<bool>]"
+/// The placeholder for the value of _arg: "<value>", "<a|b>", or for a list
+/// "<v1,v2,...>" with the list delimiter. If lists are not split
+/// (ListDelimiter<"">), every occurrence is one item: "<value>".
+inline std::string usage_value_to_string(const UsageArg& _arg,
+                                         const std::optional<char> _delimiter) {
+  if (!_arg.is_list || !_delimiter) {
+    return _arg.value;
+  }
+  const auto d = std::string(1, *_delimiter);
+  return "<v1" + d + "v2" + d + "...>";
+}
+
+/// "<input-file>", "<files>...", "-p|--port=<value>", "--verbose[=<bool>]",
+/// "--help[=<value>]"
 inline std::string usage_arg_to_string(const UsageArg& _arg,
-                                       const std::string& _short_sep) {
+                                       const std::string& _short_sep,
+                                       const std::optional<char> _delimiter) {
   if (_arg.positional) {
-    return "<" + _arg.name + ">";
+    // A list as the last positional field takes the remaining arguments.
+    // Any other positional field takes one.
+    return "<" + _arg.name + ">" + (_arg.takes_rest ? "..." : "");
   }
   auto str = _arg.short_name.empty() ? std::string()
                                      : "-" + _arg.short_name + _short_sep;
   str += "--" + _arg.name;
-  str += _arg.flag ? "[=<bool>]" : "=" + _arg.value;
+  const auto value = usage_value_to_string(_arg, _delimiter);
+  switch (_arg.kind) {
+    case OptionKind::flag:
+    case OptionKind::implicit_value:
+      // `--verbose`, `--help`: the value can be left out.
+      str += "[=" + value + "]";
+      break;
+    default:
+      str += "=" + value;
+      break;
+  }
   return str;
 }
 
@@ -500,8 +584,15 @@ inline std::string usage_help_text(const UsageArg& _arg) {
   }
   sentences.insert(sentences.end(), _arg.constraints.begin(),
                    _arg.constraints.end());
+  if (_arg.kind == OptionKind::implicit_value && !_arg.positional
+      && !_arg.implicit_value.empty()) {
+    sentences.push_back("Without a value: " + _arg.implicit_value);
+  }
   if (_arg.default_value) {
     sentences.push_back("Default: " + *_arg.default_value);
+  }
+  if (_arg.is_list && !_arg.positional) {
+    sentences.push_back("Can be repeated");
   }
   if (_arg.required) {
     sentences.push_back("Required");
@@ -519,12 +610,21 @@ inline std::string usage_help_text(const UsageArg& _arg) {
   return text;
 }
 
+/// @param _options_first Whether the options end at the first positional
+/// argument (rfl::cli::OptionsFirst), so the synopsis lists them first.
 inline std::string format_usage(const std::string& _program_name,
                                 const std::vector<UsageArg>& _args,
-                                const bool _detailed) {
+                                const bool _detailed,
+                                const std::optional<char> _delimiter,
+                                const bool _options_first) {
+  auto synopsis = _args;
+  if (_options_first) {
+    std::stable_partition(synopsis.begin(), synopsis.end(),
+                          [](const UsageArg& _arg) { return !_arg.positional; });
+  }
   auto out = "Usage: " + _program_name;
-  for (const auto& arg : _args) {
-    const auto str = usage_arg_to_string(arg, "|");
+  for (const auto& arg : synopsis) {
+    const auto str = usage_arg_to_string(arg, "|", _delimiter);
     out += arg.required ? " " + str : " [" + str + "]";
   }
   out += '\n';
@@ -535,7 +635,8 @@ inline std::string format_usage(const std::string& _program_name,
   auto rows = std::vector<std::pair<std::string, std::string>>();
   size_t width = 0;
   for (const auto& arg : _args) {
-    rows.emplace_back(usage_arg_to_string(arg, ", "), usage_help_text(arg));
+    rows.emplace_back(usage_arg_to_string(arg, ", ", _delimiter),
+                      usage_help_text(arg));
     width = std::max(width, rows.back().first.size());
   }
 
@@ -603,18 +704,24 @@ std::string usage(const std::string& _program_name,
                   const bool _detailed = false) {
   using ProcessorsType = Processors<SnakeCaseToKebabCase, Ps...>;
   using NamedTupleType = rfl::internal::processed_t<T, ProcessorsType>;
+  constexpr auto delimiter = internal::list_delimiter_v<ProcessorsType>;
   const auto meta =
       internal::collect_usage_field_meta<NamedTupleType, ProcessorsType>(
           internal::usage_default_vals_are_optional<T>(),
           std::make_index_sequence<NamedTupleType::size()>{});
+  // The table that read() parses with, so the help shows what the parser
+  // accepts.
+  const auto options = internal::make_options<T, ProcessorsType>();
   const auto definition =
       parsing::schema::make<Reader, generic::Writer, T, ProcessorsType>();
   auto collector = internal::UsageCollector(
-      &definition, &meta, rfl::internal::no_optionals_v<ProcessorsType>);
+      &definition, &meta, &options,
+      rfl::internal::no_optionals_v<ProcessorsType>, delimiter);
   const auto args = collector.collect(
       rfl::internal::default_if_missing_v<ProcessorsType>,
       internal::usage_defaults<T, Ps...>());
-  return internal::format_usage(_program_name, args, _detailed);
+  return internal::format_usage(_program_name, args, _detailed, delimiter,
+                                options.options_first);
 }
 
 }  // namespace rfl::cli
