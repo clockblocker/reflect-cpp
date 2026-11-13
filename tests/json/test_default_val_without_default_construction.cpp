@@ -70,7 +70,7 @@ TEST(json, test_default_val_tagged_union_schema) {
   EXPECT_EQ(
       (rfl::json::to_schema<
           rfl::TaggedUnion<"type", DefaultAlternative, OtherAlternative>>()),
-      R"({"$schema":"https://json-schema.org/draft/2020-12/schema","anyOf":[{"$ref":"#/$defs/test_default_val_without_default_construction__DefaultAlternative__tagged"},{"$ref":"#/$defs/test_default_val_without_default_construction__OtherAlternative__tagged"}],"$defs":{"test_default_val_without_default_construction__DefaultAlternative__tagged":{"type":"object","properties":{"type":{"type":"string","enum":["DefaultAlternative"]},"output":{"type":"string","default":"out.csv"},"k":{"type":"integer"}},"required":["type","k"]},"test_default_val_without_default_construction__OtherAlternative__tagged":{"type":"object","properties":{"type":{"type":"string","enum":["OtherAlternative"]},"q":{"type":"string"}},"required":["type","q"]}}})");
+      R"({"$schema":"https://json-schema.org/draft/2020-12/schema","oneOf":[{"$ref":"#/$defs/test_default_val_without_default_construction__DefaultAlternative__tagged"},{"$ref":"#/$defs/test_default_val_without_default_construction__OtherAlternative__tagged"}],"$defs":{"test_default_val_without_default_construction__DefaultAlternative__tagged":{"type":"object","properties":{"type":{"type":"string","enum":["DefaultAlternative"]},"output":{"type":"string","default":"out.csv"},"k":{"type":"integer"}},"required":["type","k"]},"test_default_val_without_default_construction__OtherAlternative__tagged":{"type":"object","properties":{"type":{"type":"string","enum":["OtherAlternative"]},"q":{"type":"string"}},"required":["type","q"]}}})");
 }
 
 }  // namespace test_default_val_without_default_construction
