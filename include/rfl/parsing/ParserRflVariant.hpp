@@ -9,6 +9,7 @@
 #include "../internal/add_tags_to_variants_v.hpp"
 #include "../internal/all_fields.hpp"
 #include "../internal/nth_element_t.hpp"
+#include "../internal/variants_as_one_of_v.hpp"
 #include "../visit.hpp"
 #include "FieldVariantParser.hpp"
 #include "Parent.hpp"
@@ -202,7 +203,9 @@ class ParserRflVariant<R, W, rfl::Variant<AlternativeTypes...>,
     } else {
       return schema::Type{schema::Type::AnyOf{
           .types_ = std::vector<schema::Type>(
-              {one_field_to_type<AlternativeTypes>(_definitions)...})}};
+              {one_field_to_type<AlternativeTypes>(_definitions)...}),
+          .mutually_exclusive_ =
+              internal::variants_as_one_of_v<ProcessorsType>}};
     }
   }
 

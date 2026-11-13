@@ -45,6 +45,7 @@ reflect-cpp currently supports the following processors:
 - `rfl::NoFieldNames`
 - `rfl::NoOptionals`
 - `rfl::UnderlyingEnums`
+- `rfl::VariantsAsOneOf`
 - `rfl::SnakeCaseToCamelCase`
 - `rfl::SnakeCaseToPascalCase`
 
@@ -491,6 +492,19 @@ The resulting JSON string looks like this:
 ```json
 {"radius":2.0,"color":1}
 ```
+
+### `rfl::VariantsAsOneOf`
+
+By default, the JSON schema describes `rfl::Variant` and `std::variant` as `anyOf`.
+By passing the processor `rfl::VariantsAsOneOf` to `rfl::json::to_schema`, they
+become `oneOf`:
+
+```cpp
+rfl::json::to_schema<rfl::Variant<int, std::string>, rfl::VariantsAsOneOf>();
+```
+
+It only changes the schema, not reading or writing. Please refer to
+the [JSON schema documentation](../json_schema) for details.
 
 ### `rfl::SnakeCaseToCamelCase`
 

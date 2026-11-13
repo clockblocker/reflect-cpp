@@ -84,6 +84,21 @@ matches exactly one of them.
 `Square` and `Rectangle` from the example in [variants](../variants_and_tagged_unions).
 `oneOf` would reject such values, even though reflect-cpp reads them without problems.
 
+If you know that the alternatives of your variants never overlap, you can pass
+`rfl::VariantsAsOneOf` to get `oneOf` for `rfl::Variant` and `std::variant` as well:
+
+```cpp
+const std::string json_schema =
+    rfl::json::to_schema<rfl::Variant<int, std::string>, rfl::VariantsAsOneOf>();
+```
+
+Warning: `oneOf` rejects values that match more than one alternative, so with this
+processor the schema rejects `1` for `rfl::Variant<int, double>`. Structs can overlap
+as well, for instance when additional properties are allowed (see `rfl::NoExtraFields`).
+
+`std::optional` and `rfl::Generic` stay `anyOf` either way. `std::optional` is not
+a variant, and the alternatives of `rfl::Generic` overlap (`1` is both an `integer` and a `number`).
+
 ## Adding descriptions
 
 JSON schemata also often contain descriptions. reflect-cpp supports this as well.
