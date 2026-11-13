@@ -6,12 +6,14 @@
 #include <type_traits>
 #include <variant>
 
+#include "../Generic.hpp"
 #include "../NamedTuple.hpp"
 #include "../Result.hpp"
 #include "../Variant.hpp"
 #include "../internal/add_tags_to_variants_v.hpp"
 #include "../internal/all_fields.hpp"
 #include "../internal/to_ptr_field.hpp"
+#include "../internal/variants_as_one_of_v.hpp"
 #include "../visit.hpp"
 #include "FieldVariantParser.hpp"
 #include "Parent.hpp"
@@ -233,9 +235,15 @@ class ParserVariant<R, W, std::variant<AlternativeTypes...>, ProcessorsType> {
           _definitions);
 
     } else {
+      // rfl::Generic stays anyOf: 1 is both an integer and a number.
+      constexpr bool as_one_of =
+          internal::variants_as_one_of_v<ProcessorsType> &&
+          !std::is_same_v<std::variant<AlternativeTypes...>,
+                          Generic::ReflectionType::value_type>;
       return schema::Type{schema::Type::AnyOf{
           .types_ = std::vector<schema::Type>(
-              {one_field_to_type<AlternativeTypes>(_definitions)...})}};
+              {one_field_to_type<AlternativeTypes>(_definitions)...}),
+          .mutually_exclusive_ = as_one_of}};
     }
   }
 
