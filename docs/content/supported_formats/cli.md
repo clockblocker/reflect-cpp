@@ -34,9 +34,25 @@ and is skipped.
 
 ## Passing a sequence of arguments
 
-When the arguments do not come straight from `main`, pass them as a
-`std::span<const char* const>` instead. The number of arguments is taken
-from the span, and every element is parsed: the first one is **not** skipped.
+When the arguments do not come straight from `main`, pass them as a range
+instead, such as `std::vector<std::string>`, `std::vector<std::string_view>`,
+`std::span<char*>` or `const char* const[]`, or as a braced list of
+strings. Ranges of wide strings (`std::vector<std::wstring>`,
+`const wchar_t*[]`) are converted to UTF-8. The number of arguments is
+taken from the range. A null pointer in a range or array of pointers is
+rejected with an error. A braced list holds `std::string_view`s, so a null
+pointer in it is undefined behaviour at the call site; pass a
+`std::vector` or an array of pointers instead.
+
+The parser keeps a `std::string_view` to each narrow argument, so a range
+of narrow strings must be multi-pass (a `std::forward_range`) and its
+elements must be lvalue strings, pointers or `std::string_view`s. A
+single-pass range such as `std::views::istream<std::string>`, or a view
+that yields temporary `std::string`s, does not compile; copy the arguments
+into a `std::vector<std::string>` first.
+
+**Every element is parsed: unlike `read(argc, argv)`, the first one is not
+skipped as the program name.**
 
 ```cpp
 // ./app serve --host-name=localhost --port=8080 --verbose --tags=a,b
@@ -47,10 +63,21 @@ int main(int argc, char* argv[]) {
 }
 
 // Arguments from somewhere other than main:
-const std::vector<const char*> args = {"--host-name=localhost", "--port=8080",
+const std::vector<std::string> args = {"--host-name=localhost", "--port=8080",
                                        "--verbose", "--tags=a,b"};
 const auto result = rfl::cli::read<Config>(args);
+
+// Or a braced list:
+const auto result2 = rfl::cli::read<Config>(
+    {"--host-name=localhost", "--port=8080", "--verbose", "--tags=a,b"});
 ```
+
+To parse all of main's arguments, use `read(argc, argv)`. Passing
+`std::span(argv, argc)` instead would parse the program name as an
+argument; for a struct with a `rfl::Positional` field, it becomes the
+first positional value.
+
+`rfl::cli::parse_argv` has the same overloads.
 
 ## Positional arguments
 
