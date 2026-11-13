@@ -448,6 +448,27 @@ Leading and trailing blanks (`,b`, `a,`) are blank items, too. An empty
 value (`--tags=`) is still an empty list. Other list types, such as
 `std::set`, `std::deque` and `std::array`, behave the same way.
 
+The setting works with the other list features:
+
+- [Repeated options](#lists-and-repeated-options) keep the blank items of
+  every occurrence, and the index is the one in the combined list:
+  `--tags a,b --tags c,,d` has a blank item at index 3. An empty occurrence
+  (`--tags=`) still adds no items.
+- [`rfl::cli::ListDelimiter<";">`](#list-delimiter) keeps the blank items
+  between two `;`, so `--tags='a;;b,,c'` gives `[a, nullopt, "b,,c"]`.
+- With `rfl::cli::ListDelimiter<"">`, every occurrence is one item, so an
+  empty one is a blank item: `--tags a --tags ''` gives `[a, nullopt]`, and
+  `--tags=` alone gives `[nullopt]`. This includes the rest of the command
+  line with [`rfl::cli::OptionsFirst`](#options-first): the pass-through
+  `Recipe` above, whose `args` are `std::string`s, fails on an empty
+  argument (`./recipe build ''` gives `Blank item at index 0 of '--args'.`).
+  Use `std::optional<std::string>` items to keep it as `nullopt`, or leave
+  the setting out to keep it as `""`.
+- A [list as the last positional field](#a-list-as-the-last-positional-argument)
+  splits each argument as an occurrence: `./app run a,,b c` gives
+  `[a, nullopt, b, c]`. An error names the field by its long option, as in
+  `Blank item at index 1 of '--files'.`
+
 ## Combining wrappers
 
 `Short`, `Positional` and `ImplicitValue` can be nested with each other and

@@ -13,6 +13,9 @@ namespace rfl::cli {
 /// rfl::DefaultVal<T> becomes T{}, std::shared_ptr<T> and std::unique_ptr<T>
 /// become null, and a required type, such as std::string, std::wstring or
 /// int, is an error. Without this setting, blank items are skipped.
+/// The index counts the items of every occurrence of a repeated list option,
+/// or of a list positional argument. With ListDelimiter<"">, an empty
+/// occurrence is a blank item.
 /// This is a marker type (doesn't modify data) and other formats ignore it.
 /// Usage: rfl::cli::read<MyStruct, rfl::cli::BlankItemsAsMissing>(argc, argv)
 struct BlankItemsAsMissing {

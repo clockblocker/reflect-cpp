@@ -223,4 +223,180 @@ TEST(cli, test_blank_items_setting_ignored_by_json) {
   EXPECT_EQ(result.value().tags, config.tags);
 }
 
+// --- With repeated options, ListDelimiter and list positionals ---
+
+template <class T, class... Ps>
+rfl::Result<T> read(std::vector<const char*> _args) {
+  _args.insert(_args.begin(), "program");
+  return rfl::cli::read<T, Ps...>(static_cast<int>(_args.size()),
+                                  const_cast<char**>(_args.data()));
+}
+
+using OptStrings = std::vector<std::optional<std::string>>;
+using Semicolon = rfl::cli::ListDelimiter<";">;
+using NoSplit = rfl::cli::ListDelimiter<"">;
+
+struct RepeatedConfig {
+  rfl::Short<"t", OptStrings> tags;
+};
+
+TEST(cli, test_blank_items_repeated_option) {
+  // The blank items of every occurrence are kept, at their index in the
+  // combined list.
+  const auto result =
+      read<RepeatedConfig, Blanks>({"--tags", "a,", "-t", ",b", "--tags=c"});
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().tags(),
+            (OptStrings{"a", std::nullopt, std::nullopt, "b", "c"}));
+}
+
+TEST(cli, test_blank_items_repeated_option_skipped_by_default) {
+  const auto result =
+      read<RepeatedConfig>({"--tags", "a,", "-t", ",b", "--tags=c"});
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().tags(), (OptStrings{"a", "b", "c"}));
+}
+
+TEST(cli, test_blank_items_repeated_empty_occurrence) {
+  // An empty occurrence adds no items, as an empty value is an empty list.
+  const auto result =
+      read<RepeatedConfig, Blanks>({"--tags=a", "--tags=", "-t", "", "-t=b"});
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().tags(), (OptStrings{"a", "b"}));
+}
+
+TEST(cli, test_blank_items_repeated_option_error_index) {
+  const auto result =
+      read<RequiredConfig, Blanks>({"--tags", "a,b", "--tags", "c,,d"});
+  ASSERT_FALSE(result);
+  EXPECT_EQ(result.error().what(),
+            "Failed to parse field 'tags': Blank item at index 3 of '--tags'.");
+  const auto details = result.error().details();
+  ASSERT_EQ(details.size(), 1u);
+  EXPECT_EQ(details[0].path, (Path{"tags", size_t{3}}));
+}
+
+TEST(cli, test_blank_items_custom_delimiter) {
+  // Blank items are the ones between two delimiters; commas are not split.
+  const auto result =
+      read<RepeatedConfig, Semicolon, Blanks>({"--tags=a;;b,,c", "-t", ";"});
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().tags(),
+            (OptStrings{"a", std::nullopt, "b,,c", std::nullopt,
+                        std::nullopt}));
+
+  const auto skipped = read<RepeatedConfig, Semicolon>({"--tags=a;;b,,c"});
+  ASSERT_TRUE(skipped) << skipped.error().what();
+  EXPECT_EQ(skipped.value().tags(), (OptStrings{"a", "b,,c"}));
+
+  const auto err = read<RequiredConfig, Blanks, Semicolon>({"--tags=a,;;b"});
+  ASSERT_FALSE(err);
+  EXPECT_EQ(err.error().what(),
+            "Failed to parse field 'tags': Blank item at index 1 of '--tags'.");
+}
+
+TEST(cli, test_blank_items_no_delimiter) {
+  // Without a delimiter, every occurrence is one item, so an empty one is a
+  // blank item. On its own, `--tags=` is one blank item, not an empty list.
+  const auto result =
+      read<RepeatedConfig, NoSplit, Blanks>({"--tags", "a,,b", "-t", ""});
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().tags(), (OptStrings{"a,,b", std::nullopt}));
+
+  const auto single = read<RepeatedConfig, NoSplit, Blanks>({"--tags="});
+  ASSERT_TRUE(single) << single.error().what();
+  EXPECT_EQ(single.value().tags(), (OptStrings{std::nullopt}));
+
+  const auto kept = read<RepeatedConfig, NoSplit>({"--tags", "a,,b", "-t", ""});
+  ASSERT_TRUE(kept) << kept.error().what();
+  EXPECT_EQ(kept.value().tags(), (OptStrings{"a,,b", ""}));
+
+  const auto err =
+      read<RequiredConfig, NoSplit, Blanks>({"--tags", "a", "--tags", ""});
+  ASSERT_FALSE(err);
+  EXPECT_EQ(err.error().what(),
+            "Failed to parse field 'tags': Blank item at index 1 of '--tags'.");
+}
+
+struct PositionalConfig {
+  rfl::Positional<std::string> command;
+  rfl::Positional<OptStrings> files;
+};
+
+TEST(cli, test_blank_items_list_positional) {
+  // Each remaining argument is split as an occurrence of the list.
+  const auto result =
+      read<PositionalConfig, Blanks>({"run", "a,,b", "c", ",d", "", "e,"});
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().command(), "run");
+  EXPECT_EQ(result.value().files(),
+            (OptStrings{"a", std::nullopt, "b", "c", std::nullopt, "d", "e",
+                        std::nullopt}));
+
+  const auto skipped =
+      read<PositionalConfig>({"run", "a,,b", "c", ",d", "", "e,"});
+  ASSERT_TRUE(skipped) << skipped.error().what();
+  EXPECT_EQ(skipped.value().files(), (OptStrings{"a", "b", "c", "d", "e"}));
+}
+
+struct RequiredPositionalConfig {
+  rfl::Positional<std::string> command;
+  rfl::Positional<std::vector<std::string>> files;
+};
+
+TEST(cli, test_blank_items_list_positional_error) {
+  const auto result =
+      read<RequiredPositionalConfig, Blanks>({"run", "a", "b,,c"});
+  ASSERT_FALSE(result);
+  EXPECT_EQ(
+      result.error().what(),
+      "Failed to parse field 'files': Blank item at index 2 of '--files'.");
+  const auto details = result.error().details();
+  ASSERT_EQ(details.size(), 1u);
+  EXPECT_EQ(details[0].path, (Path{"files", size_t{2}}));
+}
+
+struct Recipe {
+  rfl::Positional<std::string> name;
+  rfl::Positional<OptStrings> args;
+};
+
+TEST(cli, test_blank_items_options_first_no_delimiter) {
+  // The rest of the command line, unchanged, except that an empty argument
+  // is a blank item.
+  const auto result =
+      read<Recipe, rfl::cli::OptionsFirst, NoSplit, Blanks>(
+          {"build", "--jobs", "", "--", "a,,b"});
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().name(), "build");
+  EXPECT_EQ(result.value().args(),
+            (OptStrings{"--jobs", std::nullopt, "--", "a,,b"}));
+
+  const auto kept = read<Recipe, rfl::cli::OptionsFirst, NoSplit>(
+      {"build", "--jobs", "", "--", "a,,b"});
+  ASSERT_TRUE(kept) << kept.error().what();
+  EXPECT_EQ(kept.value().args(), (OptStrings{"--jobs", "", "--", "a,,b"}));
+}
+
+struct PassThrough {
+  rfl::Positional<std::string> name;
+  rfl::Positional<rfl::DefaultVal<std::vector<std::string>>> args;
+};
+
+TEST(cli, test_blank_items_pass_through_empty_argument) {
+  // With BlankItemsAsMissing, a list of std::string cannot take an empty
+  // argument: it is a blank item.
+  const auto result = read<PassThrough, rfl::cli::OptionsFirst, NoSplit,
+                           Blanks>({"build", "--jobs", "", "x"});
+  ASSERT_FALSE(result);
+  EXPECT_EQ(result.error().what(),
+            "Failed to parse field 'args': Blank item at index 1 of '--args'.");
+
+  const auto kept = read<PassThrough, rfl::cli::OptionsFirst, NoSplit>(
+      {"build", "--jobs", "", "x"});
+  ASSERT_TRUE(kept) << kept.error().what();
+  EXPECT_EQ(kept.value().args.value()(),
+            (std::vector<std::string>{"--jobs", "", "x"}));
+}
+
 }  // namespace test_blank_list_items
