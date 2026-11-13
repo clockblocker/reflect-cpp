@@ -80,8 +80,10 @@ void add_usage_field_meta(const bool _default_vals_are_optional,
         std::string(get_short_name<NamedTupleType, _i>().string_view());
   }
   // The same condition as in NamedTupleParser::handle_one_missing_field.
-  // The schema cannot tell, because it marks a DefaultVal field as optional
-  // even where the parser requires it (see usage_default_vals_are_optional).
+  // is_default_val_v sees a DefaultVal through Short, Positional, Rename,
+  // Description and Deprecated, in any order, as the parser does. The schema
+  // cannot tell, because it marks a DefaultVal field as optional even where
+  // the parser requires it (see usage_default_vals_are_optional).
   meta.required =
       !(rfl::internal::is_default_val_v<ValueType>
         && _default_vals_are_optional)
@@ -320,18 +322,21 @@ class UsageCollector {
            const std::optional<Generic>& _default, const bool _outermost) {
     _type.variant_.visit([&](const auto& _t) {
       using T = std::remove_cvref_t<decltype(_t)>;
+      // Description and Deprecated do not change how a field is read, so a
+      // DefaultVal inside them still makes the field optional
+      // (is_default_val_v). Short, Positional and Rename leave no node.
       if constexpr (std::is_same_v<T, Type::Description>) {
         if (_arg.description.empty()) {
           _arg.description = _t.description_;
         }
-        add(*_t.type_, std::move(_arg), _default, false);
+        add(*_t.type_, std::move(_arg), _default, _outermost);
 
       } else if constexpr (std::is_same_v<T, Type::Deprecated>) {
         if (_arg.description.empty()) {
           _arg.description = _t.description_;
         }
         _arg.deprecation = _t.deprecation_message_;
-        add(*_t.type_, std::move(_arg), _default, false);
+        add(*_t.type_, std::move(_arg), _default, _outermost);
 
       } else if constexpr (std::is_same_v<T, Type::Optional>) {
         if (!_arg.required_is_known && !optionals_are_required_) {
@@ -340,7 +345,8 @@ class UsageCollector {
         add(*_t.type_, std::move(_arg), _default, false);
 
       } else if constexpr (std::is_same_v<T, Type::DefaultVal>) {
-        // Like the parser, only count a DefaultVal that wraps the field. The
+        // Like the parser (is_default_val_v), only count a DefaultVal that
+        // wraps the field, possibly inside Description or Deprecated. The
         // schema has its default value only if the struct around it could be
         // default-constructed, which is when the parser fills it in.
         if (!_arg.required_is_known && _outermost && _t.default_value_) {

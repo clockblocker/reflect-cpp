@@ -232,9 +232,28 @@ default-constructed struct. If the struct cannot be default-constructed, for
 instance because a validator rejects another field's default value, those
 fields are required, and the help says so.
 
-`rfl::Positional`, `rfl::Short` and `rfl::DefaultVal` only take effect as the
-outermost wrapper of a field, so put `rfl::Description` and validators inside
-them. The help shows what the parser does: a field declared as
+An `rfl::DefaultVal` inside `rfl::Short`, `rfl::Positional`, `rfl::Description`
+or `rfl::Deprecated`, in any order, makes the field optional for the parser,
+and the help shows it in brackets with its default:
+
+```cpp
+struct Logging {
+  rfl::Short<"l", rfl::Description<"Minimum level to log",
+                                   rfl::DefaultVal<LogLevel>>>
+      log_level = LogLevel::info;
+};
+```
+
+```
+Usage: app [-l|--log-level=<debug|info|warn>]
+
+Arguments:
+  -l, --log-level=<debug|info|warn>  Minimum level to log. Default: info.
+```
+
+`rfl::Positional` and `rfl::Short` only take effect as the outermost wrapper
+of a field, so put `rfl::Description` and validators inside them. The help
+shows what the parser does: a field declared as
 `rfl::Description<"...", rfl::Positional<std::string>>` is listed as a named
 argument, because that is how it is parsed.
 

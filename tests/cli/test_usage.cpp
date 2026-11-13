@@ -183,6 +183,81 @@ TEST(cli, test_usage_default_val) {
   EXPECT_EQ(defaulted.value().retries.value().get(), 5);
 }
 
+struct Limits {
+  rfl::Description<"Connections per host", rfl::DefaultVal<int>> per_host = 4;
+  int total;
+};
+
+/// rfl::DefaultVal inside other wrappers, in different orders.
+struct WrappedDefaultVal {
+  rfl::Short<"l", rfl::Description<"Minimum level to log",
+                                   rfl::DefaultVal<LogLevel>>>
+      log_level = LogLevel::info;
+  rfl::Description<"Seconds to wait", rfl::DefaultVal<int>> timeout = 30;
+  rfl::Deprecated<"Use --timeout", "Old timeout", rfl::DefaultVal<int>> wait =
+      10;
+  rfl::Positional<rfl::DefaultVal<std::string>> output = "out.txt";
+  rfl::Short<"n", rfl::Description<"Number of runs", int>> runs;
+  Limits limits;
+};
+
+TEST(cli, test_usage_wrapped_default_val) {
+  EXPECT_EQ(rfl::cli::usage<WrappedDefaultVal>("app", true),
+            "Usage: app [-l|--log-level=<debug|info|warn>] "
+            "[--timeout=<value>] [--wait=<value>] [<output>] "
+            "-n|--runs=<value> [--limits.per-host=<value>] "
+            "--limits.total=<value>\n"
+            "\n"
+            "Arguments:\n"
+            "  -l, --log-level=<debug|info|warn>  Minimum level to log. "
+            "Default: info.\n"
+            "  --timeout=<value>                  Seconds to wait. "
+            "Default: 30.\n"
+            "  --wait=<value>                     Old timeout. Deprecated: "
+            "Use --timeout. Default: 10.\n"
+            "  <output>                           Default: out.txt.\n"
+            "  -n, --runs=<value>                 Number of runs. Required.\n"
+            "  --limits.per-host=<value>          Connections per host. "
+            "Default: 4.\n"
+            "  --limits.total=<value>             Required.\n");
+
+  // Everything the help leaves optional can be left out.
+  const char* minimal[] = {"app", "-n", "3", "--limits.total=8"};
+  const auto defaulted =
+      rfl::cli::read<WrappedDefaultVal>(4, const_cast<char**>(minimal));
+  ASSERT_TRUE(defaulted) << defaulted.error().what();
+  EXPECT_EQ(defaulted.value().log_level.value().value().get(),
+            LogLevel::info);
+  EXPECT_EQ(defaulted.value().timeout.value().get(), 30);
+  EXPECT_EQ(defaulted.value().wait.value().get(), 10);
+  EXPECT_EQ(defaulted.value().output.value().get(), "out.txt");
+  EXPECT_EQ(defaulted.value().runs.value().value(), 3);
+  EXPECT_EQ(defaulted.value().limits.per_host.value().get(), 4);
+  EXPECT_EQ(defaulted.value().limits.total, 8);
+
+  // The arguments are spelled as the help shows them.
+  const char* all[] = {"app",          "-l",          "warn",
+                       "--timeout=5",  "--wait=1",    "result.txt",
+                       "--runs=2",     "--limits.per-host=2",
+                       "--limits.total=4"};
+  const auto given =
+      rfl::cli::read<WrappedDefaultVal>(9, const_cast<char**>(all));
+  ASSERT_TRUE(given) << given.error().what();
+  EXPECT_EQ(given.value().log_level.value().value().get(), LogLevel::warn);
+  EXPECT_EQ(given.value().timeout.value().get(), 5);
+  EXPECT_EQ(given.value().wait.value().get(), 1);
+  EXPECT_EQ(given.value().output.value().get(), "result.txt");
+  EXPECT_EQ(given.value().limits.per_host.value().get(), 2);
+
+  // What the help calls required is required.
+  const char* no_runs[] = {"app", "--limits.total=8"};
+  EXPECT_FALSE(
+      rfl::cli::read<WrappedDefaultVal>(2, const_cast<char**>(no_runs)));
+  const char* no_total[] = {"app", "-n", "3"};
+  EXPECT_FALSE(
+      rfl::cli::read<WrappedDefaultVal>(3, const_cast<char**>(no_total)));
+}
+
 /// The default-constructed `port` does not satisfy its validator.
 struct WithInvalidDefault {
   rfl::Validator<int, rfl::Minimum<1>> port;
