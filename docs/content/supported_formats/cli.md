@@ -90,23 +90,57 @@ A long option takes its value either after `=` or as the next token:
 
 This works for every field that takes a value: nested fields
 (`--database.host db.local`, also inside an `rfl::NamedTuple`), vectors,
-enums, numbers, optionals, map entries (`--labels.env prod`, or
-`--servers.eu.port 8080` for a map of structs), fields inlined by
+enums, numbers, optionals, entries of maps with string keys
+(`--labels.env prod`, or `--servers.eu.port 8080` for a map of structs;
+other maps need `=`), fields inlined by
 `rfl::Flatten`, and fields wrapped in `rfl::Short`, `rfl::Positional`,
 `rfl::Rename`, `rfl::Description`, `rfl::Validator` or `rfl::DefaultVal`.
 A `std::variant`, `rfl::Variant`, `rfl::TaggedUnion` or `rfl::Generic`
-may hold a bool, so its option never takes the next token: pass its value
-with `=`. Alone, `--key` passes an empty value (`true` for a bool).
+may hold a bool, so its long option never takes the next token: pass its
+value with `=`. Alone, `--key` passes an empty value (`true` for a bool).
+Its short alias takes the next token unless it looks like an option:
+`-m fast`.
 
 The next token is the value unless it looks like an option (`-` followed by
-a letter), so negative numbers such as `--offset -5` work. If the value is
+anything except a digit or `.`), so negative numbers such as `--offset -5`
+work. If the value is
 missing, parsing fails with `Missing value for option '--sql'.` Use `=` to
 pass an empty value or one that starts with `-`: `--sql=`, `--pattern=-x`.
+Short aliases follow the same rules: `-o out.csv`, `-o=out.csv`, and
+`Missing value for option '-o'.` For an option whose value may be left out,
+use `rfl::ImplicitValue` (below).
 
 Boolean fields (`bool`, `std::optional<bool>` and wrapped bools) are flags
 and never consume the next token: `--verbose input.txt` sets `verbose` and
 passes `input.txt` as a positional argument, and so does `--verbose 0` with
 `0`. To set a flag to `false`, write `--verbose=false`.
+
+## Implicit values
+
+Wrap a field with `rfl::ImplicitValue<T, "text">` to let its option be given
+without a value, like Boost's `implicit_value`:
+
+```cpp
+struct Config {
+  rfl::Short<"h", rfl::ImplicitValue<std::optional<std::string>>> help;
+  rfl::ImplicitValue<std::optional<std::string>, "all"> help_reports;
+  rfl::ImplicitValue<rfl::DefaultVal<int>, "2"> verbosity = 0;
+  rfl::Positional<std::optional<std::string>> input;
+};
+
+// ./app --help-reports            ->  help_reports = "all"
+// ./app --help-reports=memory     ->  help_reports = "memory"
+// ./app --help-reports in.txt     ->  help_reports = "all", input = "in.txt"
+// ./app -h  /  -h=tag             ->  help = ""  /  "tag"
+// ./app --verbosity               ->  verbosity = 2
+```
+
+A bare option stands for the text, which is parsed like any other value
+(the default text is empty). A value can only be given after `=`: the next
+token is never taken. If the option is absent, the field is read as usual:
+`std::optional` gives `std::nullopt`, `rfl::DefaultVal` its default, and any
+other field is required. Other formats read and write `rfl::ImplicitValue`
+as its inner type, as they do `rfl::Short`.
 
 ## Unknown options
 
@@ -170,14 +204,34 @@ struct Config {
 // ./app --port=8080 --verbose --host=localhost   (long names still work)
 ```
 
-Short bool flags do not consume the next token as a value — `-v somefile`
-treats `somefile` as a positional argument, not as the value of `-v`.
-To explicitly set a bool short flag, use `=` syntax: `-v=true`, `-v=false`.
+Short bool flags (`bool`, `std::optional<bool>` and wrapped bools) do not
+consume the next token as a value — `-v somefile` treats `somefile` as a
+positional argument, not as the value of `-v`. Unlike long flags, they take
+the next token if it is `true`, `false`, `1` or `0`: `-v false` sets the
+flag to `false`. Write `-v -- 1` to pass such a token as a positional
+argument. To explicitly set a bool short flag, use `=` syntax: `-v=true`,
+`-v=false`.
 
-## Combining Positional and Short
+## Combining wrappers
 
-`Positional` and `Short` can be used together in the same struct, but
-**cannot be nested** (`Positional<Short<...>>` is a compile-time error):
+`Short`, `Positional` and `ImplicitValue` can be nested with each other and
+with `DefaultVal`, `std::optional`, `Description`, `Rename` and `Deprecated`
+in any order: `rfl::Description<"...", rfl::Short<"o", T>>` is `-o`, and
+`rfl::DefaultVal<rfl::Positional<T>>` is positional. Put `rfl::Rename`
+outermost, as in `rfl::Rename<"out", rfl::Short<"o", T>>`; inside other
+wrappers it is ignored, as elsewhere in reflect-cpp.
+
+If a field has several `Short` or `Positional` wrappers, the outermost one
+counts: `rfl::Short<"o", rfl::Description<"...", rfl::Positional<T>>>` is
+`-o`. A `Short` found through other wrappers counts only if no other field
+has its name, so another field `rfl::Short<"o", U>` keeps `-o`. Two fields
+whose outermost wrapper is the same `Short` make every read fail with
+`Duplicate short name '-o' in struct definition.`
+
+Bare arguments go first to the fields whose outermost wrapper is
+`Positional`, then to those where it is found through other wrappers, each in
+declaration order. `Short` directly around `Positional` (or the reverse), and
+a `Positional` field with an `ImplicitValue`, are compile-time errors:
 
 ```cpp
 struct Config {
@@ -211,21 +265,22 @@ leaving out `-o` gives `"out"`.
 | `rfl::Rename<"x", T>` | `--x=val` | Bypasses kebab conversion |
 | `rfl::Positional<T>` | bare token | Matched in declaration order |
 | `rfl::Short<"x", T>` | `-x value` or `-x=value` | Single-character alias |
+| `rfl::ImplicitValue<T, "x">` | `--key` or `--key=value` | Bare means `x` |
 
 ## Architecture
 
 Parsing proceeds in three stages:
 
 1. **`parse_argv`** — categorizes raw tokens into `named`, `short_args`,
-   and `positional` buckets (`ParsedArgs` struct). It is given a
-   `LongOptions` table derived from the target struct
-   (`make_long_options<T, ProcessorsType>()`), which says which long options
-   are flags and which take a value, so that `--key value` works, and
-   whether a short option's name looks like a number. Without the table, it
-   reads `-5` as a short option.
-2. **`resolve_args`** — uses compile-time metadata from the target struct to
-   map short aliases to long names, reclaim values from bool short flags,
-   and merge positional arguments. Produces a flat `map<string, string>`.
+   and `positional` buckets (`ParsedArgs` struct). `rfl::cli::read` gives
+   it an internal option table derived from the target struct, which says
+   which long and short options are flags, take a value or have an implicit
+   value, so that `--key value` works, and whether a short option's name
+   looks like a number. The public `parse_argv`, which has no table, reads
+   `-5` as a short option.
+2. **`resolve_args`** — uses the same table to map short aliases to long
+   names and to merge positional arguments. Produces a flat
+   `map<string, string>`.
 3. **`Reader`** — implements reflect-cpp's `IsReader` concept by presenting
    virtual tree nodes over the flat map. Each node is a `{map*, path}` pair —
    no data copying, just prefix-based lookup via `lower_bound`.
@@ -236,9 +291,10 @@ Parsing proceeds in three stages:
 - `include/rfl/cli/Reader.hpp` — Reader + `parse_value` overloads
 - `include/rfl/cli/Parser.hpp` — Parser type alias
 - `include/rfl/cli/parse_argv.hpp` — `argv` -> `ParsedArgs`
-- `include/rfl/cli/long_options.hpp` — `LongOptions`: which long options take a value
+- `include/rfl/cli/options.hpp` — the internal option table: the long, short and positional options of a struct
 - `include/rfl/cli/resolve_args.hpp` — `ParsedArgs` -> `map<string, string>`
 - `include/rfl/cli.hpp` — aggregator header
 - `include/rfl/SnakeCaseToKebabCase.hpp` — processor
 - `include/rfl/Positional.hpp` — `Positional<T>` wrapper
 - `include/rfl/Short.hpp` — `Short<"x", T>` wrapper
+- `include/rfl/ImplicitValue.hpp` — `ImplicitValue<T, "x">` wrapper

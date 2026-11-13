@@ -433,6 +433,29 @@ TEST(cli, test_long_variant_and_generic_without_value) {
             (std::variant<bool, std::string>(std::string("fast"))));
 }
 
+struct ShortVariants {
+  rfl::Short<"m", std::variant<int, std::string>> mode;
+  rfl::Short<"g", std::optional<rfl::Generic>> extra;
+  rfl::Positional<std::optional<std::string>> input_file;
+};
+
+TEST(cli, test_short_variant_and_generic_take_next_token) {
+  // A short alias of a variant or rfl::Generic takes the next token unless
+  // it looks like an option.
+  const auto word = read<ShortVariants>({"-m", "fast", "in.txt"});
+  ASSERT_TRUE(word) << word.error().what();
+  EXPECT_EQ(word.value().mode(),
+            (std::variant<int, std::string>(std::string("fast"))));
+  EXPECT_EQ(word.value().input_file(), "in.txt");
+
+  const auto number = read<ShortVariants>({"-m", "5", "-g", "x"});
+  ASSERT_TRUE(number) << number.error().what();
+  EXPECT_EQ(number.value().mode(), (std::variant<int, std::string>(5)));
+  ASSERT_TRUE(number.value().extra().has_value());
+  EXPECT_EQ(number.value().extra()->to_string().value(), "x");
+  EXPECT_FALSE(number.value().input_file().has_value());
+}
+
 TEST(cli, test_long_space_range_overload) {
   // The range overload of rfl::cli::read uses the option table too.
   const std::vector<std::string> args = {"--sql", "SELECT 1", "--verbose",
@@ -527,15 +550,15 @@ TEST(cli, test_parse_argv_without_long_options) {
 
 TEST(cli, test_parse_argv_with_long_options) {
   const auto options =
-      rfl::cli::make_long_options<Query, rfl::Processors<>>();
-  EXPECT_EQ(options.kind_of("sql"), rfl::cli::LongOptionKind::value);
-  EXPECT_EQ(options.kind_of("verbose"), rfl::cli::LongOptionKind::flag);
-  EXPECT_EQ(options.kind_of("input_file"), rfl::cli::LongOptionKind::value);
-  EXPECT_EQ(options.kind_of("nope"), rfl::cli::LongOptionKind::unknown);
+      rfl::cli::internal::make_options<Query, rfl::Processors<>>();
+  EXPECT_EQ(options.find_long("sql").kind, rfl::cli::internal::OptionKind::value);
+  EXPECT_EQ(options.find_long("verbose").kind, rfl::cli::internal::OptionKind::flag);
+  EXPECT_EQ(options.find_long("input_file").kind, rfl::cli::internal::OptionKind::value);
+  EXPECT_EQ(options.find_long("nope").kind, rfl::cli::internal::OptionKind::unknown);
 
   const wchar_t* args[] = {L"program", L"--sql", L"SELECT 1"};
   const auto parsed =
-      rfl::cli::parse_argv(3, const_cast<wchar_t**>(args), options);
+      rfl::cli::internal::parse_argv(3, const_cast<wchar_t**>(args), options);
   ASSERT_TRUE(parsed) << parsed.error().what();
   EXPECT_EQ(parsed.value().named.at("sql"), "SELECT 1");
   EXPECT_TRUE(parsed.value().positional.empty());
