@@ -57,6 +57,7 @@
 #include "rfl/UnderlyingEnums.hpp"
 #include "rfl/Validator.hpp"
 #include "rfl/Variant.hpp"
+#include "rfl/VariantsAsOneOf.hpp"
 #include "rfl/Vectorstring.hpp"
 #include "rfl/always_false.hpp"
 #include "rfl/apply.hpp"

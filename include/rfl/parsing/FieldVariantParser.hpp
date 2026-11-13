@@ -11,6 +11,7 @@
 #include "../Variant.hpp"
 #include "../internal/no_duplicate_field_names.hpp"
 #include "../internal/to_ptr_field.hpp"
+#include "../internal/variants_as_one_of_v.hpp"
 #include "../make_named_tuple.hpp"
 #include "FieldVariantReader.hpp"
 #include "Parser_base.hpp"
@@ -97,7 +98,8 @@ struct FieldVariantParser {
       std::map<std::string, schema::Type>* _definitions) {
     return schema::Type{schema::Type::AnyOf{
         .types_ = std::vector<schema::Type>(
-            {one_field_to_type<FieldTypes>(_definitions)...})}};
+            {one_field_to_type<FieldTypes>(_definitions)...}),
+        .mutually_exclusive_ = internal::variants_as_one_of_v<ProcessorsType>}};
   }
 
  private:

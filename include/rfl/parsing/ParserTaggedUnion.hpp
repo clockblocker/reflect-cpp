@@ -8,6 +8,7 @@
 #include "../Result.hpp"
 #include "../TaggedUnion.hpp"
 #include "../always_false.hpp"
+#include "../internal/add_tags_to_variants_v.hpp"
 #include "../internal/no_field_names_v.hpp"
 #include "../internal/strings/strings.hpp"
 #include "../named_tuple_t.hpp"
@@ -130,7 +131,17 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
     } else {
       using VariantType = std::variant<std::invoke_result_t<
           decltype(wrap_if_necessary<AlternativeTypes>), AlternativeTypes>...>;
-      return Parser<R, W, VariantType, ProcessorsType>::to_schema(_definitions);
+      auto type =
+          Parser<R, W, VariantType, ProcessorsType>::to_schema(_definitions);
+      if constexpr (!internal::add_tags_to_variants_v<ProcessorsType> &&
+                    !internal::add_namespaced_tags_to_variants_v<
+                        ProcessorsType>) {
+        // The tags are unique, so a value can match at most one alternative.
+        if (auto* any_of = rfl::get_if<schema::Type::AnyOf>(&type.variant_)) {
+          any_of->mutually_exclusive_ = true;
+        }
+      }
+      return type;
     }
   }
 
