@@ -33,15 +33,9 @@ namespace internal {
 /// `_negative_numbers_are_options` is true, as it is when the target struct
 /// has a short option whose name looks like a number (rfl::Short<"1", ...>).
 /// Then such tokens are short options, as in argparse.
-inline rfl::Result<ParsedArgs> parse_args(int argc, char* argv[],
+inline rfl::Result<ParsedArgs> parse_args(std::span<const char* const> args,
                                           bool _negative_numbers_are_options) {
-  if (argc < 0 || (argc > 0 && !argv)) {
-    return error("Invalid argc/argv.");
-  }
   ParsedArgs result;
-  if (argc <= 1) {
-    return result;
-  }
 
   const auto add_short = [&](std::string _key, std::string _val,
                              std::string_view _raw) -> rfl::Result<bool> {
@@ -52,7 +46,6 @@ inline rfl::Result<ParsedArgs> parse_args(int argc, char* argv[],
     return true;
   };
 
-  const auto args = std::span(argv + 1, argc - 1);
   bool force_positional = false;
   for (size_t i = 0; i < args.size(); ++i) {
     const std::string_view arg_raw(args[i]);
@@ -131,15 +124,31 @@ inline rfl::Result<ParsedArgs> parse_args(int argc, char* argv[],
 /// Without the target struct, a token such as -5 or -.5 is a short option.
 /// rfl::cli::read, which knows the struct, reads it as a negative number
 /// unless the struct has a short option like rfl::Short<"1", ...>.
-/// @param argc Number of command-line arguments
-/// @param argv Array of command-line argument strings
+/// Every element of `args` is parsed; unlike the argc/argv overload, the
+/// first one is not skipped as the program name.
+/// @param args The command-line arguments to parse
 /// @return A Result containing ParsedArgs with categorized arguments or an error
 /// --key=value / --flag → named
 /// -x value / -x=value / -x → short_args
 /// bare arguments → positional
 /// -- → everything after goes to positional
-inline rfl::Result<ParsedArgs> parse_argv(int argc, char* argv[]) {
-  return internal::parse_args(argc, argv, true);
+inline rfl::Result<ParsedArgs> parse_argv(std::span<const char* const> args) {
+  return internal::parse_args(args, true);
+}
+
+/// Parses command-line arguments into categorized buckets, skipping argv[0]
+/// (the program name).
+/// @param argc Number of command-line arguments
+/// @param argv Array of command-line argument strings
+/// @return A Result containing ParsedArgs with categorized arguments or an error
+inline rfl::Result<ParsedArgs> parse_argv(int argc, const char* const argv[]) {
+  if (argc < 0 || (argc > 0 && !argv)) {
+    return error("Invalid argc/argv.");
+  }
+  if (argc <= 1) {
+    return ParsedArgs{};
+  }
+  return parse_argv(std::span(argv + 1, static_cast<size_t>(argc - 1)));
 }
 
 /// Parses wide-character command-line arguments into categorized buckets.
@@ -147,7 +156,8 @@ inline rfl::Result<ParsedArgs> parse_argv(int argc, char* argv[]) {
 /// @param argc Number of wide-character command-line arguments
 /// @param argv Array of wide-character command-line argument strings
 /// @return A Result containing ParsedArgs with UTF-8 encoded arguments
-inline rfl::Result<ParsedArgs> parse_argv(int argc, wchar_t* argv[]) {
+inline rfl::Result<ParsedArgs> parse_argv(int argc,
+                                          const wchar_t* const argv[]) {
   if (argc < 0 || (argc > 0 && !argv)) {
     return error("Invalid argc/argv.");
   }

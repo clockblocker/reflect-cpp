@@ -4,7 +4,8 @@ breadcrumbs: true
 
 # rfl::cli — Command-Line Argument Parser
 
-Parse `argc`/`argv` into any reflectable struct via `rfl::cli::read<T>(argc, argv)`.
+Parse `argc`/`argv` into any reflectable struct via `rfl::cli::read<T>(argc, argv)`,
+or a sequence of arguments via `rfl::cli::read<T>(args)`.
 
 ## Usage
 
@@ -27,6 +28,29 @@ int main(int argc, char* argv[]) {
 
 Field names undergo automatic `snake_case` -> `kebab-case` conversion:
 `host_name` matches `--host-name`.
+
+`argv` may be `char*[]` or `const char*[]`. `argv[0]` is the program name
+and is skipped.
+
+## Passing a sequence of arguments
+
+When the arguments do not come straight from `main`, pass them as a
+`std::span<const char* const>` instead. The number of arguments is taken
+from the span, and every element is parsed: the first one is **not** skipped.
+
+```cpp
+// ./app serve --host-name=localhost --port=8080 --verbose --tags=a,b
+int main(int argc, char* argv[]) {
+  // argv[0] is the program name, argv[1] a subcommand the program handles.
+  const auto rest = std::span(argv, argc).subspan(std::min(argc, 2));
+  const auto result = rfl::cli::read<Config>(rest);
+}
+
+// Arguments from somewhere other than main:
+const std::vector<const char*> args = {"--host-name=localhost", "--port=8080",
+                                       "--verbose", "--tags=a,b"};
+const auto result = rfl::cli::read<Config>(args);
+```
 
 ## Positional arguments
 
