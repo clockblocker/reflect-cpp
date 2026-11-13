@@ -41,9 +41,10 @@ struct RFL_API Type {
 
   struct AnyOf {
     std::vector<Type> types_;
-    /// True if no valid value can match more than one of the types, such as
-    /// the alternatives of a tagged union, which differ in their tag. JSON
-    /// schema emits these as oneOf instead of anyOf.
+    /// True if a value may match only one of the types: always for a tagged
+    /// union, whose alternatives differ in their tag, and for other variants
+    /// when the VariantsAsOneOf processor is passed. JSON schema emits these
+    /// as oneOf instead of anyOf.
     bool mutually_exclusive_ = false;
   };
 
