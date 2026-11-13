@@ -74,6 +74,16 @@ This will result in the following JSON schema:
 
 You can insert this into the tools mentioned above and see the generated code.
 
+## Variants and tagged unions
+
+`rfl::TaggedUnion` becomes `oneOf`: every alternative has a different tag, so a value
+matches exactly one of them.
+
+`rfl::Variant` and `std::variant` become `anyOf`, because their alternatives can overlap:
+`1` is both an `integer` and a `number`, and `{"width": 1, "height": 2}` matches both
+`Square` and `Rectangle` from the example in [variants](../variants_and_tagged_unions).
+`oneOf` would reject such values, even though reflect-cpp reads them without problems.
+
 ## Adding descriptions
 
 JSON schemata also often contain descriptions. reflect-cpp supports this as well.
