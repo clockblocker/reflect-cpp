@@ -30,6 +30,7 @@
 #include "../parsing/schema/ValidationType.hpp"
 #include "../parsing/schema/make.hpp"
 #include "../to_generic.hpp"
+#include "App.hpp"
 #include "ListDelimiter.hpp"
 #include "OptionsFirst.hpp"
 #include "Reader.hpp"
@@ -63,6 +64,9 @@ struct UsageArg {
   /// Whether the field is the last positional one and a list, so that it
   /// takes the remaining positional arguments.
   bool takes_rest = false;
+  /// Whether the option is shown without a value, as the built-in `--help`
+  /// and `--version` are.
+  bool bare = false;
   bool required = true;
   /// Whether `required` was taken from the parser's compile-time traits, so
   /// that the schema must not override it.
@@ -548,6 +552,9 @@ inline std::string usage_arg_to_string(const UsageArg& _arg,
   auto str = _arg.short_name.empty() ? std::string()
                                      : "-" + _arg.short_name + _short_sep;
   str += "--" + _arg.name;
+  if (_arg.bare) {
+    return str;
+  }
   const auto value = usage_value_to_string(_arg, _delimiter);
   switch (_arg.kind) {
     case OptionKind::flag:
@@ -610,19 +617,48 @@ inline std::string usage_help_text(const UsageArg& _arg) {
   return text;
 }
 
+/// The rows of the built-in options of rfl::cli::App that no field takes.
+inline std::vector<UsageArg> builtin_usage_args(
+    const BuiltinOptions& _builtin) {
+  auto args = std::vector<UsageArg>();
+  const auto make = [](std::string_view _name, std::string_view _short_name,
+                       std::string _description) {
+    auto arg = UsageArg{};
+    arg.name = std::string(_name);
+    arg.short_name = std::string(_short_name);
+    arg.kind = OptionKind::flag;
+    arg.bare = true;
+    arg.required = false;
+    arg.description = std::move(_description);
+    return arg;
+  };
+  if (_builtin.help) {
+    args.push_back(make(help_option,
+                        _builtin.help_short ? help_short_option : "",
+                        "Show this help"));
+  }
+  if (_builtin.version) {
+    args.push_back(make(version_option, "", "Show the version"));
+  }
+  return args;
+}
+
+/// @param _header Shown before the usage line in the detailed form
+/// (rfl::cli::App).
 /// @param _options_first Whether the options end at the first positional
 /// argument (rfl::cli::OptionsFirst), so the synopsis lists them first.
 inline std::string format_usage(const std::string& _program_name,
                                 const std::vector<UsageArg>& _args,
                                 const bool _detailed,
                                 const std::optional<char> _delimiter,
-                                const bool _options_first) {
+                                const bool _options_first,
+                                const std::string& _header) {
   auto synopsis = _args;
   if (_options_first) {
     std::stable_partition(synopsis.begin(), synopsis.end(),
                           [](const UsageArg& _arg) { return !_arg.positional; });
   }
-  auto out = "Usage: " + _program_name;
+  auto out = (_detailed ? _header : std::string()) + "Usage: " + _program_name;
   for (const auto& arg : synopsis) {
     const auto str = usage_arg_to_string(arg, "|", _delimiter);
     out += arg.required ? " " + str : " [" + str + "]";
@@ -693,7 +729,10 @@ std::optional<Generic> usage_defaults() {
 /// default value (rfl::DefaultVal, or all fields with rfl::DefaultIfMissing)
 /// and whether the argument is required.
 ///
-/// `read` does not handle `--help`; check for it before calling `read`.
+/// With an rfl::cli::App in Ps, the detailed form starts with its header
+/// (name, version and description), and both forms list the built-in
+/// `-h, --help` and `--version` that rfl::cli::read_app handles, unless a
+/// field takes their names.
 /// @tparam T The struct type that the arguments are parsed into
 /// @tparam Ps The processors passed to `rfl::cli::read`
 /// @param _program_name The name shown after "Usage:", usually argv[0]
@@ -711,17 +750,21 @@ std::string usage(const std::string& _program_name,
           std::make_index_sequence<NamedTupleType::size()>{});
   // The table that read() parses with, so the help shows what the parser
   // accepts.
-  const auto options = internal::make_options<T, ProcessorsType>();
+  auto options = internal::make_options<T, ProcessorsType>();
+  const auto builtin = internal::add_builtin_options<ProcessorsType>(&options);
   const auto definition =
       parsing::schema::make<Reader, generic::Writer, T, ProcessorsType>();
   auto collector = internal::UsageCollector(
       &definition, &meta, &options,
       rfl::internal::no_optionals_v<ProcessorsType>, delimiter);
-  const auto args = collector.collect(
+  auto args = internal::builtin_usage_args(builtin);
+  const auto fields = collector.collect(
       rfl::internal::default_if_missing_v<ProcessorsType>,
       internal::usage_defaults<T, Ps...>());
-  return internal::format_usage(_program_name, args, _detailed, delimiter,
-                                options.options_first);
+  args.insert(args.end(), fields.begin(), fields.end());
+  return internal::format_usage(
+      _program_name, args, _detailed, delimiter, options.options_first,
+      internal::app_header<ProcessorsType>(_program_name));
 }
 
 }  // namespace rfl::cli

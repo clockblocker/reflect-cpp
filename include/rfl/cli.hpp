@@ -2,6 +2,7 @@
 #define RFL_CLI_HPP_
 
 #include "../rfl.hpp"
+#include "cli/App.hpp"
 #include "cli/BlankItemsAsMissing.hpp"
 #include "cli/ListDelimiter.hpp"
 #include "cli/NoAbbreviations.hpp"
