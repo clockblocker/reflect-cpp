@@ -263,26 +263,32 @@ struct Database {
 struct Config {
   rfl::Positional<rfl::Description<"Path to the input file", std::string>>
       input_file;
-  rfl::Short<"p", rfl::Description<"Port to listen on", int>> port;
+  rfl::Short<"p", rfl::Description<"Port to listen on",
+                                   rfl::Validator<int, rfl::Minimum<1>,
+                                                  rfl::Maximum<65535>>>>
+      port;
   rfl::Description<"Minimum level to log", std::optional<LogLevel>> log_level;
-  rfl::Description<"Tags to attach", std::vector<std::string>> tags;
+  rfl::Description<"Tags to attach",
+                   rfl::Validator<std::vector<std::string>,
+                                  rfl::Size<rfl::Minimum<1>>>>
+      tags;
   Database database;
 };
 ```
 
 `rfl::cli::usage<Config>("app", true)` returns the usage line, where
 optional arguments are in brackets, and one line per argument, with its
-description and whether it is required. `rfl::cli::usage<Config>("app")`
-returns only the usage line.
+description, the constraints of its validators, its default and whether it
+is required. `rfl::cli::usage<Config>("app")` returns only the usage line.
 
 ```
 Usage: app <input-file> -p|--port=<value> [--log-level=<debug|info|warn>] --tags=<v1,v2,...> --database.host=<value> --database.port=<value>
 
 Arguments:
   <input-file>                   Path to the input file. Required.
-  -p, --port=<value>             Port to listen on. Required.
+  -p, --port=<value>             Port to listen on. Range: 1..65535. Required.
   --log-level=<debug|info|warn>  Minimum level to log
-  --tags=<v1,v2,...>             Tags to attach. Required.
+  --tags=<v1,v2,...>             Tags to attach. Size: >= 1. Required.
   --database.host=<value>        Required.
   --database.port=<value>        Required.
 ```
@@ -294,6 +300,24 @@ so are all fields if you pass `rfl::DefaultIfMissing` (to both `read` and
 default-constructed struct. If the struct cannot be default-constructed, for
 instance because a validator rejects another field's default value, those
 fields are required, and the help says so.
+
+Defaults are shown for these fields, as long as the struct can be
+default-constructed:
+
+```cpp
+struct Server {
+  rfl::DefaultVal<std::string> host = "localhost";
+  rfl::DefaultVal<int> threads = 4;
+  rfl::DefaultVal<bool> dry_run = false;
+};
+```
+
+```
+Arguments:
+  --host=<value>      Default: localhost.
+  --threads=<value>   Default: 4.
+  --dry-run[=<bool>]  Default: false.
+```
 
 Each argument is shown as the option table that `read` parses with (see
 [Architecture](#architecture)) reads it:
