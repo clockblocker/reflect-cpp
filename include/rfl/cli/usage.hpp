@@ -57,6 +57,9 @@ struct UsageArg {
   OptionKind kind = OptionKind::value;
   /// Whether the field is a list, which can be repeated.
   bool is_list = false;
+  /// Whether the field is the last positional one and a list, so that it
+  /// takes the remaining positional arguments.
+  bool takes_rest = false;
   bool required = true;
   /// Whether `required` was taken from the parser's compile-time traits, so
   /// that the schema must not override it.
@@ -322,6 +325,7 @@ class UsageCollector {
     auto root = UsageArg{};
     root.required = !_all_optional;
     add(definition_->root_, std::move(root), _defaults, false);
+    mark_rest_positional();
     return std::move(args_);
   }
 
@@ -472,6 +476,18 @@ class UsageCollector {
     args_.emplace_back(std::move(_arg));
   }
 
+  /// Marks the positional argument that takes the remaining arguments: a
+  /// list as the last one (Options::last_positional_is_list).
+  void mark_rest_positional() {
+    if (!options_->last_positional_is_list()) {
+      return;
+    }
+    for (auto& arg : args_) {
+      arg.takes_rest =
+          arg.positional && arg.name == options_->positionals.back();
+    }
+  }
+
  private:
   const parsing::schema::Definition* definition_;
   const std::map<std::string, UsageFieldMeta>* meta_;
@@ -493,11 +509,13 @@ inline std::string usage_value_to_string(const UsageArg& _arg) {
   return "<v1" + d + "v2" + d + "...>";
 }
 
-/// "<input-file>", "-p|--port=<value>", "--verbose[=<bool>]"
+/// "<input-file>", "<files>...", "-p|--port=<value>", "--verbose[=<bool>]"
 inline std::string usage_arg_to_string(const UsageArg& _arg,
                                        const std::string& _short_sep) {
   if (_arg.positional) {
-    return "<" + _arg.name + ">";
+    // A list as the last positional field takes the remaining arguments.
+    // Any other positional field takes one.
+    return "<" + _arg.name + ">" + (_arg.takes_rest ? "..." : "");
   }
   auto str = _arg.short_name.empty() ? std::string()
                                      : "-" + _arg.short_name + _short_sep;

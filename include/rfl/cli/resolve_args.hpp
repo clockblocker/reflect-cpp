@@ -93,6 +93,8 @@ inline rfl::Unexpected<Error> too_many_positionals(const size_t _expected,
 /// target struct.
 /// This function:
 /// 1. Maps positional arguments to their corresponding field names based on declaration order
+///    If the last positional field is a list, it takes all remaining
+///    positional arguments, as later occurrences of the list.
 /// 2. Expands short arguments (e.g., -p) to long names (e.g., --port) using Short<> annotations
 /// 3. Detects conflicts between different ways of specifying the same field
 /// The caller checks the short names first (check_short_names).
@@ -107,11 +109,19 @@ inline rfl::Result<ResolvedArgs> resolve_args(
 
   // Merge positional args.
   const auto& positional_names = _options.positionals;
-  if (_parsed.positional.size() > positional_names.size()) {
+  if (_parsed.positional.size() > positional_names.size()
+      && !_options.last_positional_is_list()) {
     return internal::too_many_positionals(positional_names.size(),
                                           _parsed.positional.size());
   }
   for (size_t i = 0; i < _parsed.positional.size(); ++i) {
+    if (i >= positional_names.size()) {
+      // A list as the last positional field takes the rest, one occurrence
+      // per argument.
+      _parsed.later_occurrences[positional_names.back()].emplace_back(
+          std::move(_parsed.positional[i]));
+      continue;
+    }
     const auto& long_name = positional_names[i];
     if (result.count(long_name)) {
       return rfl::error(
@@ -184,7 +194,9 @@ inline rfl::Result<std::map<std::string, std::string>> expand_abbreviations(
 /// of T, but for arguments parsed by parse_argv without them: values that
 /// boolean short options took from the next token are returned to the
 /// positional arguments. A flat map cannot hold the occurrences of a
-/// repeated list option, which parse_argv without the options rejects.
+/// repeated list option, which parse_argv without the options rejects, so
+/// a list as the last positional field does not take the remaining
+/// positional arguments here either: each positional field takes one.
 /// With rfl::cli::AllowAbbreviations, long options that match no field are
 /// expanded here (`--rep=a` for `--report=a`), but parse_argv, which does
 /// not know the struct, has already read `--rep value` as `--rep` and a
@@ -215,6 +227,10 @@ rfl::Result<std::map<std::string, std::string>> resolve_args(
     _parsed.named = std::move(*named);
   }
   internal::apply_option_kinds(options, &_parsed);
+  if (_parsed.positional.size() > options.positionals.size()) {
+    return internal::too_many_positionals(options.positionals.size(),
+                                          _parsed.positional.size());
+  }
   return internal::resolve_args(std::move(_parsed), options)
       .transform([](internal::ResolvedArgs _args) {
         return std::move(_args.values);
