@@ -61,6 +61,10 @@ namespace internal {
 /// takes the rest of the token (`-qfcsv`) or, if nothing is left, the next
 /// token (`-qf csv`). Without `_options` from make_options, short options
 /// are not grouped: `-abc` is the short option `abc`.
+/// If `_options.allow_abbreviations` is set (rfl::cli::AllowAbbreviations),
+/// a long option that matches no field stands for the one long option it is
+/// a prefix of (`--rep` for `--report`), and a prefix of several is an
+/// error.
 /// Every element of `_args` is parsed; nothing is skipped as the program name.
 /// Every occurrence of a list option (Option::is_list) adds to it, however
 /// it is spelled. Its first occurrence is kept in `named` under its long
@@ -189,7 +193,18 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       if (key.empty()) {
         return error("Empty key in argument: " + std::string(arg_raw));
       }
-      const auto option = find_long(key);
+      auto option = find_long(key);
+      if (option.kind == OptionKind::unknown && _options.allow_abbreviations) {
+        // --rep for --report: a prefix of exactly one long option.
+        const auto names = _options.find_abbreviations(key);
+        if (names.size() > 1) {
+          return error(internal::ambiguous_option_message(key, names));
+        }
+        if (names.size() == 1) {
+          key = names.front();
+          option = _options.find_long(key);
+        }
+      }
       if (option.kind == OptionKind::unknown && _options.reject_unknown) {
         return error("Unknown option '--" + key + "'.");
       }
@@ -197,7 +212,8 @@ inline rfl::Result<ParsedArgs> parse_string_views(
           && _options.separate_values) {
         // --key value (rfl::cli::SeparateOptionValues). A flag never takes
         // the next token: `--verbose 0` leaves "0" positional.
-        auto v = take_value(option, arg_raw, &i);
+        // The message names the option that `key` abbreviates.
+        auto v = take_value(option, "--" + key, &i);
         if (!v) { return error(v.error().what()); }
         val = std::move(*v);
       }
