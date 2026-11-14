@@ -2,6 +2,7 @@
 #define RFL_CLI_HPP_
 
 #include "../rfl.hpp"
+#include "cli/NoAbbreviations.hpp"
 #include "cli/Parser.hpp"
 #include "cli/Reader.hpp"
 #include "cli/options.hpp"
