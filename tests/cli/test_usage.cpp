@@ -96,6 +96,94 @@ TEST(cli, test_usage_description_outside_positional) {
   EXPECT_EQ(result.value().input_file.value().value(), "in.txt");
 }
 
+struct Validated {
+  rfl::Description<"Port to listen on",
+                   rfl::Validator<int, rfl::Minimum<1>, rfl::Maximum<65535>>>
+      port;
+  rfl::Validator<double, rfl::ExclusiveMinimum<0>, rfl::Maximum<1>> ratio;
+  rfl::Validator<int, rfl::ExclusiveMaximum<100>> percent;
+  rfl::Validator<int, rfl::AnyOf<rfl::Maximum<0>, rfl::Minimum<10>>> outside;
+  rfl::Validator<int, rfl::OneOf<rfl::EqualTo<1>, rfl::EqualTo<2>>> one_or_two;
+  rfl::Validator<int, rfl::NotEqualTo<0>> nonzero;
+  rfl::Validator<std::vector<std::string>, rfl::Size<rfl::Minimum<1>>> tags;
+  rfl::Validator<std::vector<int>,
+                 rfl::Size<rfl::AllOf<rfl::Minimum<1>, rfl::Maximum<3>>>>
+      ids;
+  rfl::Validator<std::string, rfl::Size<rfl::Minimum<1>>,
+                 rfl::PatternValidator<"^[a-z]+$", "Lowercase">>
+      user;
+  rfl::Literal<"fast", "slow"> mode;
+};
+
+TEST(cli, test_usage_validators) {
+  EXPECT_EQ(rfl::cli::usage<Validated>("app", true),
+            "Usage: app --port=<value> --ratio=<value> --percent=<value> "
+            "--outside=<value> --one-or-two=<value> --nonzero=<value> "
+            "--tags=<v1,v2,...> --ids=<v1,v2,...> --user=<value> "
+            "--mode=<fast|slow>\n"
+            "\n"
+            "Arguments:\n"
+            "  --port=<value>        Port to listen on. Range: 1..65535. "
+            "Required.\n"
+            "  --ratio=<value>       Range: > 0 and <= 1. Required.\n"
+            "  --percent=<value>     Range: < 100. Required.\n"
+            "  --outside=<value>     Range: <= 0 or >= 10. Required.\n"
+            "  --one-or-two=<value>  Range: 1 or 2. Required.\n"
+            "  --nonzero=<value>     Range: != 0. Required.\n"
+            "  --tags=<v1,v2,...>    Size: >= 1. Required.\n"
+            "  --ids=<v1,v2,...>     Size: 1..3. Required.\n"
+            "  --user=<value>        Size: >= 1. Pattern: ^[a-z]+$. "
+            "Required.\n"
+            "  --mode=<fast|slow>    Required.\n");
+}
+
+struct WithDefaultVal {
+  rfl::DefaultVal<int> port = 8080;
+  rfl::DefaultVal<std::string> host = "localhost";
+  rfl::DefaultVal<std::vector<std::string>> tags =
+      std::vector<std::string>{"a", "b"};
+  rfl::DefaultVal<LogLevel> level = LogLevel::info;
+  rfl::DefaultVal<double> rate = 0.25;
+  rfl::DefaultVal<bool> dry_run = false;
+  int count = 3;
+  rfl::Short<"r", rfl::DefaultVal<int>> retries = 5;
+};
+
+TEST(cli, test_usage_default_val) {
+  // Without rfl::DefaultIfMissing, `count` is required, so its member
+  // initializer is never used and not shown. A DefaultVal inside rfl::Short
+  // makes `retries` optional, as for the parser.
+  EXPECT_EQ(rfl::cli::usage<WithDefaultVal>("app", true),
+            "Usage: app [--port=<value>] [--host=<value>] "
+            "[--tags=<v1,v2,...>] [--level=<debug|info|warn>] "
+            "[--rate=<value>] [--dry-run[=<bool>]] --count=<value> "
+            "[-r|--retries=<value>]\n"
+            "\n"
+            "Arguments:\n"
+            "  --port=<value>             Default: 8080.\n"
+            "  --host=<value>             Default: localhost.\n"
+            "  --tags=<v1,v2,...>         Default: a,b.\n"
+            "  --level=<debug|info|warn>  Default: info.\n"
+            "  --rate=<value>             Default: 0.25.\n"
+            "  --dry-run[=<bool>]         Default: false.\n"
+            "  --count=<value>            Required.\n"
+            "  -r, --retries=<value>      Default: 5.\n");
+
+  const char* args[] = {"app", "--count=1", "-r", "2"};
+  const auto result =
+      rfl::cli::read<WithDefaultVal>(4, const_cast<char**>(args));
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().port.get(), 8080);
+  EXPECT_EQ(result.value().host.get(), "localhost");
+  EXPECT_EQ(result.value().retries.value().get(), 2);
+
+  const char* no_retries[] = {"app", "--count=1"};
+  const auto defaulted =
+      rfl::cli::read<WithDefaultVal>(2, const_cast<char**>(no_retries));
+  ASSERT_TRUE(defaulted) << defaulted.error().what();
+  EXPECT_EQ(defaulted.value().retries.value().get(), 5);
+}
+
 struct Limits {
   rfl::Description<"Connections per host", rfl::DefaultVal<int>> per_host = 4;
   int total;
@@ -122,12 +210,16 @@ TEST(cli, test_usage_wrapped_default_val) {
             "--limits.total=<value>\n"
             "\n"
             "Arguments:\n"
-            "  -l, --log-level=<debug|info|warn>  Minimum level to log\n"
-            "  --timeout=<value>                  Seconds to wait\n"
-            "  --wait=<value>                     Old timeout\n"
-            "  <output>\n"
+            "  -l, --log-level=<debug|info|warn>  Minimum level to log. "
+            "Default: info.\n"
+            "  --timeout=<value>                  Seconds to wait. "
+            "Default: 30.\n"
+            "  --wait=<value>                     Old timeout. Deprecated: "
+            "Use --timeout. Default: 10.\n"
+            "  <output>                           Default: out.txt.\n"
             "  -n, --runs=<value>                 Number of runs. Required.\n"
-            "  --limits.per-host=<value>          Connections per host\n"
+            "  --limits.per-host=<value>          Connections per host. "
+            "Default: 4.\n"
             "  --limits.total=<value>             Required.\n");
 
   // Everything the help leaves optional can be left out.
@@ -208,13 +300,13 @@ TEST(cli, test_usage_defaults_without_default_construction) {
   // The parser fills in a missing DefaultVal field only after it
   // default-constructed the struct. If that throws (`port`'s zero value
   // fails its validator) or the struct has no default constructor, the
-  // field is required, and the help says so.
+  // field is required, and the help shows it without a default.
   static_assert(!std::is_default_constructible_v<WithPortAndDefaultVal>);
   EXPECT_EQ(rfl::cli::usage<WithInvalidDefault>("app", true),
             "Usage: app --port=<value> --threads=<value>\n"
             "\n"
             "Arguments:\n"
-            "  --port=<value>     Required.\n"
+            "  --port=<value>     Range: >= 1. Required.\n"
             "  --threads=<value>  Required.\n");
   EXPECT_EQ(rfl::cli::usage<WithInvalidWrappedDefault>("app"),
             "Usage: app --port=<value> -t|--threads=<value>\n");
@@ -239,7 +331,8 @@ TEST(cli, test_usage_defaults_without_default_construction) {
   EXPECT_FALSE(rfl::cli::read<WithInvalidWrappedDefaultInside>(
       2, const_cast<char**>(nested)));
 
-  // With rfl::DefaultIfMissing nothing is required, even without T{}.
+  // With rfl::DefaultIfMissing nothing is required, but the defaults are
+  // unknown without T{}, so usage() leaves them out.
   static_assert(!std::is_default_constructible_v<WithPort>);
   EXPECT_EQ((rfl::cli::usage<WithPort, rfl::DefaultIfMissing>("app", true)),
             "Usage: app [--port=<value>] [--retries=<value>]\n"
@@ -261,6 +354,28 @@ struct WithInitializers {
   std::optional<int> limit;
   Inner database;
 };
+
+TEST(cli, test_usage_default_if_missing) {
+  EXPECT_EQ(
+      (rfl::cli::usage<WithInitializers, rfl::DefaultIfMissing>("app", true)),
+      "Usage: app [--count=<value>] [--name=<value>] [--verbose[=<bool>]] "
+      "[--limit=<value>] [--database.host=<value>] [--database.port=<value>]\n"
+      "\n"
+      "Arguments:\n"
+      "  --count=<value>          Default: 3.\n"
+      "  --name=<value>           Default: \"\".\n"
+      "  --verbose[=<bool>]       Default: false.\n"
+      "  --limit=<value>\n"
+      "  --database.host=<value>  Default: db.\n"
+      "  --database.port=<value>  Default: 5432.\n");
+
+  const char* args[] = {"app"};
+  const auto result = rfl::cli::read<WithInitializers, rfl::DefaultIfMissing>(
+      1, const_cast<char**>(args));
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().count, 3);
+  EXPECT_EQ(result.value().database.port, 5432);
+}
 
 TEST(cli, test_usage_without_default_if_missing) {
   EXPECT_EQ(rfl::cli::usage<WithInitializers>("app"),
@@ -321,7 +436,8 @@ TEST(cli, test_usage_optionals) {
             "Arguments:\n"
             "  <level>                 Choices: debug|info|warn.\n"
             "  -v, --verbose[=<bool>]\n"
-            "  --old-port=<value>      Old port\n"
+            "  --old-port=<value>      Old port. Deprecated: Use --port "
+            "instead.\n"
             "  --notes=<value>         First line\n"
             "                          Second line. Required.\n");
 }
