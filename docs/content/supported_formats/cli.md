@@ -323,6 +323,28 @@ Any other option can be given only once. That includes nested
 fields and map entries: `Duplicate argument: --output`,
 `Duplicate short argument: -o`, `Conflict: '-o' and '--output' both provided.`
 
+### List delimiter
+
+`rfl::cli::ListDelimiter<"x">` splits lists at another character, and
+`rfl::cli::ListDelimiter<"">` does not split them at all:
+
+```cpp
+rfl::cli::read<Config, rfl::cli::ListDelimiter<";">>(argc, argv);
+// ./app --report='a;b' --report=c,d    ->  report = {"a", "b", "c,d"}
+
+rfl::cli::read<Config, rfl::cli::ListDelimiter<"">>(argc, argv);
+// ./app --report=a,b --report=         ->  report = {"a,b", ""}
+```
+
+- The delimiter is a single ASCII character, such as `;`, `:` or a space.
+  A longer one would make values such as `a;;;b` ambiguous; repeat the
+  option instead.
+- It applies to every list option and list positional argument of the
+  struct. Other fields are never split.
+- Without a delimiter, each occurrence, and each positional argument, is
+  exactly one item, even if it is empty.
+- Other formats ignore it.
+
 ### A list as the last positional argument
 
 If the last positional field (in declaration order) is a list, it takes all
@@ -469,6 +491,10 @@ an `rfl::ImplicitValue` option (`--color[=<never|always>]`, with
 and can be repeated (`--tags=<v1,v2,...>`, with `Can be repeated.` in its
 row), a list as the last `rfl::Positional` takes the remaining arguments
 (`<files>...`), and every other option takes a value (`--port=<value>`).
+With `rfl::cli::ListDelimiter<";">`, a list is `--tags=<v1;v2;...>` and its
+default is joined with `;`. With `rfl::cli::ListDelimiter<"">`, it is
+`--tags=<value>`, and its default is left out, because one value cannot
+spell several items.
 
 `rfl::Positional` and `rfl::Short` are found through the other wrappers, as
 the parser does (see [Combining wrappers](#combining-wrappers)), so
@@ -533,6 +559,7 @@ Parsing proceeds in three stages:
 - `include/rfl/cli/parse_argv.hpp` — `argv` -> `ParsedArgs`
 - `include/rfl/cli/options.hpp` — the internal option table: the long, short and positional options of a struct
 - `include/rfl/cli/AllowAbbreviations.hpp` — `AllowAbbreviations` processor
+- `include/rfl/cli/ListDelimiter.hpp` — `ListDelimiter<"x">` processor
 - `include/rfl/cli/resolve_args.hpp` — `ParsedArgs` -> `map<string, string>`
 - `include/rfl/cli/usage.hpp` — `usage()` help text, built on `rfl::parsing::schema` and the internal option table
 - `include/rfl/cli.hpp` — aggregator header
