@@ -52,7 +52,7 @@ const auto homer = rfl::json::read<Person, rfl::NoFieldNames>(R"(["Homer"])").va
 // homer.town == ""
 ```
 
-An `rfl::DefaultVal` inside `rfl::Short`, `rfl::Positional`, `rfl::Description`, `rfl::Deprecated` or `rfl::Rename`, in any order, works like a bare one: a field `rfl::Description<"Worker threads", rfl::DefaultVal<int>> jobs = 4;` may be omitted and is then 4.
+An `rfl::DefaultVal` inside `rfl::Short`, `rfl::Positional`, `rfl::Description`, `rfl::Deprecated` or `rfl::Rename`, in any order, works like a bare one: a field `rfl::Description<"Worker threads", rfl::DefaultVal<int>> jobs = 4;` may be omitted and is then 4. `rfl::ImplicitValue` is read as its inner type by every format but the command line, so an `rfl::DefaultVal` inside it counts as a bare one in all of the following.
 
 ## All fields need a valid default value
 
@@ -90,9 +90,9 @@ The field is still required. If `favorite_foods` is missing in the input, you ge
 
 The same restriction applies to every struct that is read with the `rfl::DefaultIfMissing` processor, whether it contains an `rfl::DefaultVal` or not.
 
-An `rfl::DefaultVal` inside `rfl::Short`, `rfl::Positional`, `rfl::Description` or `rfl::Deprecated` gets its default only if the struct can be default-constructed. If all its `rfl::DefaultVal` fields are wrapped and the struct cannot be default-constructed, because a field's type has no default constructor or the default constructor throws, the struct is read without its default values, so those fields must be present in the input. With a bare `rfl::DefaultVal`, such a struct does not compile, or you get the error above.
+An `rfl::DefaultVal` inside `rfl::Short`, `rfl::Positional`, `rfl::Description` or `rfl::Deprecated` (but not one inside only `rfl::ImplicitValue`, which is a bare one) gets its default only if the struct can be default-constructed. If all its `rfl::DefaultVal` fields are wrapped and the struct cannot be default-constructed, because a field's type has no default constructor or the default constructor throws, the struct is read without its default values, so those fields must be present in the input. With a bare `rfl::DefaultVal`, such a struct does not compile, or you get the error above.
 
-An `rfl::NamedTuple` has no in-class initializers. A missing bare `rfl::DefaultVal<T>` field in it is set to `T{}`. If `T` has no default constructor, or `T{}` throws (for instance a validator that rejects its zero value), the field must be present in the input. An `rfl::DefaultVal` inside `rfl::Short`, `rfl::Positional`, `rfl::Description` or `rfl::Deprecated` must always be present in an `rfl::NamedTuple`.
+An `rfl::NamedTuple` has no in-class initializers. A missing bare `rfl::DefaultVal<T>` field in it, also inside `rfl::ImplicitValue`, is set to `T{}`. If `T` has no default constructor, or `T{}` throws (for instance a validator that rejects its zero value), the field must be present in the input. An `rfl::DefaultVal` inside `rfl::Short`, `rfl::Positional`, `rfl::Description` or `rfl::Deprecated` must always be present in an `rfl::NamedTuple`.
 
 ## When to use
 

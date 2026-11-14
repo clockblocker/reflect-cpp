@@ -18,6 +18,7 @@
 #include "../internal/is_basic_type.hpp"
 #include "../internal/is_deprecated.hpp"
 #include "../internal/is_description.hpp"
+#include "../internal/is_implicit_value.hpp"
 #include "../internal/is_literal.hpp"
 #include "../internal/is_validator.hpp"
 #include "../internal/processed_t.hpp"
@@ -551,6 +552,12 @@ struct Parser {
     } else if constexpr (is_positional_v<U>) {
       return ParserPositional<R, W, typename U::Type,
                               ProcessorsType>::to_schema(_definitions);
+
+    } else if constexpr (rfl::internal::is_implicit_value<U>::value) {
+      // Read and written through its ReflectionType, but described as the
+      // type itself rather than as a named reference, like rfl::Short.
+      return Parser<R, W, typename U::Type, ProcessorsType>::to_schema(
+          _definitions);
 
     } else if constexpr (is_reference_wrapper_v<U>) {
       return ParserReferenceWrapper<R, W, typename U::type,

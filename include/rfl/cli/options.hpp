@@ -14,6 +14,7 @@
 #include "../DefaultVal.hpp"
 #include "../Deprecated.hpp"
 #include "../Description.hpp"
+#include "../ImplicitValue.hpp"
 #include "../Positional.hpp"
 #include "../Rename.hpp"
 #include "../Short.hpp"
@@ -43,6 +44,10 @@ enum class OptionKind {
   /// A field that takes a value: `--key=value`, `-k value`, `-k=value`, and
   /// with rfl::cli::SeparateOptionValues `--key value`.
   value,
+  /// A field wrapped in rfl::ImplicitValue: `--key` and `-k` stand for its
+  /// implicit value. A value can only be given after '=', never as the next
+  /// token.
+  implicit_value,
   /// A known path whose kind cannot be decided from the type (a nested
   /// struct, a variant, rfl::Generic, or a sub-key of a variant). `--key`
   /// never takes the next token, so alone it passes an empty value. A short
@@ -60,6 +65,11 @@ struct Option {
   /// occurrence of a list option adds to it, however the option is spelled,
   /// so it may be repeated. Any other option may be given only once.
   bool is_list = false;
+
+  /// For OptionKind::implicit_value: the value that the option stands for
+  /// when it is given without one. It views the rfl::ImplicitValue's
+  /// template argument, which lives as long as the program.
+  std::string_view implicit_value = {};
 };
 
 /// The options that a target struct accepts, built from its fields by
@@ -235,16 +245,19 @@ inline bool is_bool_literal(std::string_view _token) noexcept {
          || _token == "0";
 }
 
-/// What rfl::Short and rfl::Positional say about a field of type T. They are
-/// found through rfl::DefaultVal, std::optional, rfl::Description,
-/// rfl::Deprecated and rfl::Rename, in any order. `count` is the number of
-/// rfl::Short and rfl::Positional wrappers; a field may have at most one.
+/// What rfl::Short, rfl::Positional and rfl::ImplicitValue say about a field
+/// of type T. They are found through each other and through rfl::DefaultVal,
+/// std::optional, rfl::Description, rfl::Deprecated and rfl::Rename, in any
+/// order. `count` is the number of rfl::Short and rfl::Positional wrappers; a
+/// field may have at most one.
 template <class T>
 struct cli_annotations {
   static constexpr bool is_short = false;
   static constexpr bool is_positional = false;
+  static constexpr size_t num_implicit_value = 0;
   static constexpr rfl::internal::StringLiteral<1> short_name = "";
   static constexpr int count = 0;
+  static constexpr rfl::internal::StringLiteral<1> implicit_value = "";
 };
 
 template <class T>
@@ -282,6 +295,13 @@ struct cli_annotations<Short<_name, T>> : cli_annotations_t<T> {
   static constexpr int count = cli_annotations_t<T>::count + 1;
 };
 
+template <class T, rfl::internal::StringLiteral _implicit>
+struct cli_annotations<ImplicitValue<T, _implicit>> : cli_annotations_t<T> {
+  static constexpr size_t num_implicit_value =
+      cli_annotations_t<T>::num_implicit_value + 1;
+  static constexpr auto implicit_value = _implicit;
+};
+
 /// The CLI metadata of the _i-th field of a NamedTuple. InnerType is the
 /// declared type of the field, whichever wrappers it consists of.
 template <class NamedTupleType, size_t _i>
@@ -293,10 +313,17 @@ struct field_info {
 
   static constexpr bool is_positional = Annotations::is_positional;
   static constexpr bool is_short = Annotations::is_short;
+  static constexpr bool has_implicit_value =
+      Annotations::num_implicit_value > 0;
 
   static_assert(Annotations::count <= 1,
                 "A field can have only one rfl::Short or rfl::Positional, "
                 "wherever it sits among the field's other wrappers.");
+  static_assert(Annotations::num_implicit_value <= 1,
+                "A field can have at most one rfl::ImplicitValue.");
+  static_assert(!is_positional || !has_implicit_value,
+                "A field cannot be both rfl::Positional and "
+                "rfl::ImplicitValue.");
 
   static constexpr std::string_view name() { return FieldType::name(); }
 };
@@ -315,7 +342,7 @@ constexpr auto get_short_name() {
 
 /// Strips everything that does not change how a field is written on the
 /// command line: optionals, pointers, rfl::Short, rfl::Positional,
-/// rfl::Rename, rfl::DefaultVal, rfl::Skip, types with a
+/// rfl::ImplicitValue, rfl::Rename, rfl::DefaultVal, rfl::Skip, types with a
 /// ReflectionType (rfl::Validator, rfl::Description, rfl::Literal, ...),
 /// reflectors and custom parsers.
 template <class T, class ProcessorsType>
@@ -341,6 +368,7 @@ auto unwrap_option_type() {
   }
   else if constexpr (rfl::internal::is_short_v<U>
                      || rfl::internal::is_positional_v<U>
+                     || rfl::internal::is_implicit_value_v<U>
                      || parsing::is_rename_v<U>
                      || parsing::is_default_val_v<U>
                      || parsing::is_skip_v<U>) {
@@ -417,12 +445,41 @@ constexpr bool is_option_list_v =
     || parsing::is_c_array_v<T> || parsing::is_tuple_v<T>
     || parsing::is_rfl_tuple_v<T> || parsing::is_pair_v<T>;
 
+/// Whether an empty implicit value means something for T: a bool flag is
+/// true, a string is empty, a list has no items.
+template <class T>
+constexpr bool empty_implicit_value_is_valid_v =
+    std::is_same_v<T, bool> || std::is_same_v<T, std::string>
+    || is_option_list_v<T>;
+
+/// The option for a field of type T wrapped in rfl::ImplicitValue.
+template <class T, class ProcessorsType>
+Option implicit_value_option() {
+  using U = unwrapped_option_t<T, ProcessorsType>;
+  using Annotations = cli_annotations_t<T>;
+  static_assert(Annotations::num_implicit_value <= 1,
+                "A field can have at most one rfl::ImplicitValue.");
+  static_assert(!parsing::is_string_map_v<U> && !is_option_struct_v<U>,
+                "rfl::ImplicitValue must wrap a field that takes a value, not "
+                "a struct or a map.");
+  static_assert(empty_implicit_value_is_valid_v<U>
+                    || Annotations::implicit_value.length > 0,
+                "rfl::ImplicitValue needs an implicit value unless it wraps a "
+                "bool, a std::string or a list, such as "
+                "rfl::ImplicitValue<int, \"1\">.");
+  return Option{OptionKind::implicit_value, is_option_list_v<U>,
+                Annotations::implicit_value.string_view()};
+}
+
 /// The option for a field, or a key of a map or of rfl::ExtraFields, with
 /// values of type T.
 template <class T, class ProcessorsType>
 Option option_for() {
   using U = unwrapped_option_t<T, ProcessorsType>;
-  if constexpr (std::is_same_v<U, bool>) {
+  if constexpr (cli_annotations_t<T>::num_implicit_value > 0) {
+    return implicit_value_option<T, ProcessorsType>();
+  }
+  else if constexpr (std::is_same_v<U, bool>) {
     return Option{OptionKind::flag};
   }
   else if constexpr (parsing::is_string_map_v<U> || is_option_struct_v<U>
@@ -447,9 +504,10 @@ template <class T, class ProcessorsType, class VisitedType>
 void add_open_prefix(const std::string& _prefix, Options* _options) {
   using U = unwrapped_option_t<T, ProcessorsType>;
   _options->open_prefixes[_prefix] = option_for<T, ProcessorsType>();
-  if constexpr (parsing::is_string_map_v<U>
-                || (is_option_struct_v<U>
-                    && !VisitedType::template contains<U>)) {
+  if constexpr (cli_annotations_t<T>::num_implicit_value == 0
+                && (parsing::is_string_map_v<U>
+                    || (is_option_struct_v<U>
+                        && !VisitedType::template contains<U>))) {
     auto nested = rfl::Box<Options>::make();
     collect_value_options<T, ProcessorsType, VisitedType>(nested.get());
     _options->open_prefix_options.insert_or_assign(_prefix, std::move(nested));
@@ -476,7 +534,11 @@ void collect_value_options(Options* _options) {
 template <class T, class ProcessorsType, class VisitedType>
 void add_option(const std::string& _path, Options* _options) {
   using U = unwrapped_option_t<T, ProcessorsType>;
-  if constexpr (std::is_same_v<U, bool>) {
+  if constexpr (cli_annotations_t<T>::num_implicit_value > 0) {
+    _options->long_options[_path] =
+        implicit_value_option<T, ProcessorsType>();
+  }
+  else if constexpr (std::is_same_v<U, bool>) {
     _options->long_options[_path] = Option{OptionKind::flag};
   }
   else if constexpr (is_open_option_v<U>) {
@@ -578,8 +640,8 @@ void collect_top_level_options(Options* _options) {
 }
 
 /// Derives the options that T accepts from its fields: the long options,
-/// with whether each is a flag or takes a value, and the rfl::Short aliases
-/// and rfl::Positional fields of the top-level struct.
+/// with whether each is a flag, takes a value or has an implicit value, and
+/// the rfl::Short aliases and rfl::Positional fields of the top-level struct.
 /// @tparam T The target struct type
 /// @tparam ProcessorsType The processors applied to the struct
 /// @tparam _all_paths Whether to list every long option through nested
