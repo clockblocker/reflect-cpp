@@ -38,6 +38,10 @@ struct ResolvedArgs {
   std::map<std::string, std::string> values;
   /// The occurrences after the first of each list given more than once.
   CliLaterOccurrencesType later_occurrences;
+  /// The path of the list whose items are taken as they are, never split or
+  /// dropped, or empty: with rfl::cli::OptionsFirst, the list as the last
+  /// positional field when it gets the rest of the command line.
+  std::string verbatim_list;
 };
 
 /// Applies what parse_argv could not know without the option table.
@@ -146,8 +150,17 @@ inline rfl::Result<ResolvedArgs> resolve_args(
     result.emplace(long_name, std::move(value));
   }
 
+  // With rfl::cli::OptionsFirst, the rest of the command line is passed
+  // through to the list as it is.
+  auto verbatim_list = std::string();
+  if (_options.options_first && _options.last_positional_is_list()
+      && _parsed.positional.size() >= positional_names.size()) {
+    verbatim_list = positional_names.back();
+  }
+
   return ResolvedArgs{std::move(result),
-                      std::move(_parsed.later_occurrences)};
+                      std::move(_parsed.later_occurrences),
+                      std::move(verbatim_list)};
 }
 
 /// The error for a long option that abbreviates several options, worded
