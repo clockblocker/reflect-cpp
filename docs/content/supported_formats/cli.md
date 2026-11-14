@@ -92,7 +92,8 @@ as `rfl::Short`, `rfl::Description` or `rfl::DefaultVal`. The next token is
 the value unless it looks like an option (`-` followed by anything except a
 digit or `.`), so `--offset -5` works. If the value is missing, parsing
 fails with `Missing value for option '--sql'.` Use `=` to pass an empty
-value or one that starts with `-`: `--sql=`, `--pattern=-x`.
+value or one that starts with `-`: `--sql=`, `--pattern=-x`. For an option
+whose value may be left out, use `rfl::ImplicitValue` (below).
 
 Boolean fields (`bool`, `std::optional<bool>` and wrapped bools) are flags
 and never consume the next token: `--verbose input.txt` sets `verbose` and
@@ -104,6 +105,35 @@ its long option never takes the next token either: pass its value with `=`.
 Without the processor, `--sql SELECT` sets `sql` to an empty string and
 passes `SELECT` as a positional argument. The public `rfl::cli::parse_argv`
 does not know the struct, so it always reads it that way.
+
+## Implicit values
+
+Wrap a field with `rfl::ImplicitValue<T, "text">` to let its option be given
+without a value, like Boost's `implicit_value`:
+
+```cpp
+struct Config {
+  rfl::Short<"h", rfl::ImplicitValue<std::optional<std::string>>> help;
+  rfl::ImplicitValue<std::optional<std::string>, "all"> help_reports;
+  rfl::ImplicitValue<rfl::DefaultVal<int>, "2"> verbosity = 0;
+  rfl::Positional<std::optional<std::string>> input;
+};
+
+// ./app --help-reports            ->  help_reports = "all"
+// ./app --help-reports=memory     ->  help_reports = "memory"
+// ./app --help-reports in.txt     ->  help_reports = "all", input = "in.txt"
+// ./app -h  /  -h=tag  /  -htag   ->  help = ""  /  "tag"  /  "tag"
+// ./app --verbosity               ->  verbosity = 2
+```
+
+A bare option stands for the text, which is parsed like any other value;
+the next token is never taken. The text may be left out (it is then empty)
+only for a `bool`, a `std::string` or a list, where an empty value means
+something; any other type needs one, such as `rfl::ImplicitValue<int, "1">`. If the option is
+absent, the field is read as usual: `std::optional` gives `std::nullopt`,
+`rfl::DefaultVal` its default, and any other field is required. Other formats
+read and write `rfl::ImplicitValue` as its inner type, as they do
+`rfl::Short`.
 
 ## Unknown options
 
@@ -128,9 +158,9 @@ rfl::cli::read<Config, rfl::cli::AllowAbbreviations>(argc, argv);
 
 A long option can then be shortened to a prefix that matches only one option:
 with fields `report` and `format`, `--rep=a` and `--form` stand for
-`--report=a` and `--format`. This works for flags,
-positional fields given by name and nested fields, where only the last part
-of the dotted name is shortened: `--database.h` stands for
+`--report=a` and `--format`. This works for flags, `rfl::ImplicitValue`
+options, positional fields given by name and nested fields, where only the
+last part of the dotted name is shortened: `--database.h` stands for
 `--database.host`, but `--data` and `--database.` stand for nothing.
 
 - An exact name always wins: `--format` is `--format` even when
@@ -242,9 +272,11 @@ struct Config {
 ```
 
 Flags are set up to the first option that takes a value. That option takes
-the rest of the token, or the next token if nothing is left. The last
-option in a token treats the next token as it would alone (`-qv false` sets
-`verbose` to `false`).
+the rest of the token, or the next token if nothing is left. An
+`rfl::ImplicitValue` option takes the rest of the token if there is any and
+its implicit value otherwise, never the next token. The last option in a
+token treats the next token as it would alone (`-qv false` sets `verbose`
+to `false`).
 
 - `-f=csv` and `-qf=csv` give `csv`: the `=` is not part of the value.
 - A flag inside a group takes no value: `-vq=false` is an error.
@@ -280,6 +312,9 @@ struct Config {
 - Repeating is the same as joining with a comma, so the size of a
   `std::array` and validators such as `rfl::Size` see all items. An empty
   occurrence (`--report=`) adds none.
+- A bare occurrence of an `rfl::ImplicitValue` list adds its implicit value:
+  with `rfl::ImplicitValue<std::optional<std::vector<std::string>>, "all">`,
+  `--help-reports --help-reports=cpu` gives `{"all", "cpu"}`.
 - Nested lists (`--database.replicas=a --database.replicas=b`) and map
   entries whose values are lists (`--groups.x=a --groups.x=b`) work the
   same way.
@@ -316,8 +351,8 @@ struct Config {
 
 ## Combining wrappers
 
-`Short` and `Positional` can be nested with `DefaultVal`, `std::optional`,
-`Description`, `Rename` and `Deprecated` in any order:
+`Short`, `Positional` and `ImplicitValue` can be nested with `DefaultVal`,
+`std::optional`, `Description`, `Rename` and `Deprecated` in any order:
 `rfl::Description<"...", rfl::Short<"o", T>>` is `-o`, and
 `rfl::DefaultVal<rfl::Positional<T>>` is positional. Put `rfl::Rename`
 outermost, as in `rfl::Rename<"out", rfl::Short<"o", T>>`; inside other
@@ -327,8 +362,8 @@ Bare arguments go to the `Positional` fields in declaration order. Two fields
 with the same `Short` name make every read fail with
 `Duplicate short name '-o' in struct definition.` A field with more than one
 `Short` or `Positional`, such as `rfl::Positional<rfl::Short<"o", T>>` or
-`rfl::Short<"o", rfl::Description<"...", rfl::Positional<T>>>`, is a
-compile-time error:
+`rfl::Short<"o", rfl::Description<"...", rfl::Positional<T>>>`, and a
+`Positional` field with an `ImplicitValue`, are compile-time errors:
 
 ```cpp
 struct Config {
@@ -428,11 +463,12 @@ Arguments:
 
 Each argument is shown as the option table that `read` parses with (see
 [Architecture](#architecture)) reads it: a `bool`, also inside a nested
-struct, is a flag whose value can be left out (`--verbose[=<bool>]`), a list
-takes comma-separated items and can be repeated (`--tags=<v1,v2,...>`, with
-`Can be repeated.` in its row), a list as the last `rfl::Positional` takes
-the remaining arguments (`<files>...`), and every other option takes a value
-(`--port=<value>`).
+struct, is a flag whose value can be left out (`--verbose[=<bool>]`), so is
+an `rfl::ImplicitValue` option (`--color[=<never|always>]`, with
+`Without a value: always.` in its row), a list takes comma-separated items
+and can be repeated (`--tags=<v1,v2,...>`, with `Can be repeated.` in its
+row), a list as the last `rfl::Positional` takes the remaining arguments
+(`<files>...`), and every other option takes a value (`--port=<value>`).
 
 `rfl::Positional` and `rfl::Short` are found through the other wrappers, as
 the parser does (see [Combining wrappers](#combining-wrappers)), so
@@ -468,6 +504,7 @@ int main(int argc, char* argv[]) {
 | `rfl::Rename<"x", T>` | `--x=val` | Bypasses kebab conversion |
 | `rfl::Positional<T>` | bare token | Matched in declaration order; a list last takes the rest |
 | `rfl::Short<"x", T>` | `-x value`, `-x=value` or `-xvalue` | Single-character alias, can be grouped (`-qv`) |
+| `rfl::ImplicitValue<T, "x">` | `--key` or `--key=value` | Bare means `x` |
 
 ## Architecture
 
@@ -502,3 +539,4 @@ Parsing proceeds in three stages:
 - `include/rfl/SnakeCaseToKebabCase.hpp` — processor
 - `include/rfl/Positional.hpp` — `Positional<T>` wrapper
 - `include/rfl/Short.hpp` — `Short<"x", T>` wrapper
+- `include/rfl/ImplicitValue.hpp` — `ImplicitValue<T, "x">` wrapper
