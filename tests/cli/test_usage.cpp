@@ -77,6 +77,53 @@ TEST(cli, test_usage_detailed) {
   EXPECT_FALSE(rfl::cli::read<Described>(5, const_cast<char**>(no_verbose)));
 }
 
+struct WithDefaultVal {
+  rfl::DefaultVal<int> port = 8080;
+  rfl::DefaultVal<std::string> host = "localhost";
+  rfl::DefaultVal<std::vector<std::string>> tags =
+      std::vector<std::string>{"a", "b"};
+  rfl::DefaultVal<LogLevel> level = LogLevel::info;
+  rfl::DefaultVal<double> rate = 0.25;
+  rfl::DefaultVal<bool> dry_run = false;
+  int count = 3;
+  rfl::Short<"r", rfl::DefaultVal<int>> retries = 5;
+};
+
+TEST(cli, test_usage_default_val) {
+  // Without rfl::DefaultIfMissing, `count` is required, so its member
+  // initializer is never used and not shown. A DefaultVal inside rfl::Short
+  // makes `retries` optional, as for the parser.
+  EXPECT_EQ(rfl::cli::usage<WithDefaultVal>("app", true).value(),
+            "Usage: app [--port=<value>] [--host=<value>] "
+            "[--tags=<v1,v2,...>] [--level=<debug|info|warn>] "
+            "[--rate=<value>] [--dry-run[=<bool>]] --count=<value> "
+            "[-r|--retries=<value>]\n"
+            "\n"
+            "Arguments:\n"
+            "  --port=<value>             Default: 8080.\n"
+            "  --host=<value>             Default: localhost.\n"
+            "  --tags=<v1,v2,...>         Default: a,b.\n"
+            "  --level=<debug|info|warn>  Default: info.\n"
+            "  --rate=<value>             Default: 0.25.\n"
+            "  --dry-run[=<bool>]         Default: false.\n"
+            "  --count=<value>            Required.\n"
+            "  -r, --retries=<value>      Default: 5.\n");
+
+  const char* args[] = {"app", "--count=1", "-r", "2"};
+  const auto result =
+      rfl::cli::read<WithDefaultVal>(4, const_cast<char**>(args));
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().port.get(), 8080);
+  EXPECT_EQ(result.value().host.get(), "localhost");
+  EXPECT_EQ(result.value().retries.value().get(), 2);
+
+  const char* no_retries[] = {"app", "--count=1"};
+  const auto defaulted =
+      rfl::cli::read<WithDefaultVal>(2, const_cast<char**>(no_retries));
+  ASSERT_TRUE(defaulted) << defaulted.error().what();
+  EXPECT_EQ(defaulted.value().retries.value().get(), 5);
+}
+
 struct Limits {
   rfl::Description<"Connections per host", rfl::DefaultVal<int>> per_host = 4;
   int total;
@@ -101,11 +148,14 @@ TEST(cli, test_usage_wrapped_default_val) {
             "--limits.total=<value>\n"
             "\n"
             "Arguments:\n"
-            "  -l, --log-level=<debug|info|warn>  Minimum level to log\n"
-            "  --timeout=<value>                  Seconds to wait\n"
-            "  <output>\n"
+            "  -l, --log-level=<debug|info|warn>  Minimum level to log. "
+            "Default: info.\n"
+            "  --timeout=<value>                  Seconds to wait. "
+            "Default: 30.\n"
+            "  <output>                           Default: out.txt.\n"
             "  -n, --runs=<value>                 Number of runs. Required.\n"
-            "  --limits.per-host=<value>          Connections per host\n"
+            "  --limits.per-host=<value>          Connections per host. "
+            "Default: 4.\n"
             "  --limits.total=<value>             Required.\n");
 
   // Everything the help leaves optional can be left out.
@@ -167,7 +217,7 @@ TEST(cli, test_usage_defaults_without_default_construction) {
   // The parser fills in a missing DefaultVal field only after it
   // default-constructed the struct. If that throws (`port`'s zero value
   // fails its validator) or the struct has no default constructor, the
-  // field is required, and the help says so.
+  // field is required, and the help shows it without a default.
   static_assert(!std::is_default_constructible_v<WithPortAndDefaultVal>);
   // With a bare DefaultVal, every read fails, and so does usage: the schema
   // takes the defaults from a default-constructed struct.
@@ -198,7 +248,8 @@ TEST(cli, test_usage_defaults_without_default_construction) {
   EXPECT_FALSE(rfl::cli::read<WithInvalidWrappedDefaultInside>(
       2, const_cast<char**>(nested)));
 
-  // With rfl::DefaultIfMissing nothing is required, even without T{}.
+  // With rfl::DefaultIfMissing nothing is required, but the defaults are
+  // unknown without T{}, so usage() leaves them out.
   static_assert(!std::is_default_constructible_v<WithPort>);
   EXPECT_EQ((rfl::cli::usage<WithPort, rfl::DefaultIfMissing>("app", true).value()),
             "Usage: app [--port=<value>] [--retries=<value>]\n"
@@ -220,6 +271,28 @@ struct WithInitializers {
   std::optional<int> limit;
   Inner database;
 };
+
+TEST(cli, test_usage_default_if_missing) {
+  EXPECT_EQ(
+      (rfl::cli::usage<WithInitializers, rfl::DefaultIfMissing>("app", true).value()),
+      "Usage: app [--count=<value>] [--name=<value>] [--verbose[=<bool>]] "
+      "[--limit=<value>] [--database.host=<value>] [--database.port=<value>]\n"
+      "\n"
+      "Arguments:\n"
+      "  --count=<value>          Default: 3.\n"
+      "  --name=<value>           Default: \"\".\n"
+      "  --verbose[=<bool>]       Default: false.\n"
+      "  --limit=<value>\n"
+      "  --database.host=<value>  Default: db.\n"
+      "  --database.port=<value>  Default: 5432.\n");
+
+  const char* args[] = {"app"};
+  const auto result = rfl::cli::read<WithInitializers, rfl::DefaultIfMissing>(
+      1, const_cast<char**>(args));
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().count, 3);
+  EXPECT_EQ(result.value().database.port, 5432);
+}
 
 TEST(cli, test_usage_without_default_if_missing) {
   EXPECT_EQ(rfl::cli::usage<WithInitializers>("app").value(),
