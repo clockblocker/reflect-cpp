@@ -26,6 +26,17 @@ static constexpr char path_separator = '.';
 /// Example: `--ports=8080,8081,8082` for an array of ports.
 static constexpr char array_delimiter = ',';
 
+namespace internal {
+
+/// The occurrences after the first of the list options given more than
+/// once, by path, in argv order. The argument map holds the first one:
+/// `--ports 80 --ports 81,82` is held as "80" in the argument map and
+/// {"81,82"} here. Each occurrence is split at array_delimiter.
+using CliLaterOccurrencesType =
+    std::map<std::string, std::vector<std::string>>;
+
+}  // namespace internal
+
 /// Represents a CLI variable that can be a direct value or a path in the argument map.
 /// The `path` represents the hierarchical key (e.g., "database.host").
 /// The `direct_value` is used when parsing array elements directly.
@@ -33,6 +44,8 @@ struct CliVarType {
   const std::map<std::string, std::string>* const args = nullptr;
   const std::string path;
   const std::optional<std::string> direct_value;
+  /// The later occurrences of repeated list options, if any.
+  const internal::CliLaterOccurrencesType* const later_occurrences = nullptr;
 };
 
 /// Represents a CLI object with a prefix path for accessing nested fields.
@@ -40,6 +53,8 @@ struct CliVarType {
 struct CliObjectType {
   const std::map<std::string, std::string>* const args = nullptr;
   const std::string prefix;
+  /// The later occurrences of repeated list options, if any.
+  const internal::CliLaterOccurrencesType* const later_occurrences = nullptr;
 };
 
 /// Represents a CLI array containing multiple string values.
@@ -167,7 +182,8 @@ struct Reader {
     const auto child_path = _obj.prefix.empty()
         ? _name
         : _obj.prefix + _name;
-    return InputVarType{_obj.args, child_path, std::nullopt};
+    return InputVarType{_obj.args, child_path, std::nullopt,
+                        _obj.later_occurrences};
   }
 
   /// Checks if a CLI variable is empty (has no value).
@@ -240,7 +256,8 @@ struct Reader {
         const auto child_path = _obj.prefix + child;
         _object_reader.read(
             std::string_view(child),
-            InputVarType{_obj.args, child_path, std::nullopt});
+            InputVarType{_obj.args, child_path, std::nullopt,
+                         _obj.later_occurrences});
       }
       ++it;
     }
@@ -261,6 +278,8 @@ struct Reader {
   }
 
   /// Converts a CLI variable to an array by splitting the value on commas.
+  /// The items of every occurrence of a repeated list option are added in
+  /// order (see internal::CliLaterOccurrencesType).
   /// @param _var The CLI variable containing a comma-delimited string
   /// @return A Result containing a CliArrayType with the split values
   rfl::Result<InputArrayType> to_array(
@@ -269,7 +288,7 @@ struct Reader {
     if (!str) {
       return InputArrayType{{}};
     }
-    return InputArrayType{split(*str, array_delimiter)};
+    return InputArrayType{split_items(*str, _var)};
   }
 
   /// Converts a CLI variable to an object for reading nested fields.
@@ -287,7 +306,7 @@ struct Reader {
     const auto prefix = _var.path.empty()
         ? std::string("")
         : _var.path + path_separator;
-    return InputObjectType{_var.args, prefix};
+    return InputObjectType{_var.args, prefix, _var.later_occurrences};
   }
 
   /// Custom constructors are not supported for CLI parsing.
@@ -316,6 +335,33 @@ struct Reader {
       return std::nullopt;
     }
     return it->second;
+  }
+
+  /// Splits a list into its items: those of _first, the occurrence that
+  /// get_value returns for _var, then those of its later occurrences.
+  static std::vector<std::string> split_items(const std::string& _first,
+                                              const InputVarType& _var) {
+    std::vector<std::string> items;
+    add_items(_first, &items);
+    if (_var.direct_value || !_var.later_occurrences) {
+      return items;
+    }
+    const auto it = _var.later_occurrences->find(_var.path);
+    if (it != _var.later_occurrences->end()) {
+      for (const auto& occurrence : it->second) {
+        add_items(occurrence, &items);
+      }
+    }
+    return items;
+  }
+
+  /// Adds the items of one occurrence of a list, split at array_delimiter,
+  /// to _items.
+  static void add_items(const std::string& _occurrence,
+                        std::vector<std::string>* _items) {
+    for (auto& item : split(_occurrence, array_delimiter)) {
+      _items->emplace_back(std::move(item));
+    }
   }
 
   static std::vector<std::string> split(

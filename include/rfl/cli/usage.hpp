@@ -53,7 +53,7 @@ struct UsageArg {
   /// What the option does with a value, from the parser's option table:
   /// flags (`--verbose`) can be given without one.
   OptionKind kind = OptionKind::value;
-  /// Whether the field is a list.
+  /// Whether the field is a list, which can be repeated.
   bool is_list = false;
   bool required = true;
   /// Whether `required` was taken from the parser's compile-time traits, so
@@ -92,8 +92,8 @@ void add_usage_field_meta(const bool _default_vals_are_optional,
 
 /// Collects whether each top-level field is required from the same
 /// compile-time traits that the parser uses, so the help matches what the
-/// parser accepts. Positional, Short and flags come from the parser's option
-/// table (make_options).
+/// parser accepts. Positional, Short, flags and lists come from the parser's
+/// option table (make_options).
 template <class NamedTupleType, class ProcessorsType, size_t... _is>
 std::map<std::string, UsageFieldMeta> collect_usage_field_meta(
     const bool _default_vals_are_optional, std::index_sequence<_is...>) {
@@ -401,13 +401,9 @@ class UsageCollector {
         }
         add_choices(values, std::move(_arg), _default);
 
-      } else if constexpr (std::is_same_v<T, Type::TypedArray>
-                           || std::is_same_v<T, Type::FixedSizeTypedArray>
-                           || std::is_same_v<T, Type::Tuple>) {
-        _arg.is_list = true;
-        add_leaf(std::move(_arg), _default);
-
       } else {
+        // Lists, too: whether a field is a list comes from the option table
+        // (add_leaf), which is what the parser uses.
         add_leaf(std::move(_arg), _default);
       }
     });
@@ -467,6 +463,7 @@ class UsageCollector {
     // key ("labels.<key>") is found through its open prefix.
     const auto option = options_->find_long(_arg.name);
     _arg.kind = option.kind;
+    _arg.is_list = option.is_list;
     if (_default) {
       _arg.default_value = usage_default_to_string(*_default);
     }
@@ -565,6 +562,9 @@ inline std::string usage_help_text(const UsageArg& _arg) {
                    _arg.constraints.end());
   if (_arg.default_value) {
     sentences.push_back("Default: " + *_arg.default_value);
+  }
+  if (_arg.is_list && !_arg.positional) {
+    sentences.push_back("Can be repeated");
   }
   if (_arg.required) {
     sentences.push_back("Required");
