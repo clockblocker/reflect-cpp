@@ -10,5 +10,6 @@
 #include "cli/read.hpp"
 #include "cli/resolve_args.hpp"
 #include "cli/usage.hpp"
+#include "cli/App.hpp"
 
 #endif

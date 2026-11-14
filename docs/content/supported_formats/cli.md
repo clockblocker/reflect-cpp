@@ -415,28 +415,84 @@ positional argument. The usage line lists the positional arguments in the
 order in which the parser fills them, and leaves out a short alias that the
 parser does not give a field because another field has it.
 
-`read` does not handle `--help`. Check for it before calling `read`, and
-print the usage line when parsing fails:
+## Help and version
+
+`--help` and `--version` are off by default: `rfl::cli::read` treats them
+as it treats any option that matches no field. To turn them on, pass the
+setting `rfl::cli::App<"name", "version", "description">` (each part is
+optional) and call `rfl::cli::read_app` instead of `read`. It returns either
+the struct or an `rfl::cli::HelpOrVersion` with the text to print:
 
 ```cpp
+using CopyApp = rfl::cli::App<"copy", "1.2.0", "Copies a file.">;
+
+struct Copy {
+  rfl::Positional<rfl::Description<"File to copy", std::string>> source;
+  rfl::Short<"o", rfl::Description<"Where to copy it", std::string>> output;
+  rfl::Short<"v", std::optional<bool>> verbose;
+  rfl::Short<"j", rfl::DefaultVal<int>> jobs = 1;
+};
+
 int main(int argc, char* argv[]) {
-  if (std::any_of(argv + 1, argv + argc, [](std::string_view _arg) {
-        return _arg == "--help" || _arg == "-h";
-      })) {
-    std::cout << rfl::cli::usage<Config>(argv[0], true);
+  const auto result = rfl::cli::read_app<Copy, CopyApp>(argc, argv);
+  if (!result) {
+    std::cerr << result.error().what() << "\n\n"
+              << rfl::cli::usage<Copy, CopyApp>(argv[0]);
+    return 2;
+  }
+  if (const auto* info = std::get_if<rfl::cli::HelpOrVersion>(&*result)) {
+    std::cout << info->text;  // info->kind is help or version
     return 0;
   }
-  const auto config = rfl::cli::read<Config>(argc, argv);
-  if (!config) {
-    std::cerr << config.error().what() << "\n\n"
-              << rfl::cli::usage<Config>(argv[0]);
-    return 1;
-  }
+  const Copy& copy = std::get<Copy>(*result);
   // ...
 }
 ```
 
-(Leave out `-h` if one of your fields uses `rfl::Short<"h", ...>`.)
+`./copy --help` prints the detailed usage, with a header from the setting
+and rows for the two options:
+
+```
+copy 1.2.0
+Copies a file.
+
+Usage: ./copy [-h|--help] [--version] <source> -o|--output=<value> [-v|--verbose[=<bool>]] [-j|--jobs=<value>]
+
+Arguments:
+  -h, --help              Show this help
+  --version               Show the version
+  <source>                File to copy. Required.
+  -o, --output=<value>    Where to copy it. Required.
+  -v, --verbose[=<bool>]
+  -j, --jobs=<value>      Default: 1.
+```
+
+and `./copy --version` prints `copy 1.2.0`.
+
+- The help is returned before the struct is read, so it works when required
+  fields are missing or other values are invalid. A token before it that
+  cannot be split into options at all, such as `-o` without its value, is
+  still an error. If both are given, the help wins.
+- `-h`, `--help` and `--version` are flags in the same option table as the
+  fields, so `-vh` works and `--` ends them. `--help=false` does not ask
+  for the help.
+- **A field takes precedence.** If a field has `rfl::Short<"h", ...>`, `-h`
+  is that field's and the help is `--help` only. That includes an
+  `rfl::Short` inside other wrappers, unless another field has the same
+  short name, in which case the parser gives `-h` to neither field (see
+  [Combining wrappers](#combining-wrappers)) and it stays the help. A field
+  named `help` turns the built-in help off and is read like any other
+  field, so you can define your own. A field named `version` turns
+  `--version` off.
+- An empty version leaves out `--version`. An empty name is replaced by the
+  program name (`argv[0]`).
+- Pass the same settings to `usage` as to `read_app`: `usage` shows the
+  header (in the detailed form only) and the rows of the options that
+  `read_app` handles.
+- `read_app` takes `argc` and `argv` (narrow or wide, const or not), since
+  the help and the version show the program name. `rfl::cli::read<T,
+  rfl::cli::App<...>>` does not compile, in any of its forms: its result has
+  no room for a help request. Other formats ignore the setting.
 
 ## Supported types
 
@@ -476,7 +532,8 @@ Parsing proceeds in three stages:
 
 ## Files
 
-- `include/rfl/cli/read.hpp` — public API
+- `include/rfl/cli/read.hpp` — public API: `read` and `read_app`
+- `include/rfl/cli/App.hpp` — `App<"name", "version", "description">` setting for `--help` and `--version`
 - `include/rfl/cli/Reader.hpp` — Reader + `parse_value` overloads
 - `include/rfl/cli/Parser.hpp` — Parser type alias
 - `include/rfl/cli/parse_argv.hpp` — `argv` -> `ParsedArgs`
