@@ -163,4 +163,44 @@ TEST(cli, test_usage_short_name_taken) {
   EXPECT_EQ(result.value().log.value().value(), "l");
 }
 
+TEST(cli, test_usage_list_delimiter) {
+  using Semicolon = rfl::cli::ListDelimiter<";">;
+  EXPECT_EQ((rfl::cli::usage<Lists, Semicolon>("app", true)),
+            "Usage: app -r|--report=<v1;v2;...> [--tags=<v1;v2;...>] "
+            "<command> <files>...\n"
+            "\n"
+            "Arguments:\n"
+            "  -r, --report=<v1;v2;...>  Reports to write. Can be repeated. "
+            "Required.\n"
+            "  --tags=<v1;v2;...>        Default: a;b. Can be repeated.\n"
+            "  <command>                 Required.\n"
+            "  <files>...                Files to process. Required.\n");
+  const auto semicolon =
+      read<Lists, Semicolon>({"-r", "a;b,c", "run", "x;y", "--tags=t;u"});
+  ASSERT_TRUE(semicolon) << semicolon.error().what();
+  EXPECT_EQ(semicolon.value().report.value().value(),
+            (Strings{"a", "b,c"}));
+  EXPECT_EQ(semicolon.value().tags.value(), (Strings{"t", "u"}));
+  EXPECT_EQ(semicolon.value().files.value().value(), (Strings{"x", "y"}));
+
+  // Not split: every occurrence is one item, so a list takes one value per
+  // occurrence.
+  using NoSplit = rfl::cli::ListDelimiter<"">;
+  EXPECT_EQ((rfl::cli::usage<Lists, NoSplit>("app", true)),
+            "Usage: app -r|--report=<value> [--tags=<value>] "
+            "<command> <files>...\n"
+            "\n"
+            "Arguments:\n"
+            "  -r, --report=<value>  Reports to write. Can be repeated. "
+            "Required.\n"
+            "  --tags=<value>        Default: a, b. Can be repeated.\n"
+            "  <command>             Required.\n"
+            "  <files>...            Files to process. Required.\n");
+  const auto no_split =
+      read<Lists, NoSplit>({"-r", "a,b", "-r", "c", "run", "x,y", "z"});
+  ASSERT_TRUE(no_split) << no_split.error().what();
+  EXPECT_EQ(no_split.value().report.value().value(), (Strings{"a,b", "c"}));
+  EXPECT_EQ(no_split.value().files.value().value(), (Strings{"x,y", "z"}));
+}
+
 }  // namespace test_usage_options

@@ -12,6 +12,7 @@
 #include "../SnakeCaseToKebabCase.hpp"
 #include "../internal/strings/utf8_conversions.hpp"
 #include "App.hpp"
+#include "ListDelimiter.hpp"
 #include "Parser.hpp"
 #include "Reader.hpp"
 #include "options.hpp"
@@ -23,12 +24,14 @@ namespace rfl::cli {
 
 namespace internal {
 
+static_assert(list_delimiter_v<Processors<>> == array_delimiter);
+
 /// Resolves the parsed arguments and reads them into T.
 template <class T, class ProcessorsType>
 rfl::Result<T> read_parsed(ParsedArgs _parsed, const Options& _options) {
   return resolve_args(std::move(_parsed), _options)
       .and_then([](auto _args) -> rfl::Result<T> {
-        const auto r = Reader();
+        const auto r = Reader(internal::list_delimiter_v<ProcessorsType>);
         const auto var = CliVarType{&_args.values, "", std::nullopt,
                                     &_args.later_occurrences};
         return Parser<T, ProcessorsType>::read(r, var);
