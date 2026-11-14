@@ -90,7 +90,7 @@ TEST(cli, test_help_version_usage) {
 TEST(cli, test_help_version_help) {
   // The required fields are missing, but the help is shown.
   for (const auto& args : std::vector<std::vector<const char*>>{
-           {"--help"}, {"-h"}, {"-vh"}, {"in.txt", "-h"},
+           {"--help"}, {"-h"}, {"--hel"}, {"-vh"}, {"in.txt", "-h"},
            {"--version", "--help"}, {"--help=true"}, {"-h", "--jobs=x"}}) {
     const auto result = read_app<Copy, CopyApp>(args);
     EXPECT_EQ(kind_of(result), Kind::help) << args.front();
@@ -100,7 +100,7 @@ TEST(cli, test_help_version_help) {
 
 TEST(cli, test_help_version_version) {
   for (const auto& args : std::vector<std::vector<const char*>>{
-           {"--version"}, {"in.txt", "--version", "-v"}}) {
+           {"--version"}, {"--vers"}, {"in.txt", "--version", "-v"}}) {
     const auto result = read_app<Copy, CopyApp>(args);
     EXPECT_EQ(kind_of(result), Kind::version) << args.front();
     EXPECT_EQ(text_of(result), "copy 1.2.0\n") << args.front();
@@ -133,6 +133,10 @@ TEST(cli, test_help_version_errors) {
   // An earlier token that fails to parse is an error.
   EXPECT_EQ(text_of(read_app<Copy, CopyApp>({"-o", "--help"})),
             "error: Missing value for option '-o'.");
+  // `--help` and `--verbose` share a prefix with `--version`.
+  EXPECT_EQ(text_of(read_app<Copy, CopyApp>({"--ver"})),
+            "error: Option '--ver' is ambiguous; possibilities: '--verbose', "
+            "'--version'.");
   // After `--`, everything is positional.
   EXPECT_EQ(text_of(read_app<Copy, CopyApp>({"-o", "x", "--", "--help"})),
             "(struct)");

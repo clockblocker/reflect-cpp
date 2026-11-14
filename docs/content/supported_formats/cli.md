@@ -474,8 +474,8 @@ and `./copy --version` prints `copy 1.2.0`.
   cannot be split into options at all, such as `-o` without its value, is
   still an error. If both are given, the help wins.
 - `-h`, `--help` and `--version` are flags in the same option table as the
-  fields, so `-vh` works and `--` ends them. `--help=false` does not ask
-  for the help.
+  fields, so `--hel` and `-vh` work, `--ver` is ambiguous if there is also a
+  `--verbose`, and `--` ends them. `--help=false` does not ask for the help.
 - **A field takes precedence.** If a field has `rfl::Short<"h", ...>`, `-h`
   is that field's and the help is `--help` only. That includes an
   `rfl::Short` inside other wrappers, unless another field has the same
