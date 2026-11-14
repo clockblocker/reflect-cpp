@@ -363,13 +363,50 @@ struct Config {
 
 - A plain list needs at least one argument. With `std::optional` or
   `rfl::DefaultVal`, no arguments give `std::nullopt` or the default.
-- Options can still come anywhere (`./app run a --verbose b`).
+- Options can still come anywhere (`./app run a --verbose b`), unless the
+  struct is read with `rfl::cli::OptionsFirst` (below).
 - The long form works as for any list: `--files=a,b`, or
   `--files=a --files=b`. It cannot be mixed with bare arguments:
   `Conflict: positional argument and '--files' both provided.`
 - Only the last positional field takes the remaining arguments. A list
   before other positional fields, such as `std::vector`, `std::set`, a
   pair or a `std::array`, takes one argument, split at the commas.
+
+### Options first
+
+`rfl::cli::OptionsFirst` ends the options at the first positional argument,
+as in getopt's `+` mode. Every later token is a positional argument, taken
+as it is, even `--x`, `-x`, `--` and unknown options. A list as the last
+positional field gets the rest of the command line unchanged, whatever the
+list delimiter: each argument is one item, never split at the commas, and
+empty ones are kept. That way it can be passed on to another program:
+
+```cpp
+struct Recipe {
+  rfl::Short<"v", std::optional<bool>> verbose;
+  rfl::Positional<std::string> name;
+  rfl::Positional<rfl::DefaultVal<std::vector<std::string>>> args;
+};
+
+const auto result = rfl::cli::read<Recipe, rfl::cli::OptionsFirst>(argc, argv);
+
+// ./recipe -v build --jobs 4 -v -- a,b ""
+//   ->  verbose = true, name = "build",
+//       args = {"--jobs", "4", "-v", "--", "a,b", ""}
+```
+
+The long form, `--args=a,b` before the name, is an option, and is split as
+usual.
+
+- Before the first positional argument, options work as usual, and `--`
+  ends them and is dropped (`./recipe -- -v` makes `-v` the name).
+- After it, `--` is an argument like any other, as in getopt's `+` mode.
+- A token such as `-5` that is read as a positional argument (see
+  [grouped short options](#grouped-short-options)) also ends the options.
+- `rfl::NoExtraFields` rejects unknown options before the first
+  positional argument.
+- Without `OptionsFirst`, options and positional arguments can be mixed.
+  Other formats ignore the setting.
 
 ## Combining wrappers
 
@@ -496,6 +533,22 @@ default is joined with `;`. With `rfl::cli::ListDelimiter<"">`, it is
 `--tags=<value>`, and its default is left out, because one value cannot
 spell several items.
 
+With `rfl::cli::OptionsFirst`, the options end at the first positional
+argument, so the usage line lists every option before the positional
+arguments. The rows of the detailed form keep the declaration order:
+
+```cpp
+struct Recipe {
+  rfl::Short<"v", std::optional<bool>> verbose;
+  rfl::Positional<std::string> name;
+  rfl::Positional<rfl::DefaultVal<std::vector<std::string>>> args;
+  rfl::Short<"j", std::optional<int>> jobs;
+};
+
+rfl::cli::usage<Recipe, rfl::cli::OptionsFirst>("recipe");
+// Usage: recipe [-v|--verbose[=<bool>]] [-j|--jobs=<value>] <name> [<args>...]
+```
+
 `rfl::Positional` and `rfl::Short` are found through the other wrappers, as
 the parser does (see [Combining wrappers](#combining-wrappers)), so
 `rfl::Description<"...", rfl::Positional<std::string>>` is listed as a
@@ -560,6 +613,7 @@ Parsing proceeds in three stages:
 - `include/rfl/cli/options.hpp` — the internal option table: the long, short and positional options of a struct
 - `include/rfl/cli/AllowAbbreviations.hpp` — `AllowAbbreviations` processor
 - `include/rfl/cli/ListDelimiter.hpp` — `ListDelimiter<"x">` processor
+- `include/rfl/cli/OptionsFirst.hpp` — `OptionsFirst` processor
 - `include/rfl/cli/resolve_args.hpp` — `ParsedArgs` -> `map<string, string>`
 - `include/rfl/cli/usage.hpp` — `usage()` help text, built on `rfl::parsing::schema` and the internal option table
 - `include/rfl/cli.hpp` — aggregator header
