@@ -4,6 +4,7 @@
 #include "../rfl.hpp"
 #include "cli/Parser.hpp"
 #include "cli/Reader.hpp"
+#include "cli/SeparateOptionValues.hpp"
 #include "cli/options.hpp"
 #include "cli/parse_argv.hpp"
 #include "cli/read.hpp"

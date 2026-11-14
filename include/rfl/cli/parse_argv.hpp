@@ -37,17 +37,20 @@ namespace internal {
 
 /// Parses command-line arguments into categorized buckets.
 /// Handles three types of arguments:
-/// - Long options: --key=value or --flag (stored in `named`)
+/// - Long options: --key=value, --key value (with
+///   `_options.separate_values`) or --flag (stored in `named`)
 /// - Short options: -x value, -x=value, or -x (stored in `short_args`)
 /// - Positional arguments: bare arguments not prefixed with dashes (stored in `positional`)
 /// The special argument "--" forces all subsequent arguments to be treated as positional.
-/// `_options` says what each short option does with the token that follows
-/// it when it is given without '='. One that takes a value consumes it, and
-/// fails if there is none. A bool flag consumes it only if it is "true",
-/// "false", "1" or "0". Short options missing from `_options` consume it
-/// unless it looks like an option, as they do without `_options`. Long
-/// options never consume it. With `_options.reject_unknown`, a long option
-/// that matches no field is an error.
+/// `_options` says what each option does with the token that follows it
+/// when it is given without '='. A short option that takes a value consumes
+/// it, and fails if there is none; so does a long one with
+/// `_options.separate_values` (rfl::cli::SeparateOptionValues). A long
+/// boolean flag never consumes it; a short one consumes it only if it is
+/// "true", "false", "1" or "0". Other long options never consume it. Short options missing from `_options`
+/// consume it unless it looks like an option, as they do without
+/// `_options`. With `_options.reject_unknown`, a long option that matches
+/// no field is an error.
 /// A token that looks like a negative number (-5, -.5) is a positional
 /// argument unless `_options.negative_numbers_are_options` is set, as it is
 /// without `_options` and when the struct has a short option whose name
@@ -56,7 +59,7 @@ namespace internal {
 /// @param _args The command-line arguments to parse
 /// @param _options The options of the target struct (see make_options)
 /// @return A Result containing ParsedArgs with categorized arguments or an error
-/// --key=value / --flag → named
+/// --key=value / --key value (with separate_values) / --flag → named
 /// -x value / -x=value / -x → short_args
 /// bare arguments → positional
 /// -- → everything after goes to positional
@@ -75,8 +78,8 @@ inline rfl::Result<ParsedArgs> parse_string_views(
     return true;
   };
 
-  // The value of the short option _args[*_i], given without '=', taking the
-  // next token if the option says so.
+  // The value of the option _args[*_i], given without '=', taking the next
+  // token if the option says so.
   const auto take_value = [&](const Option& _option, std::string_view _raw,
                               size_t* _i) -> rfl::Result<std::string> {
     const bool has_next = *_i + 1 < _args.size();
@@ -125,7 +128,7 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       continue;
     }
 
-    // Long argument: --key=value or --flag.
+    // Long argument: --key=value, --key value or --flag.
     if (arg_raw.starts_with("--")) {
       const auto arg = arg_raw.substr(2);
       const auto eq = arg.find('=');
@@ -136,9 +139,17 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       if (key.empty()) {
         return error("Empty key in argument: " + std::string(arg_raw));
       }
-      if (_options.reject_unknown
-          && _options.find_long(key).kind == OptionKind::unknown) {
+      const auto option = _options.find_long(key);
+      if (option.kind == OptionKind::unknown && _options.reject_unknown) {
         return error("Unknown option '--" + key + "'.");
+      }
+      if (eq == std::string_view::npos && option.kind == OptionKind::value
+          && _options.separate_values) {
+        // --key value (rfl::cli::SeparateOptionValues). A flag never takes
+        // the next token: `--verbose 0` leaves "0" positional.
+        auto v = take_value(option, arg_raw, &i);
+        if (!v) { return error(v.error().what()); }
+        val = std::move(*v);
       }
       if (!result.named.emplace(std::move(key), std::move(val)).second) {
         return error("Duplicate argument: " + std::string(arg_raw));
