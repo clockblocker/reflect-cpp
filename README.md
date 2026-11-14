@@ -373,6 +373,15 @@ struct Config {
 // ./app data.csv -o /tmp/out -v --count=10
 ```
 
+`rfl::cli::usage` generates the help text from the same struct, for instance for `--help`:
+
+```cpp
+if (argc > 1 && std::string_view(argv[1]) == "--help") {
+  std::cout << rfl::cli::usage<Config>(argv[0], true).value();
+  // Usage: ./app <input-file> -o|--output-dir=<value> -v|--verbose[=<bool>] --count=<value>
+}
+```
+
 Nested structs, `std::optional`, `std::vector`, enums, `rfl::Flatten` and `rfl::Rename` are all supported. Refer to the [documentation](https://munich-data-engineering.github.io/reflect-cpp/cli) for details.
 
 ### Error messages

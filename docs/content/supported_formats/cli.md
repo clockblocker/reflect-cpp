@@ -195,6 +195,80 @@ struct Config {
 // ./app data.csv -o /tmp/out -v --count=10
 ```
 
+## Usage / help
+
+`rfl::cli::usage<T, Ps...>(program_name, detailed = false)` generates the
+help text from the same struct, and with the same processors, as
+`rfl::cli::read<T, Ps...>()`. So the names always match what the parser
+accepts, including kebab-case, `rfl::Rename`, `rfl::Flatten` and nested paths.
+It returns an `rfl::Result<std::string>`.
+
+```cpp
+enum class LogLevel { debug, info, warn };
+
+struct Database {
+  std::string host;
+  int port;
+};
+
+struct Config {
+  rfl::Positional<rfl::Description<"Path to the input file", std::string>>
+      input_file;
+  rfl::Short<"p", rfl::Description<"Port to listen on", int>> port;
+  rfl::Description<"Minimum level to log", std::optional<LogLevel>> log_level;
+  rfl::Description<"Tags to attach", std::vector<std::string>> tags;
+  Database database;
+};
+```
+
+`rfl::cli::usage<Config>("app", true).value()` is the usage line, where
+optional arguments are in brackets, and one line per argument, with its
+description and whether it is required. `rfl::cli::usage<Config>("app")`
+gives only the usage line.
+
+```
+Usage: app <input-file> -p|--port=<value> [--log-level=<debug|info|warn>] --tags=<v1,v2,...> --database.host=<value> --database.port=<value>
+
+Arguments:
+  <input-file>                   Path to the input file. Required.
+  -p, --port=<value>             Port to listen on. Required.
+  --log-level=<debug|info|warn>  Minimum level to log
+  --tags=<v1,v2,...>             Tags to attach. Required.
+  --database.host=<value>        Required.
+  --database.port=<value>        Required.
+```
+
+Fields wrapped in `rfl::DefaultVal` are optional, and so are all fields if you
+pass `rfl::DefaultIfMissing` (to both `read` and `usage`). The parser takes
+the defaults of `rfl::DefaultVal` fields from a default-constructed struct. If
+a struct with `rfl::DefaultVal` cannot be default-constructed (for instance
+because a validator rejects another field's default value), it cannot be read,
+and `usage` returns the error, as it does for two fields with the same short
+name.
+
+Each argument is shown as the option table that `read` parses with (see
+[Architecture](#architecture)) reads it: a `bool`, also inside a nested
+struct, is a flag whose value can be left out (`--verbose[=<bool>]`), and
+every other option takes a value (`--port=<value>`).
+
+`rfl::Positional` and `rfl::Short` are found through the other wrappers, as
+the parser does (see [Combining wrappers](#combining-wrappers)), so
+`rfl::Description<"...", rfl::Positional<std::string>>` is listed as a
+positional argument.
+
+`read` does not handle `--help`: check `argv` for it and print `usage`
+yourself:
+
+```cpp
+int main(int argc, char* argv[]) {
+  if (argc > 1 && std::string_view(argv[1]) == "--help") {
+    std::cout << rfl::cli::usage<Config>(argv[0], true).value();
+    return 0;
+  }
+  const auto config = rfl::cli::read<Config>(argc, argv).value();
+}
+```
+
 ## Supported types
 
 | Type | CLI format | Notes |
@@ -239,6 +313,7 @@ Parsing proceeds in three stages:
 - `include/rfl/cli/parse_argv.hpp` — `argv` -> `ParsedArgs`
 - `include/rfl/cli/options.hpp` — the internal option table: the long, short and positional options of a struct
 - `include/rfl/cli/resolve_args.hpp` — `ParsedArgs` -> `map<string, string>`
+- `include/rfl/cli/usage.hpp` — `usage()` help text, built on `rfl::parsing::schema` and the internal option table
 - `include/rfl/cli.hpp` — aggregator header
 - `include/rfl/SnakeCaseToKebabCase.hpp` — processor
 - `include/rfl/Positional.hpp` — `Positional<T>` wrapper
