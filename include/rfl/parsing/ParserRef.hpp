@@ -43,7 +43,7 @@ struct ParserRef {
     if constexpr (atomic::is_atomic_v<T>) {
       using RemoveAtomicT = atomic::remove_atomic_t<T>;
 
-      static_assert(!internal::has_default_val_v<RemoveAtomicT>,
+      static_assert(!internal::has_unwrapped_default_val_v<RemoveAtomicT>,
                     "Atomic types cannot be mixed with rfl::DefaultVal");
       static_assert(!internal::default_if_missing_v<ProcessorsType>,
                     "Atomic types cannot be mixed with rfl::DefaultIfMissing");
