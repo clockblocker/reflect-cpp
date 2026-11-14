@@ -52,8 +52,12 @@ struct UsageArg {
   std::string short_name;
   bool positional = false;
   /// What the option does with a value, from the parser's option table:
-  /// flags (`--verbose`) can be given without one.
+  /// flags (`--verbose`) and rfl::ImplicitValue (`--help`) can be given
+  /// without one.
   OptionKind kind = OptionKind::value;
+  /// For OptionKind::implicit_value: what the option stands for without a
+  /// value.
+  std::string implicit_value;
   /// Whether the field is a list, which can be repeated.
   bool is_list = false;
   /// Whether the field is the last positional one and a list, so that it
@@ -99,8 +103,8 @@ void add_usage_field_meta(const bool _default_vals_are_optional,
 
 /// Collects whether each top-level field is required from the same
 /// compile-time traits that the parser uses, so the help matches what the
-/// parser accepts. Positional, Short, flags and lists come from the parser's
-/// option table (make_options).
+/// parser accepts. Positional, Short, flags, implicit values and lists come
+/// from the parser's option table (make_options).
 template <class NamedTupleType, class ProcessorsType, size_t... _is>
 std::map<std::string, UsageFieldMeta> collect_usage_field_meta(
     const bool _default_vals_are_optional, std::index_sequence<_is...>) {
@@ -470,6 +474,7 @@ class UsageCollector {
     // key ("labels.<key>") is found through its open prefix.
     const auto option = options_->find_long(_arg.name);
     _arg.kind = option.kind;
+    _arg.implicit_value = option.implicit_value;
     _arg.is_list = option.is_list;
     if (_default) {
       _arg.default_value = usage_default_to_string(*_default);
@@ -526,7 +531,8 @@ inline std::string usage_value_to_string(const UsageArg& _arg) {
   return "<v1" + d + "v2" + d + "...>";
 }
 
-/// "<input-file>", "<files>...", "-p|--port=<value>", "--verbose[=<bool>]"
+/// "<input-file>", "<files>...", "-p|--port=<value>", "--verbose[=<bool>]",
+/// "--help[=<value>]"
 inline std::string usage_arg_to_string(const UsageArg& _arg,
                                        const std::string& _short_sep) {
   if (_arg.positional) {
@@ -543,7 +549,8 @@ inline std::string usage_arg_to_string(const UsageArg& _arg,
   const auto value = usage_value_to_string(_arg);
   switch (_arg.kind) {
     case OptionKind::flag:
-      // `--verbose`: the value can be left out.
+    case OptionKind::implicit_value:
+      // `--verbose`, `--help`: the value can be left out.
       str += "[=" + value + "]";
       break;
     default:
@@ -575,6 +582,10 @@ inline std::string usage_help_text(const UsageArg& _arg) {
   }
   sentences.insert(sentences.end(), _arg.constraints.begin(),
                    _arg.constraints.end());
+  if (_arg.kind == OptionKind::implicit_value && !_arg.positional
+      && !_arg.implicit_value.empty()) {
+    sentences.push_back("Without a value: " + _arg.implicit_value);
+  }
   if (_arg.default_value) {
     sentences.push_back("Default: " + *_arg.default_value);
   }

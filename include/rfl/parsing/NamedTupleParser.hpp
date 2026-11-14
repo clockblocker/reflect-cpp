@@ -309,9 +309,9 @@ struct NamedTupleParser {
     }
   };
 
-  /// Sets the default value of the DefaultVal node in `_schema`. Rename, Short
-  /// and Positional leave no node in the schema, but Description and
-  /// Deprecated wrap the DefaultVal node in one of their own.
+  /// Sets the default value of the DefaultVal node in `_schema`. Rename,
+  /// Short, Positional and ImplicitValue leave no node in the schema, but
+  /// Description and Deprecated wrap the DefaultVal node in one of their own.
   static void set_default_value(Generic _default, schema::Type* _schema) {
     _schema->variant_.visit([&](auto& _s) {
       using S = std::remove_cvref_t<decltype(_s)>;

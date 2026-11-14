@@ -85,7 +85,8 @@ as `rfl::Short`, `rfl::Description` or `rfl::DefaultVal`. The next token is
 the value unless it looks like an option (`-` followed by anything except a
 digit or `.`), so `--offset -5` works. If the value is missing, parsing
 fails with `Missing value for option '--sql'.` Use `=` to pass an empty
-value or one that starts with `-`: `--sql=`, `--pattern=-x`.
+value or one that starts with `-`: `--sql=`, `--pattern=-x`. For an option
+whose value may be left out, use `rfl::ImplicitValue` (below).
 
 Boolean fields (`bool`, `std::optional<bool>` and wrapped bools) are flags
 and never consume the next token: `--verbose input.txt` sets `verbose` and
@@ -96,6 +97,34 @@ its long option never takes the next token either: pass its value with `=`.
 
 The public `rfl::cli::parse_argv` does not know the struct, so it reads
 `--sql SELECT` as `--sql` followed by a positional argument.
+
+## Implicit values
+
+Wrap a field with `rfl::ImplicitValue<T, "text">` to let its option be given
+without a value, like Boost's `implicit_value`:
+
+```cpp
+struct Config {
+  rfl::Short<"h", rfl::ImplicitValue<std::optional<std::string>>> help;
+  rfl::ImplicitValue<std::optional<std::string>, "all"> help_reports;
+  rfl::ImplicitValue<rfl::DefaultVal<int>, "2"> verbosity = 0;
+  rfl::Positional<std::optional<std::string>> input;
+};
+
+// ./app --help-reports            ->  help_reports = "all"
+// ./app --help-reports=memory     ->  help_reports = "memory"
+// ./app --help-reports in.txt     ->  help_reports = "all", input = "in.txt"
+// ./app -h  /  -h=tag  /  -htag   ->  help = ""  /  "tag"  /  "tag"
+// ./app --verbosity               ->  verbosity = 2
+```
+
+A bare option stands for the text, which is parsed like any other value
+(the default text is empty). A value can only be given after `=` or attached
+to a short option (`-htag`): the next token is never taken. If the option is
+absent, the field is read as usual: `std::optional` gives `std::nullopt`,
+`rfl::DefaultVal` its default, and any other field is required. Other formats
+read and write `rfl::ImplicitValue` as its inner type, as they do
+`rfl::Short`.
 
 ## Unknown options
 
@@ -115,9 +144,10 @@ Unknown short options are always an error.
 A long option can be shortened to a prefix that matches only one option:
 with fields `report` and `format`, `--rep=a`, `--rep a` and `--form` stand
 for `--report=a`, `--report a` and `--format`. This works for flags,
-positional fields given by name and nested fields, where only the last part
-of the dotted name is shortened: `--database.h` stands for
-`--database.host`, but `--data` and `--database.` stand for nothing.
+`rfl::ImplicitValue` options, positional fields given by name and nested
+fields, where only the last part of the dotted name is shortened:
+`--database.h` stands for `--database.host`, but `--data` and `--database.`
+stand for nothing.
 
 - An exact name always wins: `--format` is `--format` even when
   `--format-version` exists.
@@ -217,17 +247,21 @@ struct Config {
   rfl::Short<"q", std::optional<bool>> quiet;
   rfl::Short<"v", std::optional<bool>> verbose;
   rfl::Short<"f", std::optional<std::string>> format;
+  rfl::Short<"h", rfl::ImplicitValue<std::optional<std::string>>> help;
 };
 
 // ./app -qv -fcsv     ->  quiet, verbose, format = "csv"
 // ./app -qvfcsv       ->  the same
 // ./app -qf csv       ->  quiet, format = "csv"
+// ./app -qh  /  -htag ->  quiet, help = ""  /  help = "tag"
 ```
 
 Flags are set up to the first option that takes a value. That option takes
-the rest of the token, or the next token if nothing is left. The last
-option in a token treats the next token as it would alone (`-qv false` sets
-`verbose` to `false`).
+the rest of the token, or the next token if nothing is left. An
+`rfl::ImplicitValue` option takes the rest of the token if there is any and
+its implicit value otherwise, never the next token. The last option in a
+token treats the next token as it would alone (`-qv false` sets `verbose`
+to `false`).
 
 - `-f=csv` and `-qf=csv` give `csv`: the `=` is not part of the value.
 - A flag inside a group takes no value: `-vq=false` is an error.
@@ -263,6 +297,9 @@ struct Config {
 - Repeating is the same as joining with a comma, so the size of a
   `std::array` and validators such as `rfl::Size` see all items. An empty
   occurrence (`--report=`) adds none.
+- A bare occurrence of an `rfl::ImplicitValue` list adds its implicit value:
+  with `rfl::ImplicitValue<std::optional<std::vector<std::string>>, "all">`,
+  `--help-reports --help-reports=cpu` gives `{"all", "cpu"}`.
 - Nested lists (`--database.replicas a --database.replicas b`) and map
   entries whose values are lists (`--groups.x a --groups.x b`) work the
   same way.
@@ -301,9 +338,9 @@ struct Config {
 
 ## Combining wrappers
 
-`Short` and `Positional` can be nested with each other and with
-`DefaultVal`, `std::optional`, `Description`, `Rename` and `Deprecated` in
-any order: `rfl::Description<"...", rfl::Short<"o", T>>` is `-o`, and
+`Short`, `Positional` and `ImplicitValue` can be nested with each other and
+with `DefaultVal`, `std::optional`, `Description`, `Rename` and `Deprecated`
+in any order: `rfl::Description<"...", rfl::Short<"o", T>>` is `-o`, and
 `rfl::DefaultVal<rfl::Positional<T>>` is positional. Put `rfl::Rename`
 outermost, as in `rfl::Rename<"out", rfl::Short<"o", T>>`; inside other
 wrappers it is ignored.
@@ -317,8 +354,8 @@ whose outermost wrapper is the same `Short` make every read fail with
 
 Bare arguments go first to the fields whose outermost wrapper is
 `Positional`, then to those where it is found through other wrappers, each in
-declaration order. `Short` directly around `Positional` (or the reverse) is a
-compile-time error:
+declaration order. `Short` directly around `Positional` (or the reverse), and
+a `Positional` field with an `ImplicitValue`, are compile-time errors:
 
 ```cpp
 struct Config {
@@ -434,6 +471,7 @@ be given:
 | Field | Synopsis | Detail |
 |---|---|---|
 | `bool` | `--verbose[=<bool>]` | |
+| `rfl::ImplicitValue<std::optional<Color>, "always">` | `--color[=<never\|always>]` | `Without a value: always.` |
 | list (vector, set, array, ...) | `--tags=<v1,v2,...>` | `Can be repeated.` |
 | list as the last `rfl::Positional` | `<files>...` | |
 
@@ -511,8 +549,9 @@ and `./copy --version` prints `copy 1.2.0`.
   short name, in which case the parser gives `-h` to neither field (see
   [Combining wrappers](#combining-wrappers)) and it stays the help. A field
   named `help` turns the built-in help off and is read like any other
-  field, so you can define your own. A field named `version` turns
-  `--version` off.
+  field, so you can define your own, for instance `--help[=<topic>]` with
+  `rfl::ImplicitValue<std::optional<std::string>, "all"> help;`. A field
+  named `version` turns `--version` off.
 - An empty version leaves out `--version`. An empty name is replaced by the
   program name (`argv[0]`).
 - Pass the same settings to `usage` as to `read_app`: `usage` shows the
@@ -539,6 +578,7 @@ and `./copy --version` prints `copy 1.2.0`.
 | `rfl::Rename<"x", T>` | `--x=val` | Bypasses kebab conversion |
 | `rfl::Positional<T>` | bare token | Matched in declaration order; a list last takes the rest |
 | `rfl::Short<"x", T>` | `-x value`, `-x=value` or `-xvalue` | Single-character alias, can be grouped (`-qv`) |
+| `rfl::ImplicitValue<T, "x">` | `--key` or `--key=value` | Bare means `x` |
 
 ## Architecture
 
@@ -574,3 +614,4 @@ Parsing proceeds in three stages:
 - `include/rfl/SnakeCaseToKebabCase.hpp` — processor
 - `include/rfl/Positional.hpp` — `Positional<T>` wrapper
 - `include/rfl/Short.hpp` — `Short<"x", T>` wrapper
+- `include/rfl/ImplicitValue.hpp` — `ImplicitValue<T, "x">` wrapper

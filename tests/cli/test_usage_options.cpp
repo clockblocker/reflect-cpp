@@ -6,9 +6,10 @@
 #include <string>
 #include <vector>
 
-// rfl::cli::usage for the parser's option features: wrappers in any order,
-// repeated list options, a list as the last positional field and positional
-// order. Each test also reads the arguments as the help spells them.
+// rfl::cli::usage for the parser's option features: rfl::ImplicitValue,
+// wrappers in any order, repeated list options, a list as the last
+// positional field and positional order. Each test also reads the arguments
+// as the help spells them.
 namespace test_usage_options {
 
 template <class T, class... Ps>
@@ -19,6 +20,46 @@ rfl::Result<T> read(std::vector<const char*> _args) {
 }
 
 using Strings = std::vector<std::string>;
+
+enum class Color { never, always, automatic };
+
+struct WithImplicitValues {
+  rfl::Description<"When to color the output",
+                   rfl::ImplicitValue<std::optional<Color>, "always">>
+      color;
+  rfl::Short<"j", rfl::ImplicitValue<rfl::DefaultVal<int>, "4">> jobs = 1;
+  rfl::ImplicitValue<std::optional<std::string>> tag;
+  rfl::Short<"q", bool> quiet;
+};
+
+TEST(cli, test_usage_implicit_value) {
+  EXPECT_EQ(rfl::cli::usage<WithImplicitValues>("app", true),
+            "Usage: app [--color[=<never|always|automatic>]] "
+            "[-j|--jobs[=<value>]] [--tag[=<value>]] -q|--quiet[=<bool>]\n"
+            "\n"
+            "Arguments:\n"
+            "  --color[=<never|always|automatic>]  When to color the output. "
+            "Without a value: always.\n"
+            "  -j, --jobs[=<value>]                Without a value: 4. "
+            "Default: 1.\n"
+            "  --tag[=<value>]\n"
+            "  -q, --quiet[=<bool>]                Required.\n");
+
+  // Bare, the options stand for their implicit values.
+  const auto bare = read<WithImplicitValues>({"--color", "-j", "--tag", "-q"});
+  ASSERT_TRUE(bare) << bare.error().what();
+  EXPECT_EQ(bare.value().color.value().value(), Color::always);
+  EXPECT_EQ(bare.value().jobs.value().value().get(), 4);
+  EXPECT_EQ(bare.value().tag.value(), std::string());
+  EXPECT_TRUE(bare.value().quiet.value());
+
+  // With a value after '=', and left out.
+  const auto given = read<WithImplicitValues>({"--color=never", "-q"});
+  ASSERT_TRUE(given) << given.error().what();
+  EXPECT_EQ(given.value().color.value().value(), Color::never);
+  EXPECT_EQ(given.value().jobs.value().value().get(), 1);
+  EXPECT_FALSE(given.value().tag.value());
+}
 
 struct WrapperOrder {
   rfl::Description<"Where to write", rfl::Short<"o", std::string>> output;

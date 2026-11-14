@@ -46,6 +46,7 @@ struct Opts {
   std::optional<Database> database;
   std::optional<std::map<std::string, std::string>> labels;
   std::optional<std::map<std::string, Strings>> groups;
+  rfl::ImplicitValue<std::optional<Strings>, "all"> help_reports;
   rfl::Positional<std::optional<std::string>> input;
 };
 
@@ -146,6 +147,28 @@ TEST(cli, test_repeated_nested_scalar_and_map_key_error) {
   ASSERT_TRUE(two_keys) << two_keys.error().what();
   EXPECT_EQ(two_keys.value().labels,
             (std::map<std::string, std::string>{{"env", "a"}, {"os", "b"}}));
+}
+
+TEST(cli, test_repeated_implicit_value_list) {
+  // A bare occurrence adds the implicit value, split like any other value.
+  const auto bare = read<Opts>({"--help-reports"});
+  ASSERT_TRUE(bare) << bare.error().what();
+  EXPECT_EQ(bare.value().help_reports(), (Strings{"all"}));
+
+  const auto mixed = read<Opts>(
+      {"--help-reports=cpu", "--help-reports", "--help-rep=gpu,mem"});
+  ASSERT_TRUE(mixed) << mixed.error().what();
+  EXPECT_EQ(mixed.value().help_reports(), (Strings{"cpu", "all", "gpu", "mem"}));
+
+  // It still never takes the next token.
+  const auto next = read<Opts>({"--help-reports", "in.txt"});
+  ASSERT_TRUE(next) << next.error().what();
+  EXPECT_EQ(next.value().help_reports(), (Strings{"all"}));
+  EXPECT_EQ(next.value().input(), "in.txt");
+
+  const auto absent = read<Opts>({});
+  ASSERT_TRUE(absent) << absent.error().what();
+  EXPECT_FALSE(absent.value().help_reports().has_value());
 }
 
 struct Wrapped {
