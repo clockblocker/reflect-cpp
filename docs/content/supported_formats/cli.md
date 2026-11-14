@@ -345,6 +345,38 @@ rfl::cli::read<Config, rfl::cli::ListDelimiter<"">>(argc, argv);
   exactly one item, even if it is empty.
 - Other formats ignore it.
 
+### Empty list items
+
+By default, empty items in a split list are skipped: `--tags=a,,b` gives
+`[a, b]`. Pass `rfl::cli::KeepEmptyItems` to keep each empty item as a
+missing value at its index. The element type then decides, as it does for a
+missing field:
+
+```cpp
+const auto result =
+    rfl::cli::read<Config, rfl::cli::KeepEmptyItems>(argc, argv);
+```
+
+| Element type | `--tags=a,,b` |
+|---|---|
+| `std::vector<std::optional<T>>` | `[a, nullopt, b]` |
+| `std::vector<rfl::DefaultVal<T>>` | `[a, T{}, b]` |
+| `std::vector<T>` | Error: `Failed to parse field 'tags': Empty item at index 1.` |
+
+`T` is any type that needs a value, such as `std::string`, `std::wstring`,
+a number or a `bool`. Smart pointers (`std::shared_ptr<T>`,
+`std::unique_ptr<T>`) are never required, so an empty one is null, as a
+missing field of that type is.
+
+Leading and trailing empty items (`,b`, `a,`) count, too. An empty value
+(`--tags=`) is still an empty list. Other list types, such as `std::set`,
+`std::deque` and `std::array`, behave the same way. A
+[repeated option](#lists-and-repeated-options) keeps the empty items of
+every occurrence, at their index in the combined list: `--tags=a,b
+--tags=c,,d` has an empty item at index 3. With `rfl::cli::ListDelimiter<"">`,
+lists are not split, so the setting would change nothing, and combining the
+two is a compile-time error.
+
 ### A list as the last positional argument
 
 If the last positional field (in declaration order) is a list, it takes all
@@ -577,7 +609,7 @@ int main(int argc, char* argv[]) {
 | `bool` | `--flag` or `--flag=true` | No `=` implies `true` |
 | `enum` | `--key=value_name` | Via `rfl::string_to_enum` |
 | `std::optional<T>` | omit for `nullopt` | |
-| `std::vector<T>` | `--key=a,b,c` or `--key=a --key=b,c` | Comma-separated; empty elements skipped; [repeatable](#lists-and-repeated-options) |
+| `std::vector<T>` | `--key=a,b,c` or `--key=a --key=b,c` | Comma-separated; empty items skipped unless [kept](#empty-list-items); [repeatable](#lists-and-repeated-options) |
 | Nested struct | `--parent.child=val` | Dot-separated path |
 | `rfl::Flatten<T>` | fields inlined | No prefix needed |
 | `rfl::Rename<"x", T>` | `--x=val` | Bypasses kebab conversion |
@@ -608,7 +640,8 @@ Parsing proceeds in three stages:
 
 - `include/rfl/cli/read.hpp` — public API
 - `include/rfl/cli/Reader.hpp` — Reader + `parse_value` overloads
-- `include/rfl/cli/Parser.hpp` — Parser type alias
+- `include/rfl/cli/Parser.hpp` — Parser type alias + empty `DefaultVal` and `std::wstring` items
+- `include/rfl/cli/KeepEmptyItems.hpp` — `KeepEmptyItems` processor
 - `include/rfl/cli/parse_argv.hpp` — `argv` -> `ParsedArgs`
 - `include/rfl/cli/options.hpp` — the internal option table: the long, short and positional options of a struct
 - `include/rfl/cli/AllowAbbreviations.hpp` — `AllowAbbreviations` processor
