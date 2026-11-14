@@ -55,8 +55,8 @@ inline void apply_option_kinds(const Options& _options, ParsedArgs* _parsed) {
   }
 }
 
-/// Fails if two fields of the struct have the same rfl::Short name, so
-/// every read of such a struct fails.
+/// Fails if two fields of the struct have the same outermost rfl::Short
+/// name, so every read of such a struct fails.
 inline rfl::Result<bool> check_short_names(const Options& _options) {
   if (!_options.duplicate_short_name.empty()) {
     return rfl::error("Duplicate short name '-" + _options.duplicate_short_name

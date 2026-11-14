@@ -1,6 +1,7 @@
 #ifndef RFL_CLI_OPTIONS_HPP_
 #define RFL_CLI_OPTIONS_HPP_
 
+#include <algorithm>
 #include <cstddef>
 #include <map>
 #include <optional>
@@ -10,8 +11,12 @@
 #include <utility>
 #include <vector>
 
+#include "../DefaultVal.hpp"
+#include "../Deprecated.hpp"
+#include "../Description.hpp"
 #include "../Generic.hpp"
 #include "../Positional.hpp"
+#include "../Rename.hpp"
 #include "../Short.hpp"
 #include "../Tuple.hpp"
 #include "../internal/StringLiteral.hpp"
@@ -62,8 +67,10 @@ struct Options {
   /// of their field.
   std::map<std::string, std::string> short_options;
 
-  /// The paths of the rfl::Positional fields, in declaration order. Each
-  /// takes one positional argument.
+  /// The paths of the rfl::Positional fields: first those whose outermost
+  /// wrapper is rfl::Positional, then those where it is found through other
+  /// wrappers, each in declaration order. Each takes one positional
+  /// argument.
   std::vector<std::string> positionals;
 
   /// Whether tokens such as `-5` and `-.5` are short options rather than
@@ -72,7 +79,7 @@ struct Options {
   /// name looks like a number (`-1`).
   bool negative_numbers_are_options = true;
 
-  /// A short name that two fields give with rfl::Short, such as
+  /// A short name that two fields give with an outermost rfl::Short, such as
   /// `rfl::Short<"o", A> a; rfl::Short<"o", B> b;`, or empty. Reading such a
   /// struct fails.
   std::string duplicate_short_name;
@@ -99,6 +106,49 @@ inline bool is_bool_literal(std::string_view _token) noexcept {
          || _token == "0";
 }
 
+/// What rfl::Short and rfl::Positional say about a field of type T. They are
+/// found through rfl::DefaultVal, std::optional, rfl::Description,
+/// rfl::Deprecated and rfl::Rename, in any order. Of several rfl::Short and rfl::Positional, the outermost counts.
+template <class T>
+struct cli_annotations {
+  static constexpr bool is_short = false;
+  static constexpr bool is_positional = false;
+  static constexpr rfl::internal::StringLiteral<1> short_name = "";
+};
+
+template <class T>
+using cli_annotations_t = cli_annotations<std::remove_cvref_t<T>>;
+
+template <class T>
+struct cli_annotations<DefaultVal<T>> : cli_annotations_t<T> {};
+
+template <class T>
+struct cli_annotations<std::optional<T>> : cli_annotations_t<T> {};
+
+template <rfl::internal::StringLiteral _description, class T>
+struct cli_annotations<Description<_description, T>> : cli_annotations_t<T> {};
+
+template <rfl::internal::StringLiteral _deprecation_message,
+          rfl::internal::StringLiteral _description, class T>
+struct cli_annotations<Deprecated<_deprecation_message, _description, T>>
+    : cli_annotations_t<T> {};
+
+template <rfl::internal::StringLiteral _name, class T>
+struct cli_annotations<Rename<_name, T>> : cli_annotations_t<T> {};
+
+template <class T>
+struct cli_annotations<Positional<T>> : cli_annotations_t<T> {
+  static constexpr bool is_short = false;
+  static constexpr bool is_positional = true;
+};
+
+template <rfl::internal::StringLiteral _name, class T>
+struct cli_annotations<Short<_name, T>> : cli_annotations_t<T> {
+  static constexpr bool is_short = true;
+  static constexpr bool is_positional = false;
+  static constexpr auto short_name = _name;
+};
+
 /// Whether T is rfl::Short directly around rfl::Positional, or the other way
 /// round, which is a compile-time error.
 template <class T>
@@ -121,12 +171,16 @@ struct field_info {
   using FieldType = rfl::tuple_element_t<_i, typename NamedTupleType::Fields>;
   using InnerType = typename FieldType::Type;
   using OuterType = std::remove_pointer_t<std::remove_cvref_t<InnerType>>;
+  using Annotations = cli_annotations_t<OuterType>;
 
-  /// Whether rfl::Positional is the outermost wrapper of the field.
-  static constexpr bool is_positional =
+  static constexpr bool is_positional = Annotations::is_positional;
+  static constexpr bool is_short = Annotations::is_short;
+  /// Whether rfl::Short is the outermost wrapper of the field, not found
+  /// through others.
+  static constexpr bool is_direct_short = rfl::internal::is_short_v<OuterType>;
+  /// The same for rfl::Positional.
+  static constexpr bool is_direct_positional =
       rfl::internal::is_positional_v<OuterType>;
-  /// Whether rfl::Short is the outermost wrapper of the field.
-  static constexpr bool is_short = rfl::internal::is_short_v<OuterType>;
 
   static_assert(
       !is_short_around_positional<OuterType>(),
@@ -141,7 +195,7 @@ template <class NamedTupleType, size_t _i>
 constexpr auto get_short_name() {
   using Info = field_info<NamedTupleType, _i>;
   if constexpr (Info::is_short) {
-    return Info::OuterType::short_name_;
+    return Info::Annotations::short_name;
   }
   else {
     return rfl::internal::StringLiteral<1>("");
@@ -264,32 +318,74 @@ void collect_options(Options* _options) {
   }(std::make_index_sequence<NT::size()>());
 }
 
+/// The rfl::Short of a top-level field.
+struct ShortAlias {
+  std::string name;
+  std::string path;
+  /// Whether rfl::Short is the outermost wrapper of the field.
+  bool is_direct = false;
+};
+
 /// Adds the short alias and the positional slot of the _i-th top-level
-/// field, if it has them. Two fields with the same short name are kept as
-/// an error (Options::duplicate_short_name).
+/// field, if it has them.
 template <class NamedTupleType, size_t _i>
-void add_short_and_positional(Options* _options) {
+void add_short_and_positional(std::vector<ShortAlias>* _aliases,
+                              std::vector<std::string>* _wrapped_positionals,
+                              Options* _options) {
   using Info = field_info<NamedTupleType, _i>;
   if constexpr (Info::is_short) {
-    const auto name =
-        std::string(get_short_name<NamedTupleType, _i>().string_view());
-    if (!_options->short_options.emplace(name, std::string(Info::name()))
-             .second
+    _aliases->push_back(ShortAlias{
+        std::string(get_short_name<NamedTupleType, _i>().string_view()),
+        std::string(Info::name()), Info::is_direct_short});
+  }
+  if constexpr (Info::is_direct_positional) {
+    _options->positionals.emplace_back(Info::name());
+  }
+  else if constexpr (Info::is_positional) {
+    _wrapped_positionals->emplace_back(Info::name());
+  }
+}
+
+/// An outermost rfl::Short always counts; two with the same name are kept
+/// as an error (Options::duplicate_short_name). An
+/// rfl::Short found through other wrappers counts only if no other field
+/// has its name.
+inline void add_short_aliases(const std::vector<ShortAlias>& _aliases,
+                              Options* _options) {
+  for (const auto& alias : _aliases) {
+    if (alias.is_direct
+        && !_options->short_options.emplace(alias.name, alias.path).second
         && _options->duplicate_short_name.empty()) {
-      _options->duplicate_short_name = name;
+      _options->duplicate_short_name = alias.name;
     }
   }
-  if constexpr (Info::is_positional) {
-    _options->positionals.emplace_back(Info::name());
+  for (const auto& alias : _aliases) {
+    const auto has_name = [&](const ShortAlias& _other) {
+      return _other.name == alias.name;
+    };
+    if (!alias.is_direct
+        && std::count_if(_aliases.begin(), _aliases.end(), has_name) == 1) {
+      _options->short_options.emplace(alias.name, alias.path);
+    }
   }
 }
 
 template <class T, class ProcessorsType>
 void collect_short_and_positional(Options* _options) {
   using NT = option_fields_t<T, ProcessorsType>;
+  std::vector<ShortAlias> aliases;
+  std::vector<std::string> wrapped_positionals;
   [&]<size_t... _is>(std::index_sequence<_is...>) {
-    (add_short_and_positional<NT, _is>(_options), ...);
+    (add_short_and_positional<NT, _is>(&aliases, &wrapped_positionals,
+                                       _options),
+     ...);
   }(std::make_index_sequence<NT::size()>());
+  add_short_aliases(aliases, _options);
+  // Outermost rfl::Positional fields take the first positional arguments,
+  // and those found through other wrappers the ones after them.
+  _options->positionals.insert(_options->positionals.end(),
+                               wrapped_positionals.begin(),
+                               wrapped_positionals.end());
 }
 
 /// Derives the options that T accepts from its fields: the option of every
