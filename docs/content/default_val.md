@@ -98,6 +98,10 @@ The field is still required. The default value is only used for a missing field 
 
 All of this applies to every struct that is read with the `rfl::DefaultIfMissing` processor, whether it contains an `rfl::DefaultVal` or not. The JSON schema of a struct that cannot be default-constructed contains no default values.
 
+If the struct cannot be default-constructed at all, for instance because a field's type has no default constructor, it is read without its default values, so its `rfl::DefaultVal` fields must be present in the input.
+
+An `rfl::NamedTuple` has no in-class initializers. A missing `rfl::DefaultVal<T>` field in it is set to `T{}`. If `T` has no default constructor, or `T{}` throws (for instance a validator that rejects its zero value), the field must be present in the input.
+
 ## When to use
 
 Use `rfl::DefaultVal` when you want a field to be optional at the input side but still available as a value on the resulting object (no std::optional or pointer indirection). It is particularly useful for fields with sensible defaults (for example, a common last name, a default configuration value, or empty containers/strings).
