@@ -20,8 +20,8 @@ namespace rfl::cli {
 ///   rfl::cli::read_app<Config, MyApp>(argc, argv);
 ///   rfl::cli::usage<Config, MyApp>(argv[0], true);
 /// - `-h` and `--help` ask for the help, `--version` for the version. They
-///   are flags in the option table, so they can be grouped (`-vh`) like any
-///   other, and `--` ends them.
+///   are flags in the option table, so they can be abbreviated (`--hel`) and
+///   grouped (`-vh`) like any other, and `--` ends them.
 /// - A field takes precedence over them: if a field has rfl::Short<"h", ...>,
 ///   `-h` is that field's and the help is `--help` only. A field named
 ///   `help` (after processors) turns the built-in help off, and a field named
