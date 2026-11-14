@@ -160,6 +160,8 @@ inline rfl::Result<ResolvedArgs> resolve_args(
 /// repeated list option, which parse_argv without the options rejects, so
 /// a list as the last positional field does not take the remaining
 /// positional arguments here either: each positional field takes one.
+/// rfl::ImplicitValue needs the options, too: without them, `--help` gets
+/// an empty value and `-h x` gives `x` to `-h`.
 /// @tparam T The target struct type
 /// @tparam ProcessorsType The processors applied to the struct
 /// @param _parsed The parsed command-line arguments
