@@ -1,7 +1,9 @@
 #ifndef RFL_PARSING_PARSER_DEFAULT_HPP_
 #define RFL_PARSING_PARSER_DEFAULT_HPP_
 
+#include <exception>
 #include <map>
+#include <optional>
 #include <string>
 #include <type_traits>
 
@@ -71,6 +73,7 @@
 #include "schema/Type.hpp"
 #include "schemaful/IsSchemafulReader.hpp"
 #include "schemaful/IsSchemafulWriter.hpp"
+#include "tagged_union_wrapper_no_ptr.hpp"
 
 namespace rfl::parsing {
 
@@ -267,7 +270,8 @@ struct Parser {
             .and_then(wrap_in_t);
 
       } else if constexpr (internal::default_if_missing_v<ProcessorsType> ||
-                           internal::has_default_val_v<T>) {
+                           (internal::has_default_val_v<T> &&
+                            std::is_default_constructible_v<T>)) {
         return read_struct_with_default(_r, _var);
 
       } else {
@@ -664,13 +668,29 @@ struct Parser {
 
       } else {
         using NamedTupleType = internal::processed_t<U, ProcessorsType>;
-        if constexpr (internal::has_default_val_v<U>) {
-          auto t = U{};
-          auto view = ProcessorsType::template process<U>(to_view(t));
-          (*_definitions)[name] =
-              Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-                  _definitions, &view);
-        } else {
+        // The schema takes the default values of rfl::DefaultVal fields from
+        // a default-constructed instance. A tagged union wrapper holds its
+        // alternative through a pointer that U{} leaves null, so we construct
+        // the wrapper that holds the alternative by value instead.
+        using DefaultsType = tagged_union_wrapper_no_ptr_t<U>;
+        std::optional<DefaultsType> defaults;
+        if constexpr (internal::has_default_val_v<U> &&
+                      std::is_default_constructible_v<DefaultsType>) {
+          try {
+            defaults.emplace();
+          } catch (std::exception&) {
+            // For instance a validator whose default value is invalid. The
+            // schema is still valid without the default values.
+          }
+          if (defaults) {
+            auto view = ProcessorsType::template process<DefaultsType>(
+                to_view(*defaults));
+            (*_definitions)[name] =
+                Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
+                    _definitions, &view);
+          }
+        }
+        if (!defaults) {
           (*_definitions)[name] =
               Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
                   _definitions);
