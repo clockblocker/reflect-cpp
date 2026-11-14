@@ -7,6 +7,7 @@
 #include "../DefaultVal.hpp"
 #include "../Deprecated.hpp"
 #include "../Description.hpp"
+#include "../ImplicitValue.hpp"
 #include "../Positional.hpp"
 #include "../Rename.hpp"
 #include "../Short.hpp"
@@ -44,6 +45,10 @@ template <internal::StringLiteral _deprecation_message,
 class is_default_val<Deprecated<_deprecation_message, _description, T>>
     : public is_default_val<T> {};
 
+template <class T, internal::StringLiteral _implicit>
+class is_default_val<ImplicitValue<T, _implicit>> : public is_default_val<T> {
+};
+
 template <class T>
 constexpr bool is_default_val_v =
     is_default_val<std::remove_cvref_t<std::remove_pointer_t<T>>>::value;
@@ -59,6 +64,17 @@ class is_unwrapped_default_val<DefaultVal<T>> : public std::true_type {};
 template <internal::StringLiteral _new_name, class T>
 class is_unwrapped_default_val<Rename<_new_name, DefaultVal<T>>>
     : public std::true_type {};
+
+// rfl::ImplicitValue is transparent to every format but the command line, so
+// a DefaultVal in it counts as unwrapped.
+template <class T, internal::StringLiteral _implicit>
+class is_unwrapped_default_val<ImplicitValue<T, _implicit>>
+    : public is_unwrapped_default_val<T> {};
+
+template <internal::StringLiteral _new_name, class T,
+          internal::StringLiteral _implicit>
+class is_unwrapped_default_val<Rename<_new_name, ImplicitValue<T, _implicit>>>
+    : public is_unwrapped_default_val<T> {};
 
 template <class T>
 constexpr bool is_unwrapped_default_val_v = is_unwrapped_default_val<

@@ -30,6 +30,7 @@
 #include "rfl/Flatten.hpp"
 #include "rfl/Generic.hpp"
 #include "rfl/Hex.hpp"
+#include "rfl/ImplicitValue.hpp"
 #include "rfl/Literal.hpp"
 #include "rfl/NamedTuple.hpp"
 #include "rfl/NoExtraFields.hpp"

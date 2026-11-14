@@ -200,7 +200,8 @@ inline rfl::Result<std::map<std::string, std::string>> expand_abbreviations(
 /// With rfl::cli::AllowAbbreviations, long options that match no field are
 /// expanded here (`--rep=a` for `--report=a`), but parse_argv, which does
 /// not know the struct, has already read `--rep value` as `--rep` and a
-/// positional argument.
+/// positional argument. rfl::ImplicitValue needs the options, too: without
+/// them, `--help` gets an empty value and `-h x` gives `x` to `-h`.
 /// @tparam T The target struct type
 /// @tparam ProcessorsType The processors applied to the struct
 /// @param _parsed The parsed command-line arguments

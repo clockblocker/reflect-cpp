@@ -382,6 +382,14 @@ if (argc > 1 && std::string_view(argv[1]) == "--help") {
 }
 ```
 
+`rfl::ImplicitValue<T, "text">` lets an option be given without a value, which then stands for the text:
+
+```cpp
+rfl::ImplicitValue<std::optional<std::string>, "auto"> color;
+// ./app --color         ->  color = "auto"
+// ./app --color=never   ->  color = "never"
+```
+
 Nested structs, `std::optional`, `std::vector`, enums, `rfl::Flatten` and `rfl::Rename` are all supported. Refer to the [documentation](https://munich-data-engineering.github.io/reflect-cpp/cli) for details.
 
 ### Error messages
