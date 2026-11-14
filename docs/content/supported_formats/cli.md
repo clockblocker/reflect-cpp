@@ -133,10 +133,26 @@ looks like an option (`-` followed by anything except a digit or `.`):
 `Missing value for option '-o'.` Use `=` to pass an empty value or one that
 starts with `-`: `-o=`, `-o=-x`.
 
-## Combining Positional and Short
+## Combining wrappers
 
-`Positional` and `Short` can be used together in the same struct, but
-**cannot be nested** (`Positional<Short<...>>` is a compile-time error):
+`Short` and `Positional` can be nested with each other and with
+`DefaultVal`, `std::optional`, `Description`, `Rename` and `Deprecated` in
+any order: `rfl::Description<"...", rfl::Short<"o", T>>` is `-o`, and
+`rfl::DefaultVal<rfl::Positional<T>>` is positional. Put `rfl::Rename`
+outermost, as in `rfl::Rename<"out", rfl::Short<"o", T>>`; inside other
+wrappers it is ignored.
+
+If a field has several `Short` or `Positional` wrappers, the outermost one
+counts: `rfl::Short<"o", rfl::Description<"...", rfl::Positional<T>>>` is
+`-o`. A `Short` found through other wrappers counts only if no other field
+has its name, so another field `rfl::Short<"o", U>` keeps `-o`. Two fields
+whose outermost wrapper is the same `Short` make every read fail with
+`Duplicate short name '-o' in struct definition.`
+
+Bare arguments go first to the fields whose outermost wrapper is
+`Positional`, then to those where it is found through other wrappers, each in
+declaration order. `Short` directly around `Positional` (or the reverse) is a
+compile-time error:
 
 ```cpp
 struct Config {
