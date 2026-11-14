@@ -7,8 +7,8 @@
 #include <vector>
 
 // rfl::cli::usage for the parser's option features: wrappers in any order,
-// repeated list options and positional order. Each test also reads the
-// arguments as the help spells them.
+// repeated list options, a list as the last positional field and positional
+// order. Each test also reads the arguments as the help spells them.
 namespace test_usage_options {
 
 template <class T, class... Ps>
@@ -52,49 +52,53 @@ struct Lists {
   rfl::Short<"r", rfl::Description<"Reports to write", Strings>> report;
   rfl::DefaultVal<Strings> tags = Strings{"a", "b"};
   rfl::Positional<std::string> command;
+  rfl::Description<"Files to process", rfl::Positional<Strings>> files;
 };
 
 TEST(cli, test_usage_lists) {
   EXPECT_EQ(rfl::cli::usage<Lists>("app", true),
             "Usage: app -r|--report=<v1,v2,...> [--tags=<v1,v2,...>] "
-            "<command>\n"
+            "<command> <files>...\n"
             "\n"
             "Arguments:\n"
             "  -r, --report=<v1,v2,...>  Reports to write. Can be repeated. "
             "Required.\n"
             "  --tags=<v1,v2,...>        Default: a,b. Can be repeated.\n"
-            "  <command>                 Required.\n");
+            "  <command>                 Required.\n"
+            "  <files>...                Files to process. Required.\n");
 
-  const auto result =
-      read<Lists>({"-r", "a", "run", "--report=b,c", "--tags", "t"});
+  const auto result = read<Lists>(
+      {"-r", "a", "run", "--report=b,c", "x,y", "z", "--tags", "t"});
   ASSERT_TRUE(result) << result.error().what();
   EXPECT_EQ(result.value().report.value().value(), (Strings{"a", "b", "c"}));
   EXPECT_EQ(result.value().tags.value(), (Strings{"t"}));
   EXPECT_EQ(result.value().command.value(), "run");
+  EXPECT_EQ(result.value().files.value().value(), (Strings{"x", "y", "z"}));
 }
 
 /// The parser fills the outermost rfl::Positional fields first, then those
-/// found through other wrappers.
+/// found through other wrappers, and a list takes the remaining arguments
+/// only as the last of them.
 struct PositionalOrder {
-  rfl::Description<"Files to process", rfl::Positional<std::string>> files;
-  rfl::Positional<std::string> pair;
+  rfl::Description<"Files to process", rfl::Positional<Strings>> files;
+  rfl::Positional<Strings> pair;
   rfl::Positional<std::string> command;
 };
 
 TEST(cli, test_usage_positional_order) {
   EXPECT_EQ(rfl::cli::usage<PositionalOrder>("app", true),
-            "Usage: app <pair> <command> <files>\n"
+            "Usage: app <pair> <command> <files>...\n"
             "\n"
             "Arguments:\n"
-            "  <pair>     Required.\n"
-            "  <command>  Required.\n"
-            "  <files>    Files to process. Required.\n");
+            "  <pair>      Required.\n"
+            "  <command>   Required.\n"
+            "  <files>...  Files to process. Required.\n");
 
-  const auto result = read<PositionalOrder>({"a", "run", "x"});
+  const auto result = read<PositionalOrder>({"a,b", "run", "x", "y"});
   ASSERT_TRUE(result) << result.error().what();
-  EXPECT_EQ(result.value().pair.value(), "a");
+  EXPECT_EQ(result.value().pair.value(), (Strings{"a", "b"}));
   EXPECT_EQ(result.value().command.value(), "run");
-  EXPECT_EQ(result.value().files.value().value(), "x");
+  EXPECT_EQ(result.value().files.value().value(), (Strings{"x", "y"}));
 }
 
 /// An rfl::Short found through other wrappers counts only if no other field

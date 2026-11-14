@@ -271,6 +271,34 @@ Any other option can be given only once. That includes nested
 fields and map entries: `Duplicate argument: --output`,
 `Duplicate short argument: -o`, `Conflict: '-o' and '--output' both provided.`
 
+### A list as the last positional argument
+
+If the last positional field is a list, it takes all remaining positional
+arguments (last in the order of [Combining wrappers](#combining-wrappers),
+which is declaration order unless some `Positional`s are wrapped), and each
+argument is split at the commas:
+
+```cpp
+struct Config {
+  rfl::Positional<std::string> command;
+  rfl::Positional<std::vector<std::string>> files;
+};
+
+// ./app run a,b        ->  files = {"a", "b"}
+// ./app run a b        ->  files = {"a", "b"}
+// ./app run a,b c      ->  files = {"a", "b", "c"}
+```
+
+- A plain list needs at least one argument. With `std::optional` or
+  `rfl::DefaultVal`, no arguments give `std::nullopt` or the default.
+- Options can still come anywhere (`./app run a --verbose b`).
+- The long form works as for any list: `--files=a,b`, or
+  `--files a --files b`. It cannot be mixed with bare arguments:
+  `Conflict: positional argument and '--files' both provided.`
+- Only the last positional field takes the remaining arguments. A list
+  before other positional fields, such as `std::vector`, `std::set`, a
+  pair or a `std::array`, takes one argument, split at the commas.
+
 ## Combining wrappers
 
 `Short` and `Positional` can be nested with each other and with
@@ -407,6 +435,7 @@ be given:
 |---|---|---|
 | `bool` | `--verbose[=<bool>]` | |
 | list (vector, set, array, ...) | `--tags=<v1,v2,...>` | `Can be repeated.` |
+| list as the last `rfl::Positional` | `<files>...` | |
 
 `rfl::Positional` and `rfl::Short` are found through the other wrappers, as
 the parser does (see [Combining wrappers](#combining-wrappers)), so
@@ -508,7 +537,7 @@ and `./copy --version` prints `copy 1.2.0`.
 | Nested struct | `--parent.child=val` | Dot-separated path |
 | `rfl::Flatten<T>` | fields inlined | No prefix needed |
 | `rfl::Rename<"x", T>` | `--x=val` | Bypasses kebab conversion |
-| `rfl::Positional<T>` | bare token | Matched in declaration order |
+| `rfl::Positional<T>` | bare token | Matched in declaration order; a list last takes the rest |
 | `rfl::Short<"x", T>` | `-x value`, `-x=value` or `-xvalue` | Single-character alias, can be grouped (`-qv`) |
 
 ## Architecture
