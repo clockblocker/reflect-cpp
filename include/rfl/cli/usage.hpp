@@ -33,6 +33,7 @@
 #include "../parsing/schema/make.hpp"
 #include "../to_generic.hpp"
 #include "ListDelimiter.hpp"
+#include "OptionsFirst.hpp"
 #include "Reader.hpp"
 #include "options.hpp"
 #include "resolve_args.hpp"
@@ -597,12 +598,20 @@ inline std::string usage_help_text(const UsageArg& _arg) {
   return text;
 }
 
+/// @param _options_first Whether the options end at the first positional
+/// argument (rfl::cli::OptionsFirst), so the synopsis lists them first.
 inline std::string format_usage(const std::string& _program_name,
                                 const std::vector<UsageArg>& _args,
                                 const bool _detailed,
-                                const std::optional<char> _delimiter) {
+                                const std::optional<char> _delimiter,
+                                const bool _options_first) {
+  auto synopsis = _args;
+  if (_options_first) {
+    std::stable_partition(synopsis.begin(), synopsis.end(),
+                          [](const UsageArg& _arg) { return !_arg.positional; });
+  }
   auto out = "Usage: " + _program_name;
-  for (const auto& arg : _args) {
+  for (const auto& arg : synopsis) {
     const auto str = usage_arg_to_string(arg, "|", _delimiter);
     out += arg.required ? " " + str : " [" + str + "]";
   }
@@ -707,7 +716,7 @@ rfl::Result<std::string> usage(const std::string& _program_name,
               rfl::internal::default_if_missing_v<ProcessorsType>,
               internal::usage_defaults<T, Ps...>());
           return internal::format_usage(_program_name, args, _detailed,
-                                        delimiter);
+                                        delimiter, options.options_first);
         } catch (std::exception& e) {
           return error(e.what());
         }

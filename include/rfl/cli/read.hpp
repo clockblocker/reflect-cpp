@@ -25,7 +25,8 @@ template <class T, class ProcessorsType>
 rfl::Result<T> read_parsed(ParsedArgs _parsed, const Options& _options) {
   return resolve_args(std::move(_parsed), _options)
       .and_then([](auto _args) -> rfl::Result<T> {
-        const auto r = Reader(internal::list_delimiter_v<ProcessorsType>);
+        const auto r = Reader(internal::list_delimiter_v<ProcessorsType>,
+                              std::move(_args.verbatim_list));
         const auto var = CliVarType{&_args.values, "", std::nullopt,
                                     &_args.later_occurrences};
         return Parser<T, ProcessorsType>::read(r, var);

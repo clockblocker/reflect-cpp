@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "../Result.hpp"
@@ -164,8 +165,12 @@ struct Reader {
 
   /// @param _list_delimiter The character at which list values are split
   /// into items, or std::nullopt to not split them, see ListDelimiter.
-  explicit Reader(const std::optional<char> _list_delimiter) noexcept
-      : list_delimiter_(_list_delimiter) {}
+  /// @param _verbatim_list The path of a list whose items are taken as they
+  /// are, never split or dropped, or empty (see OptionsFirst).
+  explicit Reader(const std::optional<char> _list_delimiter,
+                  std::string _verbatim_list = std::string()) noexcept
+      : list_delimiter_(_list_delimiter),
+        verbatim_list_(std::move(_verbatim_list)) {}
 
   /// Gets a specific element from a CLI array by index.
   /// @param _idx The index of the element to retrieve
@@ -374,25 +379,27 @@ struct Reader {
   std::vector<std::string> split_items(const std::string& _first,
                                        const InputVarType& _var) const {
     std::vector<std::string> items;
-    add_items(_first, &items);
+    const bool verbatim = !_var.direct_value && !verbatim_list_.empty()
+                          && _var.path == verbatim_list_;
+    add_items(_first, verbatim, &items);
     if (_var.direct_value || !_var.later_occurrences) {
       return items;
     }
     const auto it = _var.later_occurrences->find(_var.path);
     if (it != _var.later_occurrences->end()) {
       for (const auto& occurrence : it->second) {
-        add_items(occurrence, &items);
+        add_items(occurrence, verbatim, &items);
       }
     }
     return items;
   }
 
   /// Adds the items of one occurrence of a list, split at the list
-  /// delimiter, to _items. Without a delimiter, the occurrence is one item,
-  /// even if it is empty.
-  void add_items(const std::string& _occurrence,
+  /// delimiter, to _items. Without a delimiter, or if `_verbatim`, the
+  /// occurrence is one item, even if it is empty.
+  void add_items(const std::string& _occurrence, const bool _verbatim,
                  std::vector<std::string>* _items) const {
-    if (!list_delimiter_) {
+    if (!list_delimiter_ || _verbatim) {
       _items->push_back(_occurrence);
       return;
     }
@@ -403,6 +410,9 @@ struct Reader {
 
   /// The character at which list values are split, see ListDelimiter.
   std::optional<char> list_delimiter_ = array_delimiter;
+
+  /// The path of the list whose items are never split or dropped, or empty.
+  std::string verbatim_list_;
 };
 
 }  // namespace rfl::cli

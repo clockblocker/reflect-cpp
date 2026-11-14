@@ -31,6 +31,7 @@
 #include "../internal/processed_t.hpp"
 #include "../parsing/is_string_map.hpp"
 #include "AllowAbbreviations.hpp"
+#include "OptionsFirst.hpp"
 #include "Parser.hpp"
 #include "SeparateOptionValues.hpp"
 #include "Reader.hpp"
@@ -136,6 +137,10 @@ struct Options {
   /// `rfl::Short<"o", A> a; rfl::Short<"o", B> b;`, or empty. Reading such a
   /// struct fails.
   std::string duplicate_short_name;
+
+  /// Whether the options end at the first positional argument, so that every
+  /// later token is a positional argument (rfl::cli::OptionsFirst).
+  bool options_first = false;
 
   /// Returns the long options that `--_prefix` could abbreviate: every
   /// long option that starts with `_prefix`, in alphabetical order. Only the
@@ -646,8 +651,9 @@ void collect_top_level_options(Options* _options) {
 /// options, need them all.
 /// @return The options, with reject_unknown set if ProcessorsType contains
 /// rfl::NoExtraFields, separate_values if it contains
-/// rfl::cli::SeparateOptionValues, and allow_abbreviations if it contains
-/// rfl::cli::AllowAbbreviations
+/// rfl::cli::SeparateOptionValues, allow_abbreviations if it contains
+/// rfl::cli::AllowAbbreviations, and options_first if it contains
+/// rfl::cli::OptionsFirst
 template <class T, class ProcessorsType,
           bool _all_paths = rfl::internal::no_extra_fields_v<ProcessorsType>
                             || separate_option_values_v<ProcessorsType>
@@ -661,6 +667,7 @@ Options make_options() {
     options.make_all_paths = &make_options<T, ProcessorsType, true>;
   }
   options.allow_abbreviations = allow_abbreviations_v<ProcessorsType>;
+  options.options_first = options_first_v<ProcessorsType>;
   using U = unwrapped_option_t<T, ProcessorsType>;
   if constexpr (_all_paths) {
     collect_value_options<T, ProcessorsType, type_list<>>(&options);
