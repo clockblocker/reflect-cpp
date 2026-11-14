@@ -63,7 +63,8 @@ rfl::Result<T> parse_and_read(const ParseFn& _parse) {
 /// yourself: `std::span(argv, argc)` would parse the program name as an
 /// argument.
 /// @tparam T The struct type to parse into
-/// @tparam Ps Optional processors to apply during parsing
+/// @tparam Ps Optional processors to apply during parsing, including
+/// settings such as rfl::NoExtraFields and rfl::cli::NoAbbreviations
 /// @param _args The command-line arguments to parse
 /// @return A Result containing the parsed struct or an error
 template <class T, class... Ps,
@@ -79,7 +80,8 @@ rfl::Result<T> read(R&& _args) {
 /// argv[0] is skipped as the program name. See the sequence overload above
 /// for the supported syntax.
 /// @tparam T The struct type to parse into
-/// @tparam Ps Optional processors to apply during parsing
+/// @tparam Ps Optional processors to apply during parsing, including
+/// settings such as rfl::NoExtraFields and rfl::cli::NoAbbreviations
 /// @param argc Number of command-line arguments
 /// @param argv Array of command-line argument strings
 /// @return A Result containing the parsed struct or an error
