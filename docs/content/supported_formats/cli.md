@@ -208,6 +208,35 @@ option in a token treats the next token as it would alone (`-qv false` sets
 - Grouping needs the struct: the public `rfl::cli::parse_argv` reads `-abc`
   as the one short option `abc`.
 
+## Lists and repeated options
+
+A field that is read as a list (`std::vector`, `std::set`, `std::deque` and
+the like, `std::array`, `rfl::Array`, tuples and pairs, inside any of the
+wrappers above) takes comma-separated items. Its option can also be
+repeated: every occurrence is split at the commas, and the items are added
+in argv order.
+
+```cpp
+struct Config {
+  rfl::Short<"r", std::vector<std::string>> report;
+};
+
+// ./app --report a,b --report c        ->  report = {"a", "b", "c"}
+// ./app -r a --report b --report=c     ->  report = {"a", "b", "c"}
+```
+
+- Long and short spellings of a field all add to it.
+- Repeating is the same as joining with a comma, so the size of a
+  `std::array` and validators such as `rfl::Size` see all items. An empty
+  occurrence (`--report=`) adds none.
+- Nested lists (`--database.replicas a --database.replicas b`) and map
+  entries whose values are lists (`--groups.x a --groups.x b`) work the
+  same way.
+
+Any other option can be given only once. That includes nested
+fields and map entries: `Duplicate argument: --output`,
+`Duplicate short argument: -o`, `Conflict: '-o' and '--output' both provided.`
+
 ## Combining wrappers
 
 `Short` and `Positional` can be nested with each other and with
@@ -343,6 +372,7 @@ be given:
 | Field | Synopsis | Detail |
 |---|---|---|
 | `bool` | `--verbose[=<bool>]` | |
+| list (vector, set, array, ...) | `--tags=<v1,v2,...>` | `Can be repeated.` |
 
 `rfl::Positional` and `rfl::Short` are found through the other wrappers, as
 the parser does (see [Combining wrappers](#combining-wrappers)), so
@@ -384,7 +414,7 @@ int main(int argc, char* argv[]) {
 | `bool` | `--flag` or `--flag=true` | No `=` implies `true` |
 | `enum` | `--key=value_name` | Via `rfl::string_to_enum` |
 | `std::optional<T>` | omit for `nullopt` | |
-| `std::vector<T>` | `--key=a,b,c` | Comma-separated; empty elements skipped |
+| `std::vector<T>` | `--key=a,b,c` or `--key a --key b,c` | Comma-separated; empty elements skipped; [repeatable](#lists-and-repeated-options) |
 | Nested struct | `--parent.child=val` | Dot-separated path |
 | `rfl::Flatten<T>` | fields inlined | No prefix needed |
 | `rfl::Rename<"x", T>` | `--x=val` | Bypasses kebab conversion |

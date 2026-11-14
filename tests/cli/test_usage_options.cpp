@@ -6,9 +6,9 @@
 #include <string>
 #include <vector>
 
-// rfl::cli::usage for the parser's option features: wrappers in any order
-// and positional order. Each test also reads the arguments as the help
-// spells them.
+// rfl::cli::usage for the parser's option features: wrappers in any order,
+// repeated list options and positional order. Each test also reads the
+// arguments as the help spells them.
 namespace test_usage_options {
 
 template <class T, class... Ps>
@@ -17,6 +17,8 @@ rfl::Result<T> read(std::vector<const char*> _args) {
   return rfl::cli::read<T, Ps...>(static_cast<int>(_args.size()),
                                   const_cast<char**>(_args.data()));
 }
+
+using Strings = std::vector<std::string>;
 
 struct WrapperOrder {
   rfl::Description<"Where to write", rfl::Short<"o", std::string>> output;
@@ -44,6 +46,31 @@ TEST(cli, test_usage_wrapper_order) {
   ASSERT_TRUE(defaulted) << defaulted.error().what();
   EXPECT_EQ(defaulted.value().input.value().value(), "in.txt");
   EXPECT_FALSE(read<WrapperOrder>({"data.csv"}));
+}
+
+struct Lists {
+  rfl::Short<"r", rfl::Description<"Reports to write", Strings>> report;
+  rfl::DefaultVal<Strings> tags = Strings{"a", "b"};
+  rfl::Positional<std::string> command;
+};
+
+TEST(cli, test_usage_lists) {
+  EXPECT_EQ(rfl::cli::usage<Lists>("app", true),
+            "Usage: app -r|--report=<v1,v2,...> [--tags=<v1,v2,...>] "
+            "<command>\n"
+            "\n"
+            "Arguments:\n"
+            "  -r, --report=<v1,v2,...>  Reports to write. Can be repeated. "
+            "Required.\n"
+            "  --tags=<v1,v2,...>        Default: a,b. Can be repeated.\n"
+            "  <command>                 Required.\n");
+
+  const auto result =
+      read<Lists>({"-r", "a", "run", "--report=b,c", "--tags", "t"});
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().report.value().value(), (Strings{"a", "b", "c"}));
+  EXPECT_EQ(result.value().tags.value(), (Strings{"t"}));
+  EXPECT_EQ(result.value().command.value(), "run");
 }
 
 /// The parser fills the outermost rfl::Positional fields first, then those
