@@ -311,4 +311,27 @@ TEST(cli, test_help_version_wide) {
   EXPECT_EQ(text_of(result), "copy 1.2.0\n");
 }
 
+using Strings = std::vector<std::string>;
+
+// recipe [options] <name> <args...>, as in test_options_first.cpp.
+struct Recipe {
+  rfl::Short<"v", std::optional<bool>> verbose;
+  rfl::Positional<std::string> name;
+  rfl::Positional<rfl::DefaultVal<Strings>> args;
+};
+
+TEST(cli, test_help_version_options_first) {
+  using Settings = rfl::cli::App<"recipe">;
+  // `--help` before the first positional argument is the help. After it,
+  // it is passed through, as every later token is.
+  EXPECT_EQ((kind_of(read_app<Recipe, Settings, rfl::cli::OptionsFirst,
+                              rfl::cli::ListDelimiter<"">>({"-v", "--help"}))),
+            Kind::help);
+  const auto passed = read_app<Recipe, Settings, rfl::cli::OptionsFirst,
+                               rfl::cli::ListDelimiter<"">>({"build", "--help"});
+  ASSERT_TRUE(passed) << passed.error().what();
+  EXPECT_EQ(std::get<Recipe>(*passed).args.value().value(),
+            (Strings{"--help"}));
+}
+
 }  // namespace test_help_version
