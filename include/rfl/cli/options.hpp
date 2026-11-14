@@ -29,6 +29,7 @@
 #include "../internal/processed_t.hpp"
 #include "../parsing/is_string_map.hpp"
 #include "Parser.hpp"
+#include "SeparateOptionValues.hpp"
 #include "Reader.hpp"
 
 namespace rfl::cli::internal {
@@ -38,7 +39,8 @@ enum class OptionKind {
   /// A boolean field: `--flag` or `-f`. `--flag` never takes the next
   /// token; `-f` takes it only if it is `true`, `false`, `1` or `0`.
   flag,
-  /// A field that takes a value: `--key=value`, `-k value` or `-k=value`.
+  /// A field that takes a value: `--key=value`, `-k value`, `-k=value`, and
+  /// with rfl::cli::SeparateOptionValues `--key value`.
   value,
   /// A known path whose kind cannot be decided from the type (a nested
   /// struct, a variant, rfl::Generic, or a sub-key of a variant). `--key`
@@ -55,7 +57,7 @@ struct Option {
 };
 
 /// The options that a target struct accepts, built from its fields by
-/// make_options on every read. parse_argv uses it to decide whether a short
+/// make_options on every read. parse_argv uses it to decide whether an
 /// option takes the next token as its value and whether a long option is
 /// known, and resolve_args to map short aliases and positional arguments to
 /// fields. Paths are dotted
@@ -91,6 +93,10 @@ struct Options {
   /// sets it. Without a table (the table-less parse_argv), `-abc` is the
   /// one short option `abc`.
   bool group_short_options = false;
+
+  /// Whether a long option that takes a value takes it from the next token
+  /// when it is given without '=' (rfl::cli::SeparateOptionValues).
+  bool separate_values = false;
 
   /// Whether tokens such as `-5` and `-.5` are short options rather than
   /// negative numbers. They are when parse_argv is called without the
@@ -515,15 +521,20 @@ void collect_top_level_options(Options* _options) {
 /// @tparam ProcessorsType The processors applied to the struct
 /// @tparam _all_paths Whether to list every long option through nested
 /// structs, maps and rfl::ExtraFields, rather than only the top-level fields.
-/// Only rfl::NoExtraFields needs them all, to reject unknown options.
+/// Only rfl::NoExtraFields, to reject unknown options, and
+/// rfl::cli::SeparateOptionValues, to tell whether a nested option takes the
+/// next token, need them all.
 /// @return The options, with reject_unknown set if ProcessorsType contains
-/// rfl::NoExtraFields
+/// rfl::NoExtraFields, and separate_values if it contains
+/// rfl::cli::SeparateOptionValues
 template <class T, class ProcessorsType,
-          bool _all_paths = rfl::internal::no_extra_fields_v<ProcessorsType>>
+          bool _all_paths = rfl::internal::no_extra_fields_v<ProcessorsType>
+                            || separate_option_values_v<ProcessorsType>>
 Options make_options() {
   Options options;
   options.group_short_options = true;
   options.reject_unknown = rfl::internal::no_extra_fields_v<ProcessorsType>;
+  options.separate_values = separate_option_values_v<ProcessorsType>;
   using U = unwrapped_option_t<T, ProcessorsType>;
   if constexpr (_all_paths) {
     collect_value_options<T, ProcessorsType, type_list<>>(&options);
