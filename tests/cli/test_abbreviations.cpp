@@ -32,6 +32,7 @@ struct Export {
   std::optional<std::string> format_version;
   std::optional<bool> force_export;
   std::optional<std::vector<std::string>> report;
+  rfl::ImplicitValue<std::optional<std::string>, "all"> help_reports;
   rfl::Short<"o", std::optional<std::string>> output;
   rfl::Positional<std::optional<std::string>> input_file;
   std::optional<Database> database;
@@ -68,6 +69,17 @@ TEST(cli, test_abbreviation_flag) {
   const auto with_equals = read<Export>({"--forc=false"});
   ASSERT_TRUE(with_equals) << with_equals.error().what();
   EXPECT_EQ(with_equals.value().force_export, false);
+}
+
+TEST(cli, test_abbreviation_implicit_value) {
+  const auto bare = read<Export>({"--help", "in.txt"});
+  ASSERT_TRUE(bare) << bare.error().what();
+  EXPECT_EQ(bare.value().help_reports().value(), "all");
+  EXPECT_EQ(bare.value().input_file(), "in.txt");
+
+  const auto with_value = read<Export>({"--help-r=memory"});
+  ASSERT_TRUE(with_value) << with_value.error().what();
+  EXPECT_EQ(with_value.value().help_reports().value(), "memory");
 }
 
 TEST(cli, test_abbreviation_exact_match_wins) {

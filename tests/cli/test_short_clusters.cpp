@@ -28,6 +28,8 @@ struct Opts {
   rfl::Short<"q", rfl::DefaultVal<bool>> quiet = false;
   rfl::Short<"f", std::optional<std::string>> format;
   rfl::Short<"p", std::optional<int>> port;
+  rfl::Short<"h", rfl::ImplicitValue<std::optional<std::string>>> help;
+  rfl::Short<"l", rfl::ImplicitValue<std::optional<int>, "3">> level;
   rfl::Positional<std::optional<std::string>> input;
   rfl::Positional<std::optional<std::string>> output;
 };
@@ -173,6 +175,23 @@ TEST(cli, test_short_cluster_duplicate) {
 
 TEST(cli, test_short_cluster_conflicts_with_long) {
   EXPECT_FALSE(read<Opts>({"-afcsv", "--format=json"}));
+}
+
+TEST(cli, test_short_cluster_implicit_value_attached) {
+  // getopt's optional argument: the rest of the token, if any.
+  const auto result = read<Opts>({"-a", "-hfoo"});
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().help().value(), "foo");
+
+  const auto grouped = read<Opts>({"-aqhfoo", "-l7"});
+  ASSERT_TRUE(grouped) << grouped.error().what();
+  EXPECT_TRUE(grouped.value().quiet().value());
+  EXPECT_EQ(grouped.value().help().value(), "foo");
+  EXPECT_EQ(grouped.value().level().value(), 7);
+
+  const auto equals = read<Opts>({"-aqh=foo"});
+  ASSERT_TRUE(equals) << equals.error().what();
+  EXPECT_EQ(equals.value().help().value(), "foo");
 }
 
 TEST(cli, test_short_negative_number_value) {

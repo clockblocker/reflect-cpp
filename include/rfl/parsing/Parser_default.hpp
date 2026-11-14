@@ -20,6 +20,7 @@
 #include "../internal/is_basic_type.hpp"
 #include "../internal/is_deprecated.hpp"
 #include "../internal/is_description.hpp"
+#include "../internal/is_implicit_value.hpp"
 #include "../internal/is_literal.hpp"
 #include "../internal/is_validator.hpp"
 #include "../internal/processed_t.hpp"
@@ -42,6 +43,7 @@
 #include "ParserEnum.hpp"
 #include "ParserExpected.hpp"
 #include "ParserFilepath.hpp"
+#include "ParserImplicitValue.hpp"
 #include "ParserOptional.hpp"
 #include "ParserPair.hpp"
 #include "ParserPositional.hpp"
@@ -180,6 +182,11 @@ struct Parser {
     } else if constexpr (is_positional_v<T>) {
       return ParserPositional<R, W, typename std::remove_cvref_t<T>::Type,
                               ProcessorsType>::read(_r, _var);
+
+    } else if constexpr (rfl::internal::is_implicit_value<
+                             std::remove_cvref_t<T>>::value) {
+      return ParserImplicitValue<R, W, std::remove_cvref_t<T>,
+                                 ProcessorsType>::read(_r, _var);
 
     } else if constexpr (is_reference_wrapper_v<T>) {
       return ParserReferenceWrapper<R, W, typename std::remove_cvref_t<T>::type,
@@ -377,6 +384,11 @@ struct Parser {
       ParserPositional<R, W, typename std::remove_cvref_t<T>::Type,
                        ProcessorsType>::write(_w, _var, _parent);
 
+    } else if constexpr (rfl::internal::is_implicit_value<
+                             std::remove_cvref_t<T>>::value) {
+      ParserImplicitValue<R, W, std::remove_cvref_t<T>,
+                          ProcessorsType>::write(_w, _var, _parent);
+
     } else if constexpr (is_reference_wrapper_v<T>) {
       ParserReferenceWrapper<R, W, typename std::remove_cvref_t<T>::type,
                              ProcessorsType>::write(_w, _var, _parent);
@@ -548,6 +560,10 @@ struct Parser {
     } else if constexpr (is_positional_v<U>) {
       return ParserPositional<R, W, typename U::Type,
                               ProcessorsType>::to_schema(_definitions);
+
+    } else if constexpr (rfl::internal::is_implicit_value<U>::value) {
+      return ParserImplicitValue<R, W, U, ProcessorsType>::to_schema(
+          _definitions);
 
     } else if constexpr (is_reference_wrapper_v<U>) {
       return ParserReferenceWrapper<R, W, typename U::type,
