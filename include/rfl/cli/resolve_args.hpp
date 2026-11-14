@@ -123,13 +123,53 @@ inline rfl::Result<std::map<std::string, std::string>> resolve_args(
   return std::move(result);
 }
 
+/// The error for a long option that abbreviates several options, worded
+/// like getopt_long's: "Option '--for' is ambiguous; possibilities:
+/// '--force-export', '--format'."
+inline std::string ambiguous_option_message(
+    const std::string& _key, const std::vector<std::string>& _names
+) {
+  auto msg = "Option '--" + _key + "' is ambiguous; possibilities: ";
+  for (size_t i = 0; i < _names.size(); ++i) {
+    msg += (i == 0 ? "'--" : ", '--") + _names[i] + "'";
+  }
+  return msg + ".";
+}
+
+/// Replaces the long options in `_named` that match no field by the one long
+/// option they abbreviate (rfl::cli::AllowAbbreviations), as
+/// parse_string_views does while parsing.
+inline rfl::Result<std::map<std::string, std::string>> expand_abbreviations(
+    std::map<std::string, std::string> _named, const Options& _options) {
+  std::map<std::string, std::string> expanded;
+  for (auto& [key, value] : _named) {
+    auto name = key;
+    if (_options.find_long(key).kind == OptionKind::unknown) {
+      const auto names = _options.find_abbreviations(key);
+      if (names.size() > 1) {
+        return rfl::error(ambiguous_option_message(key, names));
+      }
+      if (names.size() == 1) {
+        name = names.front();
+      }
+    }
+    if (!expanded.emplace(name, std::move(value)).second) {
+      return rfl::error("Duplicate argument: --" + name);
+    }
+  }
+  return expanded;
+}
+
 }  // namespace internal
 
 /// Resolves ParsedArgs into a flat key-value map using compile-time
 /// metadata from the target struct T. Like the overload taking the options
 /// of T, but for arguments parsed by parse_argv without them: values that
 /// boolean short options took from the next token are returned to the
-/// positional arguments.
+/// positional arguments. With rfl::cli::AllowAbbreviations, long options
+/// that match no field are expanded here (`--rep=a` for `--report=a`), but
+/// parse_argv, which does not know the struct, has already read
+/// `--rep value` as `--rep` and a positional argument.
 /// @tparam T The target struct type
 /// @tparam ProcessorsType The processors applied to the struct
 /// @param _parsed The parsed command-line arguments
@@ -142,6 +182,14 @@ rfl::Result<std::map<std::string, std::string>> resolve_args(
   const auto short_names = internal::check_short_names(options);
   if (!short_names) {
     return rfl::error(short_names.error().what());
+  }
+  if (options.allow_abbreviations) {
+    auto named =
+        internal::expand_abbreviations(std::move(_parsed.named), options);
+    if (!named) {
+      return rfl::error(named.error().what());
+    }
+    _parsed.named = std::move(*named);
   }
   internal::apply_option_kinds(options, &_parsed);
   return internal::resolve_args(std::move(_parsed), options);
