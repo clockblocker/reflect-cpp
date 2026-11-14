@@ -99,8 +99,9 @@ The public `rfl::cli::parse_argv` does not know the struct, so it reads
 
 ## Unknown options
 
-By default, long options that match no field are ignored, and they do not
-consume the next token. Pass `rfl::NoExtraFields` to reject them:
+By default, long options that match no field, not even as an abbreviation
+(below), are ignored, and they do not consume the next token. Pass
+`rfl::NoExtraFields` to reject them:
 
 ```cpp
 const auto result = rfl::cli::read<Config, rfl::NoExtraFields>(argc, argv);
@@ -108,6 +109,39 @@ const auto result = rfl::cli::read<Config, rfl::NoExtraFields>(argc, argv);
 ```
 
 Unknown short options are always an error.
+
+## Abbreviated long options
+
+A long option can be shortened to a prefix that matches only one option:
+with fields `report` and `format`, `--rep=a`, `--rep a` and `--form` stand
+for `--report=a`, `--report a` and `--format`. This works for flags,
+positional fields given by name and nested fields, where only the last part
+of the dotted name is shortened: `--database.h` stands for
+`--database.host`, but `--data` and `--database.` stand for nothing.
+
+- An exact name always wins: `--format` is `--format` even when
+  `--format-version` exists.
+- A prefix of several options is an error, even without `rfl::NoExtraFields`:
+  `Option '--for' is ambiguous; possibilities: '--force-export', '--format'.`
+  A field has only one long name, so the matches are always different
+  fields.
+- A prefix of no option is an unknown option, as above.
+- Short options, map keys and `rfl::ExtraFields` keys are never
+  abbreviated. Under `rfl::ExtraFields`, an unknown name is an extra key.
+
+Abbreviations are on by default, so an option that matches no field is
+not always unknown: `--rep` sets `--report` if that is its only match. With
+a field `verbose_logging` and no `verbose`, `--verbose` sets
+`verbose_logging`. `rfl::NoExtraFields` does not stop this: with a field
+`port_range` and no `port`, `--port=8080` fills `port_range` instead of
+failing. Adding an option can make an abbreviation ambiguous, so scripts
+should spell options out. `rfl::cli::NoAbbreviations` accepts exact names
+only, and other formats ignore it:
+
+```cpp
+rfl::cli::read<Config, rfl::cli::NoAbbreviations>(argc, argv);
+// ./app --rep=a   ->  --rep is an unknown option
+```
 
 ## Positional arguments
 
@@ -447,6 +481,7 @@ Parsing proceeds in three stages:
 - `include/rfl/cli/Parser.hpp` — Parser type alias
 - `include/rfl/cli/parse_argv.hpp` — `argv` -> `ParsedArgs`
 - `include/rfl/cli/options.hpp` — the internal option table: the long, short and positional options of a struct
+- `include/rfl/cli/NoAbbreviations.hpp` — `NoAbbreviations` processor
 - `include/rfl/cli/resolve_args.hpp` — `ParsedArgs` -> `map<string, string>`
 - `include/rfl/cli/usage.hpp` — `usage()` help text, built on `rfl::parsing::schema` and the internal option table
 - `include/rfl/cli.hpp` — aggregator header
