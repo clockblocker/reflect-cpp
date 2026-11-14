@@ -79,7 +79,8 @@ struct Options {
 
   /// The paths of the rfl::Positional fields, in declaration order, wherever
   /// rfl::Positional sits among a field's wrappers. Each takes one positional
-  /// argument.
+  /// argument, except that a list as the last one takes the remaining
+  /// positional arguments (see last_positional_is_list).
   std::vector<std::string> positionals;
 
   /// Prefixes (ending in path_separator, or empty for the root) under which
@@ -208,6 +209,12 @@ struct Options {
   Option find_short(const std::string& _name) const {
     const auto it = short_options.find(_name);
     return it == short_options.end() ? Option{} : find_long(it->second);
+  }
+
+  /// Whether the last rfl::Positional field is a list. It then takes every
+  /// positional argument after those of the other positional fields.
+  bool last_positional_is_list() const {
+    return !positionals.empty() && find_long(positionals.back()).is_list;
   }
 
  private:
