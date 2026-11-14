@@ -52,6 +52,8 @@ const auto homer = rfl::json::read<Person, rfl::NoFieldNames>(R"(["Homer"])").va
 // homer.town == ""
 ```
 
+An `rfl::DefaultVal` inside `rfl::Short`, `rfl::Positional`, `rfl::Description`, `rfl::Deprecated` or `rfl::Rename`, in any order, works like a bare one: a field `rfl::Description<"Worker threads", rfl::DefaultVal<int>> jobs = 4;` may be omitted and is then 4.
+
 ## All fields need a valid default value
 
 A struct that contains an `rfl::DefaultVal` is default-constructed before it is read. The fields found in the input are then written into it. This means that every field of the struct needs a valid default value, even a required field that is in the input.
@@ -88,9 +90,9 @@ The field is still required. If `favorite_foods` is missing in the input, you ge
 
 The same restriction applies to every struct that is read with the `rfl::DefaultIfMissing` processor, whether it contains an `rfl::DefaultVal` or not.
 
-If the struct cannot be default-constructed at all, for instance because a field's type has no default constructor, it is read without its default values, so its `rfl::DefaultVal` fields must be present in the input.
+If the struct cannot be default-constructed at all, for instance because a field's type has no default constructor, it is read without its default values, so its `rfl::DefaultVal` fields must be present in the input. The same goes for a struct whose default constructor throws if all its `rfl::DefaultVal` fields are inside `rfl::Short`, `rfl::Positional`, `rfl::Description` or `rfl::Deprecated`; with a bare `rfl::DefaultVal`, you get the error above.
 
-An `rfl::NamedTuple` has no in-class initializers. A missing `rfl::DefaultVal<T>` field in it is set to `T{}`. If `T` has no default constructor, or `T{}` throws (for instance a validator that rejects its zero value), the field must be present in the input.
+An `rfl::NamedTuple` has no in-class initializers. A missing bare `rfl::DefaultVal<T>` field in it is set to `T{}`. If `T` has no default constructor, or `T{}` throws (for instance a validator that rejects its zero value), the field must be present in the input. An `rfl::DefaultVal` inside `rfl::Short`, `rfl::Positional`, `rfl::Description` or `rfl::Deprecated` must always be present in an `rfl::NamedTuple`.
 
 ## When to use
 
