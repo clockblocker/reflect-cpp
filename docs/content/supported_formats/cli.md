@@ -278,23 +278,39 @@ struct Config {
 
 `rfl::cli::usage<Config>("app", true)` returns the usage line, where
 optional arguments are in brackets, and one line per argument, with its
-description and whether it is required. `rfl::cli::usage<Config>("app")`
-returns only the usage line.
+description, the constraints of its validators, its default and whether it
+is required. `rfl::cli::usage<Config>("app")` returns only the usage line.
 
 ```
 Usage: app <input-file> -p|--port=<value> [--log-level=<debug|info|warn>] --tags=<v1,v2,...> --database.host=<value> --database.port=<value>
 
 Arguments:
   <input-file>                   Path to the input file. Required.
-  -p, --port=<value>             Port to listen on. Required.
+  -p, --port=<value>             Port to listen on. Range: 1..65535. Required.
   --log-level=<debug|info|warn>  Minimum level to log
-  --tags=<v1,v2,...>             Tags to attach. Required.
+  --tags=<v1,v2,...>             Tags to attach. Size: >= 1. Required.
   --database.host=<value>        Required.
   --database.port=<value>        Required.
 ```
 
-Fields wrapped in `rfl::DefaultVal` are optional, and so are all fields if
-you pass `rfl::DefaultIfMissing` (to both `read` and `usage`).
+Defaults are shown for fields wrapped in `rfl::DefaultVal`, and for all fields
+if you pass `rfl::DefaultIfMissing` (to both `read` and `usage`), as long as
+the struct can be default-constructed:
+
+```cpp
+struct Server {
+  rfl::DefaultVal<std::string> host = "localhost";
+  rfl::DefaultVal<int> threads = 4;
+  rfl::DefaultVal<bool> dry_run = false;
+};
+```
+
+```
+Arguments:
+  --host=<value>      Default: localhost.
+  --threads=<value>   Default: 4.
+  --dry-run[=<bool>]  Default: false.
+```
 
 The parser takes the defaults of `rfl::DefaultVal` fields from a
 default-constructed struct. If the struct cannot be default-constructed, for
@@ -303,7 +319,7 @@ fields are required, and the help says so.
 
 An `rfl::DefaultVal` inside `rfl::Short`, `rfl::Positional`, `rfl::Description`
 or `rfl::Deprecated`, in any order, makes the field optional for the parser,
-and the help shows it in brackets:
+and the help shows it in brackets with its default:
 
 ```cpp
 struct Logging {
@@ -317,7 +333,7 @@ struct Logging {
 Usage: app [-l|--log-level=<debug|info|warn>]
 
 Arguments:
-  -l, --log-level=<debug|info|warn>  Minimum level to log
+  -l, --log-level=<debug|info|warn>  Minimum level to log. Default: info.
 ```
 
 The help is built from the same internal option table that `read` parses

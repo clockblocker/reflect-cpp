@@ -31,7 +31,7 @@ TEST(cli, test_usage_wrapper_order) {
             "\n"
             "Arguments:\n"
             "  -o, --output=<value>    Where to write. Required.\n"
-            "  <input>\n"
+            "  <input>                 Default: in.txt.\n"
             "  -v, --verbose[=<bool>]  Be verbose\n");
 
   const auto result = read<WrapperOrder>({"-v", "-o", "out", "data.csv"});
