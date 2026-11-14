@@ -2,6 +2,7 @@
 #define RFL_CLI_HPP_
 
 #include "../rfl.hpp"
+#include "cli/KeepEmptyItems.hpp"
 #include "cli/ListDelimiter.hpp"
 #include "cli/NoAbbreviations.hpp"
 #include "cli/Parser.hpp"
