@@ -59,6 +59,10 @@ namespace internal {
 /// token (`-qf csv`). Without `_options` from make_options, short options
 /// are not grouped: `-abc` is the short option `abc`.
 /// Every element of `_args` is parsed; nothing is skipped as the program name.
+/// Every occurrence of a list option (Option::is_list) adds to it, however
+/// it is spelled. Its first occurrence is kept in `named` under its long
+/// name, and the later ones in `later_occurrences`, in argv order. Any other
+/// option given twice is an error.
 /// @param _args The command-line arguments to parse
 /// @param _options The options of the target struct (see make_options)
 /// @return A Result containing ParsedArgs with categorized arguments or an error
@@ -72,8 +76,33 @@ inline rfl::Result<ParsedArgs> parse_string_views(
   const bool negative_numbers_are_options =
       _options.negative_numbers_are_options;
 
+  // Every occurrence of a list option adds to it. Any other option can be
+  // given only once.
+  const auto add_long = [&](std::string _key, std::string _val,
+                            const Option& _option,
+                            std::string_view _raw) -> rfl::Result<bool> {
+    const auto it = result.named.find(_key);
+    if (it == result.named.end()) {
+      result.named.emplace(std::move(_key), std::move(_val));
+    }
+    else if (_option.is_list) {
+      result.later_occurrences[it->first].emplace_back(std::move(_val));
+    }
+    else {
+      return error("Duplicate argument: " + std::string(_raw));
+    }
+    return true;
+  };
+
   const auto add_short = [&](std::string _key, std::string _val,
+                             const Option& _option,
                              std::string_view _raw) -> rfl::Result<bool> {
+    if (_option.is_list) {
+      // Under its long name, so that `-r a --report b` keeps argv order. A
+      // short option is only a list if it is in `_options`.
+      return add_long(_options.short_options.find(_key)->second,
+                      std::move(_val), _option, _raw);
+    }
     result.short_order.emplace_back(_key);
     if (!result.short_args.emplace(std::move(_key), std::move(_val)).second) {
       return error("Duplicate short argument: " + std::string(_raw));
@@ -154,9 +183,8 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         }
         val = std::string(_args[++i]);
       }
-      if (!result.named.emplace(std::move(key), std::move(val)).second) {
-        return error("Duplicate argument: " + std::string(arg_raw));
-      }
+      const auto r = add_long(std::move(key), std::move(val), option, arg_raw);
+      if (!r) { return error(r.error().what()); }
       continue;
     }
 
@@ -216,7 +244,7 @@ inline rfl::Result<ParsedArgs> parse_string_views(
                          + std::string(arg_raw) + "'. Write '" + name
                          + std::string(rest) + "' on its own.");
           }
-          const auto r = add_short(std::move(key), "", arg_raw);
+          const auto r = add_short(std::move(key), "", option, arg_raw);
           if (!r) { return error(r.error().what()); }
           continue;
         }
@@ -233,7 +261,8 @@ inline rfl::Result<ParsedArgs> parse_string_views(
           val = std::move(*v);
         }
 
-        const auto r = add_short(std::move(key), std::move(val), arg_raw);
+        const auto r =
+            add_short(std::move(key), std::move(val), option, arg_raw);
         if (!r) { return error(r.error().what()); }
         break;
       }
