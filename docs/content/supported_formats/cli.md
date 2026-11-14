@@ -276,8 +276,8 @@ struct Config {
 
 `rfl::cli::usage<Config>("app", true).value()` is the usage line, where
 optional arguments are in brackets, and one line per argument, with its
-description and whether it is required. `rfl::cli::usage<Config>("app")`
-gives only the usage line.
+description, its default and whether it is required.
+`rfl::cli::usage<Config>("app")` gives only the usage line.
 
 ```
 Usage: app <input-file> -p|--port=<value> [--log-level=<debug|info|warn>] --tags=<v1,v2,...> --database.host=<value> --database.port=<value>
@@ -301,6 +301,24 @@ fields are required if they are all inside another wrapper, and the help
 says so. With a bare `rfl::DefaultVal`, such a struct cannot be read at all,
 and `usage` returns the error, as it does for two fields with the same
 short name.
+
+Defaults are shown for these fields, as long as the struct can be
+default-constructed:
+
+```cpp
+struct Server {
+  rfl::DefaultVal<std::string> host = "localhost";
+  rfl::DefaultVal<int> threads = 4;
+  rfl::DefaultVal<bool> dry_run = false;
+};
+```
+
+```
+Arguments:
+  --host=<value>      Default: localhost.
+  --threads=<value>   Default: 4.
+  --dry-run[=<bool>]  Default: false.
+```
 
 Each argument is shown as the option table that `read` parses with (see
 [Architecture](#architecture)) reads it: a `bool`, also inside a nested

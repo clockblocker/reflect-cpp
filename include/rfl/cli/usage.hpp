@@ -4,13 +4,18 @@
 #include <algorithm>
 #include <cstddef>
 #include <exception>
+#include <locale>
 #include <map>
+#include <optional>
 #include <set>
+#include <sstream>
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
+#include "../Generic.hpp"
 #include "../Processors.hpp"
 #include "../Result.hpp"
 #include "../SnakeCaseToKebabCase.hpp"
@@ -25,6 +30,7 @@
 #include "../parsing/schema/Definition.hpp"
 #include "../parsing/schema/Type.hpp"
 #include "../parsing/schema/make.hpp"
+#include "../to_generic.hpp"
 #include "Reader.hpp"
 #include "options.hpp"
 #include "resolve_args.hpp"
@@ -60,6 +66,7 @@ struct UsageArg {
   /// The allowed values of enums and literals.
   std::vector<std::string> choices;
   std::string description;
+  std::optional<std::string> default_value;
 };
 
 template <class NamedTupleType, class ProcessorsType, size_t _i>
@@ -119,6 +126,55 @@ bool usage_default_vals_are_optional() {
   }
 }
 
+/// Renders a number without locale-dependent separators.
+inline std::string usage_number_to_string(const double _value) {
+  std::ostringstream stream;
+  stream.imbue(std::locale::classic());
+  stream.precision(15);
+  stream << _value;
+  return stream.str();
+}
+
+/// Renders a default value the way it would be passed on the command line.
+/// Returns nullopt for values that cannot be rendered sensibly (null,
+/// objects, empty arrays).
+/// Lists are joined with the list delimiter.
+inline std::optional<std::string> usage_default_to_string(
+    const Generic& _value) {
+  return std::visit(
+      [](const auto& _v) -> std::optional<std::string> {
+        using V = std::remove_cvref_t<decltype(_v)>;
+        if constexpr (std::is_same_v<V, bool>) {
+          return _v ? "true" : "false";
+        } else if constexpr (std::is_same_v<V, int64_t>) {
+          return std::to_string(_v);
+        } else if constexpr (std::is_same_v<V, double>) {
+          return usage_number_to_string(_v);
+        } else if constexpr (std::is_same_v<V, std::string>) {
+          return _v.empty() ? std::string("\"\"") : _v;
+        } else if constexpr (std::is_same_v<V, Generic::Array>) {
+          if (_v.empty()) {
+            return std::nullopt;
+          }
+          std::string joined;
+          for (const auto& element : _v) {
+            const auto str = usage_default_to_string(element);
+            if (!str) {
+              return std::nullopt;
+            }
+            if (!joined.empty()) {
+              joined += array_delimiter;
+            }
+            joined += *str;
+          }
+          return joined;
+        } else {
+          return std::nullopt;
+        }
+      },
+      _value.variant());
+}
+
 /// Walks the format-agnostic schema of the struct and collects one UsageArg
 /// per command-line argument, in declaration order.
 class UsageCollector {
@@ -141,16 +197,19 @@ class UsageCollector {
   /// Collects the arguments.
   /// @param _all_optional Whether no argument is required
   /// (rfl::DefaultIfMissing).
-  std::vector<UsageArg> collect(const bool _all_optional) {
+  /// @param _defaults The default values of all fields, if known.
+  std::vector<UsageArg> collect(const bool _all_optional,
+                                const std::optional<Generic>& _defaults) {
     auto root = UsageArg{};
     root.required = !_all_optional;
-    add(definition_->root_, std::move(root), false);
+    add(definition_->root_, std::move(root), _defaults, false);
     return std::move(args_);
   }
 
  private:
   /// @param _outermost Whether _type is the outermost type of a field.
-  void add(const Type& _type, UsageArg _arg, const bool _outermost) {
+  void add(const Type& _type, UsageArg _arg,
+           const std::optional<Generic>& _default, const bool _outermost) {
     _type.variant_.visit([&](const auto& _t) {
       using T = std::remove_cvref_t<decltype(_t)>;
       // Description and Deprecated do not change how a field is read, so a
@@ -161,13 +220,13 @@ class UsageCollector {
         if (_arg.description.empty()) {
           _arg.description = _t.description_;
         }
-        add(*_t.type_, std::move(_arg), _outermost);
+        add(*_t.type_, std::move(_arg), _default, _outermost);
 
       } else if constexpr (std::is_same_v<T, Type::Optional>) {
         if (!_arg.required_is_known && !optionals_are_required_) {
           _arg.required = false;
         }
-        add(*_t.type_, std::move(_arg), false);
+        add(*_t.type_, std::move(_arg), _default, false);
 
       } else if constexpr (std::is_same_v<T, Type::DefaultVal>) {
         // Like the parser (is_default_val_v), only count a DefaultVal that
@@ -177,57 +236,59 @@ class UsageCollector {
         if (!_arg.required_is_known && _outermost && _t.default_value_) {
           _arg.required = false;
         }
-        add(*_t.type_, std::move(_arg), false);
+        add(*_t.type_, std::move(_arg),
+            _t.default_value_ ? _t.default_value_ : _default, false);
 
       } else if constexpr (std::is_same_v<T, Type::Validated>) {
-        add(*_t.type_, std::move(_arg), false);
+        add(*_t.type_, std::move(_arg), _default, false);
 
       } else if constexpr (std::is_same_v<T, Type::Reference>) {
         const auto it = definition_->definitions_.find(_t.name_);
         if (it == definition_->definitions_.end()
             || !visiting_.insert(_t.name_).second) {
           // Unknown or recursive: there is no finite set of paths to list.
-          add_leaf(std::move(_arg));
+          add_leaf(std::move(_arg), _default);
           return;
         }
-        add(it->second, std::move(_arg), _outermost);
+        add(it->second, std::move(_arg), _default, _outermost);
         visiting_.erase(_t.name_);
 
       } else if constexpr (std::is_same_v<T, Type::Object>) {
-        add_object(_t, _arg);
+        add_object(_t, _arg, _default);
 
       } else if constexpr (std::is_same_v<T, Type::StringMap>) {
         _arg.name += path_separator;
         _arg.name += "<key>";
-        add_leaf(std::move(_arg));
+        add_leaf(std::move(_arg), std::nullopt);
 
       } else if constexpr (std::is_same_v<T, Type::Boolean>) {
         _arg.value = "<bool>";
-        add_leaf(std::move(_arg));
+        add_leaf(std::move(_arg), _default);
 
       } else if constexpr (std::is_same_v<T, Type::Literal>) {
-        add_choices(_t.values_, std::move(_arg));
+        add_choices(_t.values_, std::move(_arg), _default);
 
       } else if constexpr (std::is_same_v<T, Type::DescribedLiteral>) {
         auto values = std::vector<std::string>();
         for (const auto& v : _t.values_) {
           values.push_back(v.value_);
         }
-        add_choices(values, std::move(_arg));
+        add_choices(values, std::move(_arg), _default);
 
       } else if constexpr (std::is_same_v<T, Type::TypedArray>
                            || std::is_same_v<T, Type::FixedSizeTypedArray>
                            || std::is_same_v<T, Type::Tuple>) {
         _arg.is_list = true;
-        add_leaf(std::move(_arg));
+        add_leaf(std::move(_arg), _default);
 
       } else {
-        add_leaf(std::move(_arg));
+        add_leaf(std::move(_arg), _default);
       }
     });
   }
 
-  void add_object(const Type::Object& _object, const UsageArg& _parent) {
+  void add_object(const Type::Object& _object, const UsageArg& _parent,
+                  const std::optional<Generic>& _defaults) {
     const bool is_root = _parent.name.empty();
     for (const auto& [name, type] : _object.types_) {
       auto arg = UsageArg{};
@@ -248,21 +309,31 @@ class UsageCollector {
           arg.required_is_known = true;
         }
       }
-      add(type, std::move(arg), true);
+      auto child_default = std::optional<Generic>();
+      const auto* obj = _defaults
+                            ? std::get_if<Generic::Object>(&_defaults->variant())
+                            : nullptr;
+      if (obj) {
+        if (auto res = obj->get(name)) {
+          child_default = std::move(*res);
+        }
+      }
+      add(type, std::move(arg), child_default, true);
     }
   }
 
-  void add_choices(const std::vector<std::string>& _values, UsageArg _arg) {
+  void add_choices(const std::vector<std::string>& _values, UsageArg _arg,
+                   const std::optional<Generic>& _default) {
     _arg.choices = _values;
     _arg.value = "<";
     for (size_t i = 0; i < _values.size(); ++i) {
       _arg.value += (i == 0 ? "" : "|") + _values[i];
     }
     _arg.value += ">";
-    add_leaf(std::move(_arg));
+    add_leaf(std::move(_arg), _default);
   }
 
-  void add_leaf(UsageArg _arg) {
+  void add_leaf(UsageArg _arg, const std::optional<Generic>& _default) {
     if (_arg.name.empty()) {
       return;
     }
@@ -270,6 +341,9 @@ class UsageCollector {
     // key ("labels.<key>") is found through its open prefix.
     const auto option = options_->find_long(_arg.name);
     _arg.kind = option.kind;
+    if (_default) {
+      _arg.default_value = usage_default_to_string(*_default);
+    }
     args_.emplace_back(std::move(_arg));
   }
 
@@ -321,7 +395,7 @@ inline bool usage_ends_sentence(const std::string& _str) {
          && (_str.back() == '.' || _str.back() == '!' || _str.back() == '?');
 }
 
-/// "Port to connect on. Required."
+/// "Port to connect on. Default: 8080. Required."
 inline std::string usage_help_text(const UsageArg& _arg) {
   auto sentences = std::vector<std::string>();
   if (_arg.positional && !_arg.choices.empty()) {
@@ -330,6 +404,9 @@ inline std::string usage_help_text(const UsageArg& _arg) {
       choices += (i == 0 ? "" : "|") + _arg.choices[i];
     }
     sentences.push_back(std::move(choices));
+  }
+  if (_arg.default_value) {
+    sentences.push_back("Default: " + *_arg.default_value);
   }
   if (_arg.required) {
     sentences.push_back("Required");
@@ -388,6 +465,26 @@ inline std::string format_usage(const std::string& _program_name,
   return out;
 }
 
+/// The default values of all fields, if they are known: only with
+/// rfl::DefaultIfMissing (otherwise, plain fields are required and their
+/// default member initializers are never used) and only if T is
+/// default-constructible, which read<T, rfl::DefaultIfMissing> requires, too.
+template <class T, class... Ps>
+std::optional<Generic> usage_defaults() {
+  using ProcessorsType = Processors<SnakeCaseToKebabCase, Ps...>;
+  if constexpr (rfl::internal::default_if_missing_v<ProcessorsType>
+                && std::is_default_constructible_v<T>) {
+    try {
+      return rfl::to_generic<SnakeCaseToKebabCase, Ps...>(T{});
+    } catch (const std::exception&) {
+      // For instance, a default value that does not satisfy its validator.
+      return std::nullopt;
+    }
+  } else {
+    return std::nullopt;
+  }
+}
+
 }  // namespace internal
 
 /// Generates the usage line, and optionally a help text with one row per
@@ -395,8 +492,10 @@ inline std::string format_usage(const std::string& _program_name,
 /// It applies the same processors as `read`, so the names always match what
 /// the parser accepts (kebab-case, rfl::Rename, rfl::Flatten, nested paths).
 ///
-/// The help text lists the description (rfl::Description), the allowed
-/// values of enums and literals and whether the argument is required.
+/// The help text lists, where known, the description (rfl::Description), the
+/// allowed values of enums and literals, the default value (rfl::DefaultVal,
+/// or all fields with rfl::DefaultIfMissing) and whether the argument is
+/// required.
 /// @tparam T The struct type that the arguments are parsed into
 /// @tparam Ps The processors passed to `rfl::cli::read`
 /// @param _program_name The name shown after "Usage:", usually argv[0]
@@ -429,7 +528,8 @@ rfl::Result<std::string> usage(const std::string& _program_name,
               &definition, &meta, &options,
               rfl::internal::no_optionals_v<ProcessorsType>);
           const auto args = collector.collect(
-              rfl::internal::default_if_missing_v<ProcessorsType>);
+              rfl::internal::default_if_missing_v<ProcessorsType>,
+              internal::usage_defaults<T, Ps...>());
           return internal::format_usage(_program_name, args, _detailed);
         } catch (std::exception& e) {
           return error(e.what());
