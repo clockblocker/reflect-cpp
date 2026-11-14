@@ -90,6 +90,11 @@ struct Options {
   /// Whether options that match no field are an error (rfl::NoExtraFields).
   bool reject_unknown = false;
 
+  /// Whether short options can be grouped (`-qv`, `-fcsv`). make_options
+  /// sets it. Without a table (the table-less parse_argv), `-abc` is the
+  /// one short option `abc`.
+  bool group_short_options = false;
+
   /// Whether tokens such as `-5` and `-.5` are short options rather than
   /// negative numbers. They are when parse_argv is called without the
   /// struct. make_options clears it unless, as in argparse, a short option's
@@ -548,6 +553,7 @@ void collect_short_and_positional(Options* _options) {
 template <class T, class ProcessorsType>
 Options make_options() {
   Options options;
+  options.group_short_options = true;
   options.reject_unknown = rfl::internal::no_extra_fields_v<ProcessorsType>;
   using U = unwrapped_option_t<T, ProcessorsType>;
   collect_value_options<T, ProcessorsType, type_list<>>(&options);
