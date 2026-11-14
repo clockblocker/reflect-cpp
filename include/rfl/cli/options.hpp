@@ -40,7 +40,8 @@ enum class OptionKind {
   /// A boolean field: `--flag` or `-f`. `--flag` never takes the next
   /// token; `-f` takes it only if it is `true`, `false`, `1` or `0`.
   flag,
-  /// A field that takes a value: `--key=value`, `-k value` or `-k=value`.
+  /// A field that takes a value: `--key value`, `--key=value`, `-k value` or
+  /// `-k=value`.
   value,
   /// A known path whose kind cannot be decided from the type (a nested
   /// struct, a variant, rfl::Generic, or a sub-key of a variant). `--key`
@@ -57,7 +58,7 @@ struct Option {
 };
 
 /// The options that a target struct accepts, built from its fields by
-/// make_options on every read. parse_argv uses it to decide whether a short
+/// make_options on every read. parse_argv uses it to decide whether an
 /// option takes the next token as its value and whether a long option is
 /// known, and resolve_args to map short aliases and positional arguments to
 /// fields. Paths are dotted
