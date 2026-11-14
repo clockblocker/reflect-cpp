@@ -69,10 +69,38 @@ const auto result = rfl::cli::read<Config>(args);
 
 `rfl::cli::parse_argv` has the same overloads.
 
+## Long options
+
+A long option takes its value either after `=` or as the next token:
+
+```
+./app --host-name=localhost --port=8080 --verbose --tags=a,b,c
+./app --host-name localhost --port 8080 --verbose --tags a,b,c --rate -0.5
+```
+
+This works for every field that takes a value, including nested fields
+(`--database.host db.local`), entries of maps with string keys
+(`--labels.env prod`; other maps need `=`) and fields inside wrappers such
+as `rfl::Short`, `rfl::Description` or `rfl::DefaultVal`. The next token is
+the value unless it looks like an option (`-` followed by anything except a
+digit or `.`), so `--offset -5` works. If the value is missing, parsing
+fails with `Missing value for option '--sql'.` Use `=` to pass an empty
+value or one that starts with `-`: `--sql=`, `--pattern=-x`.
+
+Boolean fields (`bool`, `std::optional<bool>` and wrapped bools) are flags
+and never consume the next token: `--verbose input.txt` sets `verbose` and
+passes `input.txt` as a positional argument, and so does `--verbose 0` with
+`0`. To set a flag to `false`, write `--verbose=false`. A `std::variant`,
+`rfl::Variant`, `rfl::TaggedUnion` or `rfl::Generic` may hold a bool, so
+its long option never takes the next token either: pass its value with `=`.
+
+The public `rfl::cli::parse_argv` does not know the struct, so it reads
+`--sql SELECT` as `--sql` followed by a positional argument.
+
 ## Unknown options
 
-By default, long options that match no field are ignored. Pass
-`rfl::NoExtraFields` to reject them:
+By default, long options that match no field are ignored, and they do not
+consume the next token. Pass `rfl::NoExtraFields` to reject them:
 
 ```cpp
 const auto result = rfl::cli::read<Config, rfl::NoExtraFields>(argc, argv);
