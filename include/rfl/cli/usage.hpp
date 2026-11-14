@@ -56,6 +56,9 @@ struct UsageArg {
   OptionKind kind = OptionKind::value;
   /// Whether the field is a list, which can be repeated.
   bool is_list = false;
+  /// Whether the field is the last positional one and a list, so that it
+  /// takes the remaining positional arguments.
+  bool takes_rest = false;
   bool required = true;
   /// Whether `required` was taken from the parser's compile-time traits, so
   /// that the schema must not override it.
@@ -476,7 +479,8 @@ class UsageCollector {
 
   /// Puts the positional arguments in the order in which the parser fills
   /// them (Options::positionals: outermost rfl::Positional fields first),
-  /// in the places where positional arguments are.
+  /// in the places where positional arguments are, and marks the one that
+  /// takes the remaining arguments.
   void order_positionals() {
     const auto& order = options_->positionals;
     auto slots = std::vector<size_t>();
@@ -495,6 +499,8 @@ class UsageCollector {
                        return rank(_a) < rank(_b);
                      });
     for (size_t i = 0; i < slots.size(); ++i) {
+      positionals[i].takes_rest = options_->last_positional_is_list()
+                                  && positionals[i].name == order.back();
       args_[slots[i]] = std::move(positionals[i]);
     }
   }
@@ -520,11 +526,13 @@ inline std::string usage_value_to_string(const UsageArg& _arg) {
   return "<v1" + d + "v2" + d + "...>";
 }
 
-/// "<input-file>", "-p|--port=<value>", "--verbose[=<bool>]"
+/// "<input-file>", "<files>...", "-p|--port=<value>", "--verbose[=<bool>]"
 inline std::string usage_arg_to_string(const UsageArg& _arg,
                                        const std::string& _short_sep) {
   if (_arg.positional) {
-    return "<" + _arg.name + ">";
+    // A list as the last positional field takes the remaining arguments.
+    // Any other positional field takes one.
+    return "<" + _arg.name + ">" + (_arg.takes_rest ? "..." : "");
   }
   auto str = _arg.short_name.empty() ? std::string()
                                      : "-" + _arg.short_name + _short_sep;
