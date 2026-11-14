@@ -33,6 +33,7 @@
 #include "../to_generic.hpp"
 #include "App.hpp"
 #include "ListDelimiter.hpp"
+#include "OptionsFirst.hpp"
 #include "Reader.hpp"
 #include "options.hpp"
 
@@ -645,13 +646,21 @@ inline std::vector<UsageArg> builtin_usage_args(
 
 /// @param _header Shown before the usage line in the detailed form
 /// (rfl::cli::App).
+/// @param _options_first Whether the options end at the first positional
+/// argument (rfl::cli::OptionsFirst), so the synopsis lists them first.
 inline std::string format_usage(const std::string& _program_name,
                                 const std::vector<UsageArg>& _args,
                                 const bool _detailed,
                                 const std::optional<char> _delimiter,
+                                const bool _options_first,
                                 const std::string& _header) {
+  auto synopsis = _args;
+  if (_options_first) {
+    std::stable_partition(synopsis.begin(), synopsis.end(),
+                          [](const UsageArg& _arg) { return !_arg.positional; });
+  }
   auto out = (_detailed ? _header : std::string()) + "Usage: " + _program_name;
-  for (const auto& arg : _args) {
+  for (const auto& arg : synopsis) {
     const auto str = usage_arg_to_string(arg, "|", _delimiter);
     out += arg.required ? " " + str : " [" + str + "]";
   }
@@ -755,7 +764,7 @@ std::string usage(const std::string& _program_name,
       internal::usage_defaults<T, Ps...>());
   args.insert(args.end(), fields.begin(), fields.end());
   return internal::format_usage(
-      _program_name, args, _detailed, delimiter,
+      _program_name, args, _detailed, delimiter, options.options_first,
       internal::app_header<ProcessorsType>(_program_name));
 }
 

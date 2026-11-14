@@ -4,6 +4,7 @@
 #include "../rfl.hpp"
 #include "cli/ListDelimiter.hpp"
 #include "cli/NoAbbreviations.hpp"
+#include "cli/OptionsFirst.hpp"
 #include "cli/Parser.hpp"
 #include "cli/Reader.hpp"
 #include "cli/options.hpp"

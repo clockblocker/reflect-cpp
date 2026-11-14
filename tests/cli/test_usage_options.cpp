@@ -8,8 +8,9 @@
 
 // rfl::cli::usage for the parser's option features: rfl::ImplicitValue,
 // wrappers in any order, repeated list options, a list as the last
-// positional field and positional order. Each test also reads the arguments
-// as the help spells them.
+// positional field, positional order, rfl::cli::ListDelimiter and
+// rfl::cli::OptionsFirst. Each test also reads the arguments as the help
+// spells them.
 namespace test_usage_options {
 
 template <class T, class... Ps>
@@ -201,6 +202,44 @@ TEST(cli, test_usage_list_delimiter) {
   ASSERT_TRUE(no_split) << no_split.error().what();
   EXPECT_EQ(no_split.value().report.value().value(), (Strings{"a,b", "c"}));
   EXPECT_EQ(no_split.value().files.value().value(), (Strings{"x,y", "z"}));
+}
+
+// recipe [options] <name> <args...>, as in test_options_first.cpp.
+struct Recipe {
+  rfl::Short<"v", std::optional<bool>> verbose;
+  rfl::Positional<std::string> name;
+  rfl::Positional<rfl::DefaultVal<Strings>> args;
+  rfl::Short<"j", std::optional<int>> jobs;
+};
+
+TEST(cli, test_usage_options_first) {
+  // Without OptionsFirst, options and positional arguments can be mixed, so
+  // the synopsis keeps the declaration order.
+  EXPECT_EQ(rfl::cli::usage<Recipe>("recipe"),
+            "Usage: recipe [-v|--verbose[=<bool>]] <name> [<args>...] "
+            "[-j|--jobs=<value>]\n");
+
+  // With OptionsFirst, the options end at the first positional argument, so
+  // the synopsis lists them first. The rows keep the declaration order.
+  EXPECT_EQ(
+      (rfl::cli::usage<Recipe, rfl::cli::OptionsFirst,
+                       rfl::cli::ListDelimiter<"">>("recipe", true)),
+      "Usage: recipe [-v|--verbose[=<bool>]] [-j|--jobs=<value>] <name> "
+      "[<args>...]\n"
+      "\n"
+      "Arguments:\n"
+      "  -v, --verbose[=<bool>]\n"
+      "  <name>                  Required.\n"
+      "  <args>...\n"
+      "  -j, --jobs=<value>\n");
+
+  const auto result =
+      read<Recipe, rfl::cli::OptionsFirst, rfl::cli::ListDelimiter<"">>(
+          {"-v", "-j", "4", "build", "--jobs", "8"});
+  ASSERT_TRUE(result) << result.error().what();
+  EXPECT_EQ(result.value().jobs.value(), 4);
+  EXPECT_EQ(result.value().name.value(), "build");
+  EXPECT_EQ(result.value().args.value().value(), (Strings{"--jobs", "8"}));
 }
 
 }  // namespace test_usage_options
