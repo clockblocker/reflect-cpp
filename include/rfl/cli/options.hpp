@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -26,6 +27,7 @@
 #include "../internal/is_named_tuple.hpp"
 #include "../internal/is_positional.hpp"
 #include "../internal/is_short.hpp"
+#include "../internal/no_extra_fields_v.hpp"
 #include "../internal/processed_t.hpp"
 #include "../parsing/is_string_map.hpp"
 #include "Parser.hpp"
@@ -41,7 +43,7 @@ enum class OptionKind {
   /// A field that takes a value: `--key=value`, `-k value` or `-k=value`.
   value,
   /// A known path whose kind cannot be decided from the type (a nested
-  /// struct, a map, a variant or rfl::Generic). `--key`
+  /// struct, a variant, rfl::Generic, or a sub-key of a variant). `--key`
   /// never takes the next token, so alone it passes an empty value. A short
   /// alias `-k` takes the next token unless it looks like an option.
   other,
@@ -56,11 +58,13 @@ struct Option {
 
 /// The options that a target struct accepts, built from its fields by
 /// make_options on every read. parse_argv uses it to decide whether a short
-/// option takes the next token as its value, and resolve_args to map short
-/// aliases and positional arguments to fields. Names are the field names
-/// after processors (kebab-case, rfl::Rename) are applied.
+/// option takes the next token as its value and whether a long option is
+/// known, and resolve_args to map short aliases and positional arguments to
+/// fields. Paths are dotted
+/// (`database.host`) and use the field names after processors (kebab-case,
+/// rfl::Rename) are applied.
 struct Options {
-  /// The options of the top-level fields, by name.
+  /// The long options, by path.
   std::map<std::string, Option> long_options;
 
   /// The short aliases given by rfl::Short (`p` for `-p`), mapped to the path
@@ -72,6 +76,19 @@ struct Options {
   /// wrappers, each in declaration order. Each takes one positional
   /// argument.
   std::vector<std::string> positionals;
+
+  /// Prefixes (ending in path_separator, or empty for the root) under which
+  /// the keys are not known in advance, such as maps and rfl::ExtraFields.
+  /// Maps to the option of a direct sub-key.
+  std::map<std::string, Option> open_prefixes;
+
+  /// For the open prefixes whose sub-keys hold structs or maps: the options
+  /// inside one such value, with paths relative to it, so that
+  /// `--servers.eu.port` is looked up as `port`.
+  std::map<std::string, std::shared_ptr<const Options>> open_prefix_options;
+
+  /// Whether options that match no field are an error (rfl::NoExtraFields).
+  bool reject_unknown = false;
 
   /// Whether tokens such as `-5` and `-.5` are short options rather than
   /// negative numbers. They are when parse_argv is called without the
@@ -87,13 +104,62 @@ struct Options {
   /// Returns the long option `--_name`.
   Option find_long(const std::string& _name) const {
     const auto it = long_options.find(_name);
-    return it == long_options.end() ? Option{} : it->second;
+    if (it != long_options.end()) {
+      return it->second;
+    }
+
+    // A key below a leaf field (for example a variant of structs): the
+    // reader decides what it means.
+    for (auto pos = _name.find(path_separator); pos != std::string::npos;
+         pos = _name.find(path_separator, pos + 1)) {
+      if (long_options.count(_name.substr(0, pos))) {
+        return Option{OptionKind::other};
+      }
+    }
+
+    // A nested struct or map itself, such as `--database`.
+    const auto prefix = _name + path_separator;
+    if (has_prefix(long_options, prefix) || has_prefix(open_prefixes, prefix)) {
+      return Option{OptionKind::other};
+    }
+
+    // A key inside a map or a struct with rfl::ExtraFields. The longest
+    // matching prefix wins.
+    const std::pair<const std::string, Option>* open = nullptr;
+    for (const auto& p : open_prefixes) {
+      if (_name.size() > p.first.size() && _name.starts_with(p.first)
+          && (!open || p.first.size() > open->first.size())) {
+        open = &p;
+      }
+    }
+    if (open) {
+      const auto rest = _name.substr(open->first.size());
+      const auto sep = rest.find(path_separator);
+      if (sep == std::string::npos) {
+        return open->second;
+      }
+      const auto nested = open_prefix_options.find(open->first);
+      if (nested != open_prefix_options.end()) {
+        return nested->second->find_long(rest.substr(sep + 1));
+      }
+      return Option{OptionKind::other};
+    }
+
+    return Option{};
   }
 
   /// Returns the option that the short alias `-_name` stands for.
   Option find_short(const std::string& _name) const {
     const auto it = short_options.find(_name);
     return it == short_options.end() ? Option{} : find_long(it->second);
+  }
+
+ private:
+  static bool has_prefix(
+      const std::map<std::string, Option>& _map, const std::string& _prefix
+  ) {
+    const auto it = _map.lower_bound(_prefix);
+    return it != _map.end() && it->first.starts_with(_prefix);
   }
 };
 
@@ -283,37 +349,121 @@ using option_fields_t = typename std::conditional_t<
     rfl::internal::is_named_tuple_v<T>, std::type_identity<T>,
     rfl::internal::Processed<T, ProcessorsType>>::type;
 
-/// Adds the option of the top-level field `_name` of type T.
+template <class... Ts>
+struct type_list {
+  template <class T>
+  static constexpr bool contains = (std::is_same_v<T, Ts> || ...);
+
+  template <class T>
+  using add = type_list<Ts..., T>;
+};
+
+/// The option for a key of a map or of rfl::ExtraFields with values of
+/// type T.
 template <class T, class ProcessorsType>
-void add_option(const std::string& _name, Options* _options) {
+Option sub_key_option() {
   using U = unwrapped_option_t<T, ProcessorsType>;
   if constexpr (std::is_same_v<U, bool>) {
-    _options->long_options[_name] = Option{OptionKind::flag};
+    return Option{OptionKind::flag};
   }
-  else if constexpr (is_open_option_v<U> || parsing::is_string_map_v<U>
-                     || is_option_struct_v<U>) {
-    _options->long_options[_name] = Option{OptionKind::other};
+  else if constexpr (parsing::is_string_map_v<U> || is_option_struct_v<U>
+                     || is_open_option_v<U>) {
+    return Option{OptionKind::other};
   }
   else {
-    _options->long_options[_name] = Option{OptionKind::value};
+    return Option{OptionKind::value};
   }
 }
 
-template <class FieldType, class ProcessorsType>
-void add_option_for_field(Options* _options) {
+template <class T, class ProcessorsType, class VisitedType>
+void collect_options(const std::string& _prefix, Options* _options);
+
+template <class T, class ProcessorsType, class VisitedType>
+void collect_value_options(Options* _options);
+
+/// Adds the open prefix `_prefix` of a map or of rfl::ExtraFields with
+/// values of type T. If the values are structs or maps, also adds the
+/// options inside one of them.
+template <class T, class ProcessorsType, class VisitedType>
+void add_open_prefix(const std::string& _prefix, Options* _options) {
+  using U = unwrapped_option_t<T, ProcessorsType>;
+  _options->open_prefixes[_prefix] = sub_key_option<T, ProcessorsType>();
+  if constexpr (parsing::is_string_map_v<U>
+                || (is_option_struct_v<U>
+                    && !VisitedType::template contains<U>)) {
+    auto nested = std::make_shared<Options>();
+    collect_value_options<T, ProcessorsType, VisitedType>(nested.get());
+    _options->open_prefix_options[_prefix] = std::move(nested);
+  }
+}
+
+/// Adds the options inside one value of type T to `_options`, with paths
+/// relative to it: the fields of a struct, or the keys of a map.
+template <class T, class ProcessorsType, class VisitedType>
+void collect_value_options(Options* _options) {
+  using U = unwrapped_option_t<T, ProcessorsType>;
+  if constexpr (parsing::is_string_map_v<U>) {
+    add_open_prefix<typename U::mapped_type, ProcessorsType, VisitedType>(
+        "", _options);
+  }
+  else if constexpr (is_option_struct_v<U>) {
+    collect_options<U, ProcessorsType, VisitedType>("", _options);
+  }
+  else {
+    _options->open_prefixes[""] = Option{OptionKind::other};
+  }
+}
+
+template <class T, class ProcessorsType, class VisitedType>
+void add_option(const std::string& _path, Options* _options) {
+  using U = unwrapped_option_t<T, ProcessorsType>;
+  if constexpr (std::is_same_v<U, bool>) {
+    _options->long_options[_path] = Option{OptionKind::flag};
+  }
+  else if constexpr (is_open_option_v<U>) {
+    _options->long_options[_path] = Option{OptionKind::other};
+  }
+  else if constexpr (parsing::is_string_map_v<U>) {
+    add_open_prefix<typename U::mapped_type, ProcessorsType, VisitedType>(
+        _path + path_separator, _options);
+  }
+  else if constexpr (is_option_struct_v<U>) {
+    if constexpr (VisitedType::template contains<U>) {
+      // A recursive type: stop here and let the reader handle deeper keys.
+      _options->open_prefixes[_path + path_separator] =
+          Option{OptionKind::other};
+    }
+    else {
+      collect_options<U, ProcessorsType, VisitedType>(
+          _path + path_separator, _options);
+    }
+  }
+  else {
+    _options->long_options[_path] = Option{OptionKind::value};
+  }
+}
+
+template <class FieldType, class ProcessorsType, class VisitedType>
+void add_option_for_field(const std::string& _prefix, Options* _options) {
   using T = std::remove_cvref_t<typename FieldType::Type>;
-  if constexpr (!rfl::internal::is_extra_fields_v<T>) {
-    add_option<T, ProcessorsType>(std::string(FieldType::name()), _options);
+  if constexpr (rfl::internal::is_extra_fields_v<T>) {
+    add_open_prefix<typename T::mapped_type, ProcessorsType, VisitedType>(
+        _prefix, _options);
+  }
+  else {
+    add_option<T, ProcessorsType, VisitedType>(
+        _prefix + std::string(FieldType::name()), _options);
   }
 }
 
-/// Adds the options of the top-level fields of T.
-template <class T, class ProcessorsType>
-void collect_options(Options* _options) {
+template <class T, class ProcessorsType, class VisitedType>
+void collect_options(const std::string& _prefix, Options* _options) {
   using NT = option_fields_t<T, ProcessorsType>;
+  using NextVisitedType = typename VisitedType::template add<T>;
   [&]<size_t... _is>(std::index_sequence<_is...>) {
-    (add_option_for_field<rfl::tuple_element_t<_is, typename NT::Fields>,
-                          ProcessorsType>(_options),
+    (add_option_for_field<
+         rfl::tuple_element_t<_is, typename NT::Fields>, ProcessorsType,
+         NextVisitedType>(_prefix, _options),
      ...);
   }(std::make_index_sequence<NT::size()>());
 }
@@ -388,18 +538,20 @@ void collect_short_and_positional(Options* _options) {
                                wrapped_positionals.end());
 }
 
-/// Derives the options that T accepts from its fields: the option of every
-/// top-level field, with whether it is a flag or takes a value, and the
-/// rfl::Short aliases and rfl::Positional fields.
+/// Derives the options that T accepts from its fields: every long option,
+/// with whether it is a flag or takes a value, and the rfl::Short aliases
+/// and rfl::Positional fields of the top-level struct.
 /// @tparam T The target struct type
 /// @tparam ProcessorsType The processors applied to the struct
-/// @return The options
+/// @return The options, with reject_unknown set if ProcessorsType contains
+/// rfl::NoExtraFields
 template <class T, class ProcessorsType>
 Options make_options() {
   Options options;
+  options.reject_unknown = rfl::internal::no_extra_fields_v<ProcessorsType>;
   using U = unwrapped_option_t<T, ProcessorsType>;
+  collect_value_options<T, ProcessorsType, type_list<>>(&options);
   if constexpr (is_option_struct_v<U>) {
-    collect_options<U, ProcessorsType>(&options);
     collect_short_and_positional<U, ProcessorsType>(&options);
   }
   // As in argparse, -5 is a negative number unless a short option's name
