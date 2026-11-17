@@ -55,6 +55,11 @@ enum class OptionKind {
 /// How an option is given on the command line.
 struct Option {
   OptionKind kind = OptionKind::unknown;
+
+  /// Whether the field is a list (see is_option_list_v). Every
+  /// occurrence of a list option adds to it, however the option is spelled,
+  /// so it may be repeated. Any other option may be given only once.
+  bool is_list = false;
 };
 
 /// The options that a target struct accepts, built from its fields by
@@ -98,6 +103,12 @@ struct Options {
   /// Whether a long option that takes a value takes it from the next token
   /// when it is given without '=' (rfl::cli::SeparateOptionValues).
   bool separate_values = false;
+
+  /// Builds the table with every long option through nested structs and
+  /// maps, if this one lists only the top-level fields (see make_options).
+  /// parse_argv looks up nested options in it, for instance to tell whether
+  /// a repeated nested option is a list.
+  Options (*make_all_paths)() = nullptr;
 
   /// Whether tokens such as `-5` and `-.5` are short options rather than
   /// negative numbers. They are when parse_argv is called without the
@@ -349,6 +360,20 @@ struct type_list {
   using add = type_list<Ts..., T>;
 };
 
+/// Whether the reader reads T as a list, through Reader::to_array: vectors,
+/// sets, deques and the like, std::array, rfl::Array, C arrays, tuples and
+/// pairs. Maps are not lists, even those whose keys are not strings. The
+/// value of a list option is split into items at the list delimiter, and
+/// repeating the option adds the items of every occurrence, so
+/// `--x=a --x=b` is `--x=a,b`.
+template <class T>
+constexpr bool is_option_list_v =
+    (parsing::is_vector_like_v<T> && !parsing::is_map_like_v<T>
+     && !parsing::is_bytestring_v<T> && !parsing::is_vectorstring_v<T>)
+    || parsing::is_array_v<T> || parsing::is_rfl_array_v<T>
+    || parsing::is_c_array_v<T> || parsing::is_tuple_v<T>
+    || parsing::is_rfl_tuple_v<T> || parsing::is_pair_v<T>;
+
 /// The option for a field, or a key of a map or of rfl::ExtraFields, with
 /// values of type T.
 template <class T, class ProcessorsType>
@@ -362,7 +387,7 @@ Option option_for() {
     return Option{OptionKind::other};
   }
   else {
-    return Option{OptionKind::value};
+    return Option{OptionKind::value, is_option_list_v<U>};
   }
 }
 
@@ -430,7 +455,8 @@ void add_option(const std::string& _path, Options* _options) {
     }
   }
   else {
-    _options->long_options[_path] = Option{OptionKind::value};
+    _options->long_options[_path] =
+        Option{OptionKind::value, is_option_list_v<U>};
   }
 }
 
@@ -529,6 +555,9 @@ Options make_options() {
   options.group_short_options = true;
   options.reject_unknown = rfl::internal::no_extra_fields_v<ProcessorsType>;
   options.separate_values = separate_option_values_v<ProcessorsType>;
+  if constexpr (!_all_paths) {
+    options.make_all_paths = &make_options<T, ProcessorsType, true>;
+  }
   using U = unwrapped_option_t<T, ProcessorsType>;
   if constexpr (_all_paths) {
     collect_value_options<T, ProcessorsType, type_list<>>(&options);
