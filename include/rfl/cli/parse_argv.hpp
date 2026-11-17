@@ -43,6 +43,9 @@ namespace internal {
 /// - Short options: -x value, -x=value, or -x (stored in `short_args`)
 /// - Positional arguments: bare arguments not prefixed with dashes (stored in `positional`)
 /// The special argument "--" forces all subsequent arguments to be treated as positional.
+/// If `_options.options_first` is set (rfl::cli::OptionsFirst), so does the
+/// first positional argument, which is kept: every later token is a
+/// positional argument as it is, including "--", as in getopt's '+' mode.
 /// `_options` says what each option does with the token that follows it
 /// when it is given without '='. A short option that takes a value consumes
 /// it, and fails if there is none; so does a long one with
@@ -248,6 +251,7 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       // the short option "42".
       if (!looks_like_option(arg_raw) && !negative_numbers_are_options) {
         result.positional.emplace_back(arg_raw);
+        force_positional = _options.options_first;
         continue;
       }
 
@@ -318,8 +322,10 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       continue;
     }
 
-    // Bare argument → positional.
+    // Bare argument → positional. With OptionsFirst, every later token is
+    // one too, as in getopt's '+' mode.
     result.positional.emplace_back(arg_raw);
+    force_positional = _options.options_first;
   }
   return result;
 }
