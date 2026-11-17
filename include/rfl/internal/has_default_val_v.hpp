@@ -10,35 +10,48 @@
 
 namespace rfl::internal {
 
-template <class T>
+/// With _unwrapped_only, only counts fields for which
+/// is_unwrapped_default_val_v is true.
+template <class T, bool _unwrapped_only = false>
 struct HasDefaultVal;
 
-template <class T>
+template <class T, bool _unwrapped_only>
 struct HasDefaultVal {
   static constexpr bool value = false;
 };
 
-template <class... Fields>
-struct HasDefaultVal<NamedTuple<Fields...>> {
-  static constexpr bool value =
-      (false || ... ||
-       is_default_val_v<
-           std::remove_cvref_t<std::remove_pointer_t<typename Fields::Type>>>);
+template <class... Fields, bool _unwrapped_only>
+struct HasDefaultVal<NamedTuple<Fields...>, _unwrapped_only> {
+  template <class F,
+            class U =
+                std::remove_cvref_t<std::remove_pointer_t<typename F::Type>>>
+  static constexpr bool is_default_val_field =
+      _unwrapped_only ? is_unwrapped_default_val_v<U> : is_default_val_v<U>;
+
+  static constexpr bool value = (false || ... || is_default_val_field<Fields>);
 };
 
-template <class T>
+template <class T, bool _unwrapped_only>
   requires(std::is_class_v<T> && std::is_aggregate_v<T>)
-struct HasDefaultVal<T> : HasDefaultVal<named_tuple_t<T>> {};
+struct HasDefaultVal<T, _unwrapped_only>
+    : HasDefaultVal<named_tuple_t<T>, _unwrapped_only> {};
 
-template <class T, size_t N>
-struct HasDefaultVal<std::array<T, N>> : HasDefaultVal<std::remove_cvref_t<T>> {
-};
+template <class T, size_t N, bool _unwrapped_only>
+struct HasDefaultVal<std::array<T, N>, _unwrapped_only>
+    : HasDefaultVal<std::remove_cvref_t<T>, _unwrapped_only> {};
 
-template <class T, size_t N>
-struct HasDefaultVal<T[N]> : HasDefaultVal<std::remove_cvref_t<T>> {};
+template <class T, size_t N, bool _unwrapped_only>
+struct HasDefaultVal<T[N], _unwrapped_only>
+    : HasDefaultVal<std::remove_cvref_t<T>, _unwrapped_only> {};
 
 template <class T>
 constexpr bool has_default_val_v = HasDefaultVal<std::remove_cvref_t<T>>::value;
+
+/// Whether T has an rfl::DefaultVal field that is not inside rfl::Short,
+/// rfl::Positional, rfl::Description or rfl::Deprecated.
+template <class T>
+constexpr bool has_unwrapped_default_val_v =
+    HasDefaultVal<std::remove_cvref_t<T>, true>::value;
 
 }  // namespace rfl::internal
 
