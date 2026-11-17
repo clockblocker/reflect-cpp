@@ -77,6 +77,47 @@ TEST(cli, test_usage_detailed) {
   EXPECT_FALSE(rfl::cli::read<Described>(5, const_cast<char**>(no_verbose)));
 }
 
+struct Validated {
+  rfl::Description<"Port to listen on",
+                   rfl::Validator<int, rfl::Minimum<1>, rfl::Maximum<65535>>>
+      port;
+  rfl::Validator<double, rfl::ExclusiveMinimum<0>, rfl::Maximum<1>> ratio;
+  rfl::Validator<int, rfl::ExclusiveMaximum<100>> percent;
+  rfl::Validator<int, rfl::AnyOf<rfl::Maximum<0>, rfl::Minimum<10>>> outside;
+  rfl::Validator<int, rfl::OneOf<rfl::EqualTo<1>, rfl::EqualTo<2>>> one_or_two;
+  rfl::Validator<int, rfl::NotEqualTo<0>> nonzero;
+  rfl::Validator<std::vector<std::string>, rfl::Size<rfl::Minimum<1>>> tags;
+  rfl::Validator<std::vector<int>,
+                 rfl::Size<rfl::AllOf<rfl::Minimum<1>, rfl::Maximum<3>>>>
+      ids;
+  rfl::Validator<std::string, rfl::Size<rfl::Minimum<1>>,
+                 rfl::PatternValidator<"^[a-z]+$", "Lowercase">>
+      user;
+  rfl::Literal<"fast", "slow"> mode;
+};
+
+TEST(cli, test_usage_validators) {
+  EXPECT_EQ(rfl::cli::usage<Validated>("app", true).value(),
+            "Usage: app --port=<value> --ratio=<value> --percent=<value> "
+            "--outside=<value> --one-or-two=<value> --nonzero=<value> "
+            "--tags=<v1,v2,...> --ids=<v1,v2,...> --user=<value> "
+            "--mode=<fast|slow>\n"
+            "\n"
+            "Arguments:\n"
+            "  --port=<value>        Port to listen on. Range: 1..65535. "
+            "Required.\n"
+            "  --ratio=<value>       Range: > 0 and <= 1. Required.\n"
+            "  --percent=<value>     Range: < 100. Required.\n"
+            "  --outside=<value>     Range: <= 0 or >= 10. Required.\n"
+            "  --one-or-two=<value>  Range: 1 or 2. Required.\n"
+            "  --nonzero=<value>     Range: != 0. Required.\n"
+            "  --tags=<v1,v2,...>    Size: >= 1. Required.\n"
+            "  --ids=<v1,v2,...>     Size: 1..3. Required.\n"
+            "  --user=<value>        Size: >= 1. Pattern: ^[a-z]+$. "
+            "Required.\n"
+            "  --mode=<fast|slow>    Required.\n");
+}
+
 struct WithDefaultVal {
   rfl::DefaultVal<int> port = 8080;
   rfl::DefaultVal<std::string> host = "localhost";
@@ -367,7 +408,8 @@ TEST(cli, test_usage_optionals) {
             "Arguments:\n"
             "  <level>                 Choices: debug|info|warn.\n"
             "  -v, --verbose[=<bool>]\n"
-            "  --old-port=<value>      Old port\n"
+            "  --old-port=<value>      Old port. Deprecated: Use --port "
+            "instead.\n"
             "  --notes=<value>         First line\n"
             "                          Second line. Required.\n");
 }
