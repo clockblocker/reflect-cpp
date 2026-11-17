@@ -48,10 +48,12 @@ namespace internal {
 /// it, and fails if there is none; so does a long one with
 /// `_options.separate_values` (rfl::cli::SeparateOptionValues). A long
 /// boolean flag never consumes it; a short one consumes it only if it is
-/// "true", "false", "1" or "0". Other long options never consume it. Short options missing from `_options`
-/// consume it unless it looks like an option, as they do without
-/// `_options`. With `_options.reject_unknown`, a long option that matches
-/// no field is an error.
+/// "true", "false", "1" or "0". An option wrapped in rfl::ImplicitValue
+/// never consumes it and gets its implicit value. Other long options never
+/// consume it. Short options missing from `_options` consume it unless it
+/// looks like an option, as they do without `_options`. With
+/// `_options.reject_unknown`, a long option that matches no field is an
+/// error.
 /// A token that looks like a negative number (-5, -.5) is a positional
 /// argument unless `_options.negative_numbers_are_options` is set, as it is
 /// without `_options` and when the struct has a short option whose name
@@ -59,8 +61,10 @@ namespace internal {
 /// Short options known to `_options` can be grouped as in getopt: in `-qvf`
 /// every flag is set until the first option that takes a value, which
 /// takes the rest of the token (`-qfcsv`) or, if nothing is left, the next
-/// token (`-qf csv`). Without `_options` from make_options, short options
-/// are not grouped: `-abc` is the short option `abc`.
+/// token (`-qf csv`). An rfl::ImplicitValue option takes the rest of the
+/// token if there is one, and never the next token. Without `_options` from
+/// make_options, short options are not grouped: `-abc` is the short option
+/// `abc`.
 /// If `_options.allow_abbreviations` is set (rfl::cli::AllowAbbreviations),
 /// a long option that matches no field stands for the one long option it is
 /// a prefix of (`--rep` for `--report`), and a prefix of several is an
@@ -154,6 +158,11 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         }
         return std::string();
 
+      case OptionKind::implicit_value:
+        // Never takes the next token: `-h input.txt` leaves "input.txt"
+        // positional.
+        return std::string(_option.implicit_value);
+
       case OptionKind::other:
         // A variant, rfl::Generic or nested struct: `-m fast` takes the next
         // token unless it looks like an option.
@@ -216,6 +225,12 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         auto v = take_value(option, "--" + key, &i);
         if (!v) { return error(v.error().what()); }
         val = std::move(*v);
+      }
+      else if (eq == std::string_view::npos
+               && option.kind == OptionKind::implicit_value) {
+        // --help: no value. An rfl::ImplicitValue option stands for its
+        // implicit value.
+        val = std::string(option.implicit_value);
       }
       const auto r = add_long(std::move(key), std::move(val), option, arg_raw);
       if (!r) { return error(r.error().what()); }
@@ -283,8 +298,8 @@ inline rfl::Result<ParsedArgs> parse_string_views(
           continue;
         }
         else if (!rest.empty()) {
-          // -fvalue, -qfvalue: the rest of the token is the value. -qf=value
-          // is the same as -qfvalue, as -f=value is.
+          // -fvalue, -qfvalue, -hvalue: the rest of the token is the value.
+          // -qf=value is the same as -qfvalue, as -f=value is.
           val = std::string(rest.starts_with('=') ? rest.substr(1) : rest);
         }
         else {
