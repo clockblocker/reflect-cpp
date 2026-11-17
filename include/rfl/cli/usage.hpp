@@ -32,6 +32,7 @@
 #include "../parsing/schema/ValidationType.hpp"
 #include "../parsing/schema/make.hpp"
 #include "../to_generic.hpp"
+#include "ListDelimiter.hpp"
 #include "Reader.hpp"
 #include "options.hpp"
 #include "resolve_args.hpp"
@@ -156,11 +157,13 @@ inline std::string usage_number_to_string(
 /// Renders a default value the way it would be passed on the command line.
 /// Returns nullopt for values that cannot be rendered sensibly (null,
 /// objects, empty arrays).
-/// Lists are joined with the list delimiter.
+/// Lists are joined with the list delimiter. If lists are not split
+/// (ListDelimiter<"">), a list of several items cannot be typed as one
+/// value, so it is left out.
 inline std::optional<std::string> usage_default_to_string(
-    const Generic& _value) {
+    const Generic& _value, const std::optional<char> _delimiter) {
   return std::visit(
-      [](const auto& _v) -> std::optional<std::string> {
+      [&](const auto& _v) -> std::optional<std::string> {
         using V = std::remove_cvref_t<decltype(_v)>;
         if constexpr (std::is_same_v<V, bool>) {
           return _v ? "true" : "false";
@@ -171,17 +174,17 @@ inline std::optional<std::string> usage_default_to_string(
         } else if constexpr (std::is_same_v<V, std::string>) {
           return _v.empty() ? std::string("\"\"") : _v;
         } else if constexpr (std::is_same_v<V, Generic::Array>) {
-          if (_v.empty()) {
+          if (_v.empty() || (!_delimiter && _v.size() > 1)) {
             return std::nullopt;
           }
           std::string joined;
           for (const auto& element : _v) {
-            const auto str = usage_default_to_string(element);
+            const auto str = usage_default_to_string(element, _delimiter);
             if (!str) {
               return std::nullopt;
             }
             if (!joined.empty()) {
-              joined += array_delimiter;
+              joined += *_delimiter;
             }
             joined += *str;
           }
@@ -306,11 +309,13 @@ class UsageCollector {
   UsageCollector(const parsing::schema::Definition* _definition,
                  const std::map<std::string, UsageFieldMeta>* _meta,
                  const Options* _options,
-                 const bool _optionals_are_required)
+                 const bool _optionals_are_required,
+                 const std::optional<char> _delimiter)
       : definition_(_definition),
         meta_(_meta),
         options_(_options),
-        optionals_are_required_(_optionals_are_required) {
+        optionals_are_required_(_optionals_are_required),
+        delimiter_(_delimiter) {
     for (const auto& [short_name, path] : _options->short_options) {
       short_names_[path] = short_name;
     }
@@ -471,7 +476,7 @@ class UsageCollector {
     _arg.kind = option.kind;
     _arg.is_list = option.is_list;
     if (_default) {
-      _arg.default_value = usage_default_to_string(*_default);
+      _arg.default_value = usage_default_to_string(*_default, delimiter_);
     }
     args_.emplace_back(std::move(_arg));
   }
@@ -493,6 +498,7 @@ class UsageCollector {
   const std::map<std::string, UsageFieldMeta>* meta_;
   const Options* options_;
   const bool optionals_are_required_;
+  const std::optional<char> delimiter_;
   /// The rfl::Short aliases, by the path of their field.
   std::map<std::string, std::string> short_names_;
   std::set<std::string> visiting_;
@@ -500,18 +506,21 @@ class UsageCollector {
 };
 
 /// The placeholder for the value of _arg: "<value>", "<a|b>", or for a list
-/// "<v1,v2,...>" with the list delimiter.
-inline std::string usage_value_to_string(const UsageArg& _arg) {
-  if (!_arg.is_list) {
+/// "<v1,v2,...>" with the list delimiter. If lists are not split
+/// (ListDelimiter<"">), every occurrence is one item: "<value>".
+inline std::string usage_value_to_string(const UsageArg& _arg,
+                                         const std::optional<char> _delimiter) {
+  if (!_arg.is_list || !_delimiter) {
     return _arg.value;
   }
-  const auto d = std::string(1, array_delimiter);
+  const auto d = std::string(1, *_delimiter);
   return "<v1" + d + "v2" + d + "...>";
 }
 
 /// "<input-file>", "<files>...", "-p|--port=<value>", "--verbose[=<bool>]"
 inline std::string usage_arg_to_string(const UsageArg& _arg,
-                                       const std::string& _short_sep) {
+                                       const std::string& _short_sep,
+                                       const std::optional<char> _delimiter) {
   if (_arg.positional) {
     // A list as the last positional field takes the remaining arguments.
     // Any other positional field takes one.
@@ -520,7 +529,7 @@ inline std::string usage_arg_to_string(const UsageArg& _arg,
   auto str = _arg.short_name.empty() ? std::string()
                                      : "-" + _arg.short_name + _short_sep;
   str += "--" + _arg.name;
-  const auto value = usage_value_to_string(_arg);
+  const auto value = usage_value_to_string(_arg, _delimiter);
   switch (_arg.kind) {
     case OptionKind::flag:
       // `--verbose`: the value can be left out.
@@ -579,10 +588,11 @@ inline std::string usage_help_text(const UsageArg& _arg) {
 
 inline std::string format_usage(const std::string& _program_name,
                                 const std::vector<UsageArg>& _args,
-                                const bool _detailed) {
+                                const bool _detailed,
+                                const std::optional<char> _delimiter) {
   auto out = "Usage: " + _program_name;
   for (const auto& arg : _args) {
-    const auto str = usage_arg_to_string(arg, "|");
+    const auto str = usage_arg_to_string(arg, "|", _delimiter);
     out += arg.required ? " " + str : " [" + str + "]";
   }
   out += '\n';
@@ -593,7 +603,8 @@ inline std::string format_usage(const std::string& _program_name,
   auto rows = std::vector<std::pair<std::string, std::string>>();
   size_t width = 0;
   for (const auto& arg : _args) {
-    rows.emplace_back(usage_arg_to_string(arg, ", "), usage_help_text(arg));
+    rows.emplace_back(usage_arg_to_string(arg, ", ", _delimiter),
+                      usage_help_text(arg));
     width = std::max(width, rows.back().first.size());
   }
 
@@ -661,6 +672,7 @@ rfl::Result<std::string> usage(const std::string& _program_name,
                                const bool _detailed = false) {
   using ProcessorsType = Processors<SnakeCaseToKebabCase, Ps...>;
   using NamedTupleType = rfl::internal::processed_t<T, ProcessorsType>;
+  constexpr auto delimiter = internal::list_delimiter_v<ProcessorsType>;
   // The table that read() parses with, so the help shows what the parser
   // accepts, including the options inside nested structs and maps.
   const auto options =
@@ -679,11 +691,12 @@ rfl::Result<std::string> usage(const std::string& _program_name,
                                     ProcessorsType>();
           auto collector = internal::UsageCollector(
               &definition, &meta, &options,
-              rfl::internal::no_optionals_v<ProcessorsType>);
+              rfl::internal::no_optionals_v<ProcessorsType>, delimiter);
           const auto args = collector.collect(
               rfl::internal::default_if_missing_v<ProcessorsType>,
               internal::usage_defaults<T, Ps...>());
-          return internal::format_usage(_program_name, args, _detailed);
+          return internal::format_usage(_program_name, args, _detailed,
+                                        delimiter);
         } catch (std::exception& e) {
           return error(e.what());
         }
