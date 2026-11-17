@@ -228,6 +228,9 @@ schema::Type type_to_json_schema_type(const parsing::schema::Type& _type,
       for (const auto& t : _t.types_) {
         any_of.emplace_back(type_to_json_schema_type(t, _no_required));
       }
+      if (_t.mutually_exclusive_) {
+        return schema::Type{.value = schema::Type::OneOf{.oneOf = any_of}};
+      }
       return schema::Type{.value = schema::Type::AnyOf{.anyOf = any_of}};
 
     } else if constexpr (std::is_same<T, Type::DefaultVal>()) {
