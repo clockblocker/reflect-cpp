@@ -29,6 +29,7 @@
 #include "../parsing/is_required.hpp"
 #include "../parsing/schema/Definition.hpp"
 #include "../parsing/schema/Type.hpp"
+#include "../parsing/schema/ValidationType.hpp"
 #include "../parsing/schema/make.hpp"
 #include "../to_generic.hpp"
 #include "Reader.hpp"
@@ -66,6 +67,9 @@ struct UsageArg {
   /// The allowed values of enums and literals.
   std::vector<std::string> choices;
   std::string description;
+  std::optional<std::string> deprecation;
+  /// Rendered constraints, such as "Range: 1..65535.".
+  std::vector<std::string> constraints;
   std::optional<std::string> default_value;
 };
 
@@ -135,6 +139,17 @@ inline std::string usage_number_to_string(const double _value) {
   return stream.str();
 }
 
+inline std::string usage_number_to_string(
+    const rfl::Variant<double, int>& _value) {
+  return _value.visit([](const auto _v) -> std::string {
+    if constexpr (std::is_same_v<std::remove_cvref_t<decltype(_v)>, int>) {
+      return std::to_string(_v);
+    } else {
+      return usage_number_to_string(_v);
+    }
+  });
+}
+
 /// Renders a default value the way it would be passed on the command line.
 /// Returns nullopt for values that cannot be rendered sensibly (null,
 /// objects, empty arrays).
@@ -173,6 +188,110 @@ inline std::optional<std::string> usage_default_to_string(
         }
       },
       _value.variant());
+}
+
+/// Renders a numeric bound such as ">= 1", "1..10" or "< 0 or > 10".
+/// Returns nullopt if the validation is not purely numeric.
+inline std::optional<std::string> usage_bounds_to_string(
+    const parsing::schema::ValidationType& _validation) {
+  using ValidationType = parsing::schema::ValidationType;
+  const auto join = [](const std::vector<ValidationType>& _types,
+                       const std::string& _sep) -> std::optional<std::string> {
+    std::string joined;
+    for (const auto& t : _types) {
+      const auto str = usage_bounds_to_string(t);
+      if (!str) {
+        return std::nullopt;
+      }
+      joined += (joined.empty() ? "" : _sep) + *str;
+    }
+    return joined;
+  };
+  return _validation.variant_.visit(
+      [&](const auto& _v) -> std::optional<std::string> {
+        using V = std::remove_cvref_t<decltype(_v)>;
+        if constexpr (std::is_same_v<V, ValidationType::AllOf>) {
+          if (_v.types_.size() == 2) {
+            using Min = ValidationType::Minimum;
+            using Max = ValidationType::Maximum;
+            const auto& first = _v.types_[0].variant_;
+            const auto& second = _v.types_[1].variant_;
+            const auto* min = rfl::get_if<Min>(&first);
+            const auto* max = rfl::get_if<Max>(&second);
+            if (!min && !max) {
+              min = rfl::get_if<Min>(&second);
+              max = rfl::get_if<Max>(&first);
+            }
+            if (min && max) {
+              return usage_number_to_string(min->value_) + ".."
+                     + usage_number_to_string(max->value_);
+            }
+          }
+          return join(_v.types_, " and ");
+        } else if constexpr (std::is_same_v<V, ValidationType::AnyOf>
+                             || std::is_same_v<V, ValidationType::OneOf>) {
+          return join(_v.types_, " or ");
+        } else if constexpr (std::is_same_v<V, ValidationType::EqualTo>) {
+          return usage_number_to_string(_v.value_);
+        } else if constexpr (std::is_same_v<V, ValidationType::NotEqualTo>) {
+          return "!= " + usage_number_to_string(_v.value_);
+        } else if constexpr (std::is_same_v<V, ValidationType::Minimum>) {
+          return ">= " + usage_number_to_string(_v.value_);
+        } else if constexpr (std::is_same_v<V, ValidationType::Maximum>) {
+          return "<= " + usage_number_to_string(_v.value_);
+        } else if constexpr (std::is_same_v<V,
+                                            ValidationType::ExclusiveMinimum>) {
+          return "> " + usage_number_to_string(_v.value_);
+        } else if constexpr (std::is_same_v<V,
+                                            ValidationType::ExclusiveMaximum>) {
+          return "< " + usage_number_to_string(_v.value_);
+        } else {
+          return std::nullopt;
+        }
+      });
+}
+
+/// Renders a validation as one or more phrases, such as "Range: 1..10",
+/// "Size: >= 1" or "Pattern: ^[a-z]+$".
+inline std::vector<std::string> usage_constraints(
+    const parsing::schema::ValidationType& _validation) {
+  using ValidationType = parsing::schema::ValidationType;
+  if (const auto bounds = usage_bounds_to_string(_validation)) {
+    return {"Range: " + *bounds};
+  }
+  return _validation.variant_.visit(
+      [](const auto& _v) -> std::vector<std::string> {
+        using V = std::remove_cvref_t<decltype(_v)>;
+        if constexpr (std::is_same_v<V, ValidationType::AllOf>) {
+          std::vector<std::string> all;
+          for (const auto& t : _v.types_) {
+            const auto phrases = usage_constraints(t);
+            all.insert(all.end(), phrases.begin(), phrases.end());
+          }
+          return all;
+        } else if constexpr (std::is_same_v<V, ValidationType::AnyOf>
+                             || std::is_same_v<V, ValidationType::OneOf>) {
+          std::string joined;
+          for (const auto& t : _v.types_) {
+            std::string alternative;
+            for (const auto& phrase : usage_constraints(t)) {
+              alternative += (alternative.empty() ? "" : ", ") + phrase;
+            }
+            joined += (joined.empty() ? "" : " or ") + alternative;
+          }
+          return {joined};
+        } else if constexpr (std::is_same_v<V, ValidationType::Size>) {
+          const auto bounds = usage_bounds_to_string(*_v.size_limit_);
+          if (!bounds) {
+            return {};
+          }
+          return {"Size: " + *bounds};
+        } else if constexpr (std::is_same_v<V, ValidationType::Regex>) {
+          return {"Pattern: " + _v.pattern_};
+        } else {
+          return {};
+        }
+      });
 }
 
 /// Walks the format-agnostic schema of the struct and collects one UsageArg
@@ -215,11 +334,17 @@ class UsageCollector {
       // Description and Deprecated do not change how a field is read, so a
       // DefaultVal inside them still makes the field optional
       // (is_default_val_v). Short, Positional and Rename leave no node.
-      if constexpr (std::is_same_v<T, Type::Description>
-                    || std::is_same_v<T, Type::Deprecated>) {
+      if constexpr (std::is_same_v<T, Type::Description>) {
         if (_arg.description.empty()) {
           _arg.description = _t.description_;
         }
+        add(*_t.type_, std::move(_arg), _default, _outermost);
+
+      } else if constexpr (std::is_same_v<T, Type::Deprecated>) {
+        if (_arg.description.empty()) {
+          _arg.description = _t.description_;
+        }
+        _arg.deprecation = _t.deprecation_message_;
         add(*_t.type_, std::move(_arg), _default, _outermost);
 
       } else if constexpr (std::is_same_v<T, Type::Optional>) {
@@ -240,6 +365,9 @@ class UsageCollector {
             _t.default_value_ ? _t.default_value_ : _default, false);
 
       } else if constexpr (std::is_same_v<T, Type::Validated>) {
+        const auto constraints = usage_constraints(_t.validation_);
+        _arg.constraints.insert(_arg.constraints.end(), constraints.begin(),
+                                constraints.end());
         add(*_t.type_, std::move(_arg), _default, false);
 
       } else if constexpr (std::is_same_v<T, Type::Reference>) {
@@ -395,9 +523,14 @@ inline bool usage_ends_sentence(const std::string& _str) {
          && (_str.back() == '.' || _str.back() == '!' || _str.back() == '?');
 }
 
-/// "Port to connect on. Default: 8080. Required."
+/// "Port to connect on. Range: 1..65535. Default: 8080. Required."
 inline std::string usage_help_text(const UsageArg& _arg) {
   auto sentences = std::vector<std::string>();
+  if (_arg.deprecation) {
+    sentences.push_back(_arg.deprecation->empty()
+                            ? std::string("Deprecated")
+                            : "Deprecated: " + *_arg.deprecation);
+  }
   if (_arg.positional && !_arg.choices.empty()) {
     auto choices = std::string("Choices: ");
     for (size_t i = 0; i < _arg.choices.size(); ++i) {
@@ -405,6 +538,8 @@ inline std::string usage_help_text(const UsageArg& _arg) {
     }
     sentences.push_back(std::move(choices));
   }
+  sentences.insert(sentences.end(), _arg.constraints.begin(),
+                   _arg.constraints.end());
   if (_arg.default_value) {
     sentences.push_back("Default: " + *_arg.default_value);
   }
@@ -493,9 +628,9 @@ std::optional<Generic> usage_defaults() {
 /// the parser accepts (kebab-case, rfl::Rename, rfl::Flatten, nested paths).
 ///
 /// The help text lists, where known, the description (rfl::Description), the
-/// allowed values of enums and literals, the default value (rfl::DefaultVal,
-/// or all fields with rfl::DefaultIfMissing) and whether the argument is
-/// required.
+/// allowed values of enums and literals, the constraints of validators, the
+/// default value (rfl::DefaultVal, or all fields with rfl::DefaultIfMissing)
+/// and whether the argument is required.
 /// @tparam T The struct type that the arguments are parsed into
 /// @tparam Ps The processors passed to `rfl::cli::read`
 /// @param _program_name The name shown after "Usage:", usually argv[0]
