@@ -7,6 +7,7 @@
 
 #include "../Processors.hpp"
 #include "../SnakeCaseToKebabCase.hpp"
+#include "App.hpp"
 #include "KeepEmptyItems.hpp"
 #include "ListDelimiter.hpp"
 #include "Parser.hpp"
@@ -47,6 +48,10 @@ rfl::Result<T> read_parsed(ParsedArgs _parsed, const Options& _options) {
 template <class T, class... Ps, class ParseFn>
 rfl::Result<T> parse_and_read(const ParseFn& _parse) {
   using ProcessorsType = Processors<SnakeCaseToKebabCase, Ps...>;
+  static_assert(!internal::has_app_v<ProcessorsType>,
+                "rfl::cli::App turns on --help and --version, which "
+                "rfl::cli::read cannot report. Call rfl::cli::read_app "
+                "instead.");
   const auto options = make_options<T, ProcessorsType>();
   return check_short_names(options)
       .and_then([&](bool) { return _parse(options); })

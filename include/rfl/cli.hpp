@@ -3,6 +3,7 @@
 
 #include "../rfl.hpp"
 #include "cli/AllowAbbreviations.hpp"
+#include "cli/App.hpp"
 #include "cli/KeepEmptyItems.hpp"
 #include "cli/ListDelimiter.hpp"
 #include "cli/OptionsFirst.hpp"
@@ -12,6 +13,7 @@
 #include "cli/options.hpp"
 #include "cli/parse_argv.hpp"
 #include "cli/read.hpp"
+#include "cli/read_app.hpp"
 #include "cli/resolve_args.hpp"
 #include "cli/usage.hpp"
 
