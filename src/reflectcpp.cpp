@@ -33,6 +33,7 @@ SOFTWARE.
 #include "rfl/SourceMap.cpp"
 #include "rfl/env/Writer.cpp"
 #include "rfl/generic/Writer.cpp"
+#include "rfl/internal/DeferredDefaults.cpp"
 #include "rfl/internal/strings/strings.cpp"
 #include "rfl/parsing/schema/Type.cpp"
 #include "rfl/parsing/schemaful/tuple_to_object.cpp"
