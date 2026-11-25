@@ -111,6 +111,6 @@ source file is compiled.
 - Unknown fields under `rfl::NoExtraFields` point at the offending key (`exact = true`).
 - Missing required fields point at the enclosing mapping or sequence (`exact = false`).
 
-Recursive YAML aliases are rejected and reported through `rfl::Result`.
+Sequence reading collects errors from all failing elements (unless `rfl::FailFast` is passed), matching object field error aggregation. Recursive YAML aliases are rejected and reported through `rfl::Result`.
 
 

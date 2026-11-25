@@ -53,7 +53,9 @@ reflect-cpp currently supports the following processors:
 By default, reflect-cpp collects errors from multiple object fields.
 `rfl::FailFast` reports the first field error and skips decoding the remaining
 fields of that object. It also applies to nested structs and named tuples,
-including structs stored in containers, across serialization formats.
+including structs stored in containers, across serialization formats. For YAML,
+`rfl::FailFast` also stops sequence reading at the first failing element
+instead of collecting all element errors.
 
 ```cpp
 const auto result = rfl::yas::read<MyStruct, rfl::FailFast>(bytes);

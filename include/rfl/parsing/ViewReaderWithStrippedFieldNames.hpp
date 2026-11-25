@@ -22,6 +22,7 @@ class ViewReaderWithStrippedFieldNames {
   using InputVarType = typename R::InputVarType;
   using ViewType = _ViewType;
 
+  static constexpr bool fail_fast = internal::fail_fast_v<ProcessorsType>;
   static constexpr size_t size_ = ViewType::size();
 
   /**
