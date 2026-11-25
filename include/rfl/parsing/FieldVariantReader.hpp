@@ -10,6 +10,7 @@
 #include "../Result.hpp"
 #include "../Variant.hpp"
 #include "../internal/is_array.hpp"
+#include "../internal/no_duplicate_keys_v.hpp"
 #include "../internal/nth_element_t.hpp"
 #include "Parser_base.hpp"
 #include "wrap_error.hpp"
@@ -24,6 +25,9 @@ class FieldVariantReader {
   using ResultType = Result<FieldVariantType>;
 
  public:
+  static constexpr bool no_duplicate_keys =
+      internal::no_duplicate_keys_v<ProcessorsType>;
+
   /**
    * @brief Constructor.
    *

@@ -11,6 +11,7 @@
 #include "../Result.hpp"
 #include "../always_false.hpp"
 #include "../internal/has_reflection_type_v.hpp"
+#include "../internal/no_duplicate_keys_v.hpp"
 #include "Parser_base.hpp"
 #include "wrap_error.hpp"
 
@@ -25,6 +26,9 @@ class MapReader {
       std::remove_cvref_t<typename MapType::value_type::second_type>;
 
  public:
+  static constexpr bool no_duplicate_keys =
+      internal::no_duplicate_keys_v<ProcessorsType>;
+
   /**
    * @brief Constructor.
    *
@@ -64,6 +68,14 @@ class MapReader {
     } else {
       errors_->emplace_back(wrap_field_error(_name, std::move(res).error()));
     }
+  }
+
+  /**
+   * @brief Records a field-level error reported directly by the reader (for
+   * example, a duplicate key).
+   */
+  void add_error(Error&& _err) const noexcept {
+    errors_->emplace_back(std::move(_err));
   }
 
  private:

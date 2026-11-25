@@ -12,6 +12,7 @@
 #include "../Tuple.hpp"
 #include "../internal/always_inline.hpp"
 #include "../internal/is_array.hpp"
+#include "../internal/no_duplicate_keys_v.hpp"
 #include "../internal/no_extra_fields_v.hpp"
 #include "FieldErrors.hpp"
 #include "Parser_base.hpp"
@@ -26,6 +27,8 @@ class ViewReader {
   using InputVarType = typename R::InputVarType;
   using ViewType = _ViewType;
 
+  static constexpr bool no_duplicate_keys =
+      internal::no_duplicate_keys_v<ProcessorsType>;
   static constexpr size_t size_ = ViewType::size();
 
   /**
@@ -67,6 +70,16 @@ class ViewReader {
     if (should_stop_on_field_error<ProcessorsType>(*errors_)) return;
     assign_to_matching_field(*r_, _name, _var, _key_loc, view_, errors_, found_,
                              set_, std::make_integer_sequence<int, size_>());
+  }
+
+  /**
+   * @brief Records a field-level error reported directly by the reader (for
+   * example, a duplicate key).
+   */
+  void add_error(Error&& _err) const {
+    if (should_stop_on_field_error<ProcessorsType>(*errors_)) return;
+    errors_->reserve(size_);
+    errors_->emplace_back(std::move(_err));
   }
 
   /**

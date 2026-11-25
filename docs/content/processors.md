@@ -41,6 +41,7 @@ reflect-cpp currently supports the following processors:
 - `rfl::DurationsAsCount`
 - `rfl::EnumNamesOnly`
 - `rfl::FailFast`
+- `rfl::NoDuplicateKeys`
 - `rfl::NoExtraFields`
 - `rfl::NoFieldNames`
 - `rfl::NoOptionals`
@@ -365,6 +366,18 @@ Failed to parse field 'color': Invalid enum value: '2'. Must be one of [red, gre
 
 This processor only affects reading. Enum values that cannot be matched to
 a declared name are still written as their integer representation.
+
+### `rfl::NoDuplicateKeys`
+
+By default, readers such as `rfl::yaml::read` keep their existing behavior when
+an input mapping contains repeated keys. Pass `rfl::NoDuplicateKeys` to reject
+duplicate mapping keys and report each repeated key as an error (with its key
+source location in YAML):
+
+```cpp
+const auto result =
+    rfl::yaml::read<Config, rfl::NoExtraFields, rfl::NoDuplicateKeys>(yaml_str);
+```
 
 ### `rfl::NoExtraFields`
 

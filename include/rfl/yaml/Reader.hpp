@@ -14,6 +14,7 @@
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -280,25 +281,65 @@ struct Reader {
     if (guard.is_cycle()) {
       return make_error("Recursive YAML alias detected.", _obj.node_);
     }
-    for (const auto& p : _obj.node_) {
-      std::string k;
-      try {
-        k = p.first.as<std::string>();
-      } catch (const std::exception&) {
-        continue;
+    if constexpr (is_no_duplicate_keys<ObjectReader>()) {
+      std::unordered_set<std::string> seen_keys;
+      seen_keys.reserve(_obj.node_.size());
+      std::vector<Error> duplicate_errors;
+      for (const auto& p : _obj.node_) {
+        std::string k;
+        try {
+          k = p.first.as<std::string>();
+        } catch (const std::exception&) {
+          continue;
+        }
+        const auto key_loc = node_location(p.first);
+        if (!seen_keys.insert(k).second) {
+          auto dup_err = parsing::make_nested_error(
+              k, "Duplicate key '" + k + "'.", key_loc);
+          if constexpr (requires {
+                          _object_reader.add_error(std::move(dup_err));
+                        }) {
+            _object_reader.add_error(std::move(dup_err));
+          } else {
+            duplicate_errors.emplace_back(std::move(dup_err));
+          }
+          continue;
+        }
+        if constexpr (requires {
+                        _object_reader.read(std::string_view(k),
+                                            InputVarType(p.second), key_loc);
+                      }) {
+          _object_reader.read(std::string_view(k), InputVarType(p.second),
+                              key_loc);
+        } else {
+          _object_reader.read(std::string_view(k), InputVarType(p.second));
+        }
       }
-      const auto key_loc = node_location(p.first);
-      if constexpr (requires {
-                      _object_reader.read(std::string_view(k),
-                                          InputVarType(p.second), key_loc);
-                    }) {
-        _object_reader.read(std::string_view(k), InputVarType(p.second),
-                            key_loc);
-      } else {
-        _object_reader.read(std::string_view(k), InputVarType(p.second));
+      if (!duplicate_errors.empty()) {
+        return parsing::to_single_error(std::move(duplicate_errors));
       }
+      return std::nullopt;
+    } else {
+      for (const auto& p : _obj.node_) {
+        std::string k;
+        try {
+          k = p.first.as<std::string>();
+        } catch (const std::exception&) {
+          continue;
+        }
+        const auto key_loc = node_location(p.first);
+        if constexpr (requires {
+                        _object_reader.read(std::string_view(k),
+                                            InputVarType(p.second), key_loc);
+                      }) {
+          _object_reader.read(std::string_view(k), InputVarType(p.second),
+                              key_loc);
+        } else {
+          _object_reader.read(std::string_view(k), InputVarType(p.second));
+        }
+      }
+      return std::nullopt;
     }
-    return std::nullopt;
   }
 
   /// @brief Converts a YAMLInputVar to a YAMLInputObject if it is a mapping.
@@ -338,6 +379,15 @@ struct Reader {
   static constexpr bool is_fail_fast() noexcept {
     if constexpr (requires { ArrayReader::fail_fast; }) {
       return ArrayReader::fail_fast;
+    } else {
+      return false;
+    }
+  }
+
+  template <class ObjectReader>
+  static constexpr bool is_no_duplicate_keys() noexcept {
+    if constexpr (requires { ObjectReader::no_duplicate_keys; }) {
+      return ObjectReader::no_duplicate_keys;
     } else {
       return false;
     }
