@@ -113,4 +113,23 @@ source file is compiled.
 
 Sequence reading collects errors from all failing elements (unless `rfl::FailFast` is passed), matching object field error aggregation. Pass `rfl::NoDuplicateKeys` to reject duplicate mapping keys; recursive YAML aliases are always rejected and reported through `rfl::Result`.
 
+## Post-parse source locations (`rfl::SourceMap`)
+
+If you run semantic validation after deserialization succeeds, you can pass a `rfl::SourceMap*` to `rfl::yaml::read` or `rfl::yaml::load` to retain a map from parsed paths (using the same `rfl::ErrorDetail::PathSegment` representation as `Error::details()`) to `rfl::SourceLocation`:
+
+```cpp
+rfl::SourceMap source_map;
+const auto result = rfl::yaml::read<Config>(yaml_str, &source_map);
+if (result) {
+    // Exact value location of config.servers[1].port:
+    const auto loc = source_map.find({"servers", size_t{1}, "port"});
+    // Key location of config.servers[1].port:
+    const auto key_loc = source_map.find_key({"servers", size_t{1}, "port"});
+    // Nearest existing ancestor (exact = false) for omitted optional fields:
+    const auto fallback = source_map.find_nearest({"servers", size_t{1}, "tls"});
+}
+```
+
+If reading fails, `source_map` is cleared. Passing `nullptr` (or calling the overloads without `SourceMap*`) avoids building the map.
+
 
