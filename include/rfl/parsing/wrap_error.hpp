@@ -1,12 +1,14 @@
 #ifndef RFL_PARSING_WRAPERROR_HPP_
 #define RFL_PARSING_WRAPERROR_HPP_
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "../Result.hpp"
+#include "../internal/always_inline.hpp"
 #include "../internal/cold.hpp"
 
 namespace rfl::parsing {
@@ -73,13 +75,89 @@ RFL_COLD inline Error wrap_error(const std::string_view _prefix, Error&& _err) {
  *
  * @param _segment The location of the nested value relative to its parent.
  * @param _msg The error message.
+ * @param _location Optional source location for the error detail.
  * @return The error as seen from the parent.
  */
 RFL_COLD inline Error make_nested_error(
-    const ErrorDetail::PathSegment& _segment, std::string _msg) {
-  auto details = std::vector<ErrorDetail>(
-      {ErrorDetail{.path = {_segment}, .message = _msg}});
+    const ErrorDetail::PathSegment& _segment, std::string _msg,
+    std::optional<SourceLocation> _location = std::nullopt) {
+  auto details = std::vector<ErrorDetail>({ErrorDetail{
+      .path = {_segment}, .message = _msg, .location = _location}});
   return Error(std::move(_msg), std::move(details));
+}
+
+/**
+ * @brief Creates a root error carrying an optional source location.
+ *
+ * @param _msg The error message.
+ * @param _location Optional source location for the error detail.
+ * @return The error.
+ */
+RFL_COLD inline Error make_error_with_location(
+    std::string _msg, std::optional<SourceLocation> _location) {
+  if (!_location) {
+    return Error(std::move(_msg));
+  }
+  auto details = std::vector<ErrorDetail>(
+      {ErrorDetail{.path = {}, .message = _msg, .location = _location}});
+  return Error(std::move(_msg), std::move(details));
+}
+
+/**
+ * @brief Queries a reader for the source location of an input node, if the
+ * reader supports source locations.
+ */
+template <class R, class InputType>
+std::optional<SourceLocation> get_source_location(
+    const R& _r, const InputType& _input, const bool _exact = true) noexcept {
+  if constexpr (requires { _r.source_location(_input); }) {
+    auto loc = _r.source_location(_input);
+    if (loc) {
+      loc->exact = _exact;
+    }
+    return loc;
+  } else {
+    return std::nullopt;
+  }
+}
+
+/**
+ * @brief Fills in a source location on any error details that do not already
+ * have one, preserving existing leaf locations.
+ */
+RFL_COLD inline Error attach_source_location(
+    const std::optional<SourceLocation>& _location, Error&& _err) {
+  if (!_location || _err.has_all_source_locations()) {
+    return std::move(_err);
+  }
+  auto what = _err.what();
+  auto details = std::move(_err).details();
+  for (auto& detail : details) {
+    if (!detail.location.has_value()) {
+      detail.location = _location;
+    }
+  }
+  return Error(std::move(what), std::move(details));
+}
+
+/**
+ * @brief Fills in a source location from a reader on any error details that do
+ * not already have one, preserving existing leaf locations.
+ */
+template <class R, class InputType>
+RFL_ALWAYS_INLINE Error attach_source_location(const R& _r,
+                                               const InputType& _input,
+                                               Error&& _err,
+                                               const bool _exact = true) {
+  if constexpr (requires { _r.source_location(_input); }) {
+    if (_err.has_all_source_locations()) {
+      return std::move(_err);
+    }
+    return attach_source_location(get_source_location(_r, _input, _exact),
+                                  std::move(_err));
+  } else {
+    return std::move(_err);
+  }
 }
 
 }  // namespace rfl::parsing

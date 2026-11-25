@@ -330,6 +330,7 @@ struct NamedTupleParser {
   /// Generates error messages for when fields are missing.
   template <int _i>
   static RFL_ALWAYS_INLINE void handle_one_missing_field(
+      const R& _r, const InputObjectOrArrayType& _obj_or_arr,
       const std::array<bool, size_>& _found, const NamedTupleType& _view,
       std::array<bool, size_>* _set,
       FieldErrors<ProcessorsType>* _errors) noexcept {
@@ -350,8 +351,9 @@ struct NamedTupleParser {
         std::stringstream stream;
         stream << "Field named '" << std::string(current_name)
                << "' not found.";
-        _errors->emplace_back(
-            make_nested_error(std::string(current_name), stream.str()));
+        _errors->emplace_back(make_nested_error(
+            std::string(current_name), stream.str(),
+            get_source_location(_r, _obj_or_arr, /*_exact=*/false)));
 
       } else if constexpr (!internal::has_default_val_v<NamedTupleType>) {
         using NonConstT = std::remove_const_t<ValueType>;
@@ -371,7 +373,8 @@ struct NamedTupleParser {
                 "Field named '" + std::string(current_name) +
                     "' not found, and its default value could not be "
                     "constructed: " +
-                    e.what()));
+                    e.what(),
+                get_source_location(_r, _obj_or_arr, /*_exact=*/false)));
             return;
           }
         }
@@ -383,10 +386,13 @@ struct NamedTupleParser {
   /// Generates error messages for when fields are missing.
   template <int... _is>
   static RFL_ALWAYS_INLINE void handle_missing_fields(
+      const R& _r, const InputObjectOrArrayType& _obj_or_arr,
       const std::array<bool, size_>& _found, const NamedTupleType& _view,
       std::array<bool, size_>* _set, FieldErrors<ProcessorsType>* _errors,
       std::integer_sequence<int, _is...>) noexcept {
-    (handle_one_missing_field<_is>(_found, _view, _set, _errors), ...);
+    (handle_one_missing_field<_is>(_r, _obj_or_arr, _found, _view, _set,
+                                   _errors),
+     ...);
   }
 
   static auto make_parent(const std::string_view& _name,
@@ -421,7 +427,7 @@ struct NamedTupleParser {
       }
     }
     if (!should_stop_on_field_error<ProcessorsType>(errors)) {
-      handle_missing_fields(found, *_view, &set, &errors,
+      handle_missing_fields(_r, _obj_or_arr, found, *_view, &set, &errors,
                             std::make_integer_sequence<int, size_>());
     }
     if constexpr (internal::fail_fast_v<ProcessorsType>) {
@@ -453,7 +459,8 @@ struct NamedTupleParser {
     if constexpr (internal::has_default_val_v<NamedTupleType> &&
                   !internal::default_if_missing_v<ProcessorsType>) {
       if (!should_stop_on_field_error<ProcessorsType>(errors)) {
-        handle_missing_fields(reader.found(), *_view, nullptr, &errors,
+        handle_missing_fields(_r, _obj_or_arr, reader.found(), *_view, nullptr,
+                              &errors,
                               std::make_integer_sequence<int, size_>());
       }
     }

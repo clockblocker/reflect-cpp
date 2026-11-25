@@ -129,7 +129,7 @@ class TupleReader {
     } else {
       std::stringstream stream;
       stream << "Expected " << size_ << " fields, but got at least one more.";
-      *_err = Error(stream.str());
+      *_err = attach_source_location(*r_, _var, Error(stream.str()));
       return;
     }
   }

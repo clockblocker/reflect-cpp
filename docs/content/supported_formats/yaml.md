@@ -103,3 +103,12 @@ rfl::Result<Person> Person::from_yaml_obj(const YAMLVar& _obj) {
 This will force the compiler to only compile the YAML parsing when the
 source file is compiled.
 
+## Error reporting
+
+`rfl::yaml::read` populates `ErrorDetail::location` (`rfl::SourceLocation{line, column, exact}`) with 1-based line and column numbers from `yaml-cpp`:
+
+- Type conversion, validator, enum, and syntax errors point at the offending value (`exact = true`).
+- Unknown fields under `rfl::NoExtraFields` point at the offending key (`exact = true`).
+- Missing required fields point at the enclosing mapping or sequence (`exact = false`).
+
+

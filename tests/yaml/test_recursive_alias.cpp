@@ -54,6 +54,8 @@ TEST(yaml, test_recursive_mapping_alias_rejected) {
   ASSERT_EQ(details.size(), 1) << result.error().what();
   EXPECT_EQ(details[0].path, (Path{"child"}));
   EXPECT_EQ(details[0].message, "Recursive YAML alias detected.");
+  ASSERT_TRUE(details[0].location.has_value());
+  EXPECT_TRUE(details[0].location->exact);
 }
 
 TEST(yaml, test_recursive_sequence_alias_rejected) {

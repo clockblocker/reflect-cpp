@@ -19,6 +19,7 @@
 #include "schemaful/IsSchemafulWriter.hpp"
 #include "schemaful/tuple_to_named_tuple.hpp"
 #include "schemaful/tuple_to_named_tuple_t.hpp"
+#include "wrap_error.hpp"
 
 namespace rfl::parsing {
 
@@ -68,7 +69,8 @@ struct TupleParser {
         if (err) {
           call_destructors_on_tuple_where_necessary(tuple_reader.num_set(),
                                                     ptr);
-          return error(std::move(*err));
+          return error(attach_source_location(_r, _arr, std::move(*err),
+                                              /*_exact=*/false));
         }
         auto res = Result<TupleType>(std::move(*ptr));
         call_destructors_on_tuple_where_necessary(tuple_reader.num_set(), ptr);

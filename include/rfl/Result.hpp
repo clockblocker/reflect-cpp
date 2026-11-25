@@ -13,6 +13,7 @@ namespace rfl {
 
 using Error = rfl::internal::Error;
 using ErrorDetail = rfl::internal::ErrorDetail;
+using SourceLocation = rfl::internal::SourceLocation;
 
 /// To be returned when there is nothing to return, but there might be an error.
 struct Nothing {};

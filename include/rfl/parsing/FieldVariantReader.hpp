@@ -12,6 +12,7 @@
 #include "../internal/is_array.hpp"
 #include "../internal/nth_element_t.hpp"
 #include "Parser_base.hpp"
+#include "wrap_error.hpp"
 
 namespace rfl::parsing {
 
@@ -43,10 +44,24 @@ class FieldVariantReader {
    */
   void read(const std::string_view& _disc_value,
             const InputVarType& _var) const noexcept {
+    read(_disc_value, _var, std::nullopt);
+  }
+
+  /**
+   * @brief Reads a field from the input, with an optional source location for
+   * the key.
+   *
+   * @param _disc_value The name of the field.
+   * @param _var The input variable to read from.
+   * @param _key_loc The source location of the key, if available.
+   */
+  void read(const std::string_view& _disc_value, const InputVarType& _var,
+            const std::optional<SourceLocation>& _key_loc) const noexcept {
     if (*field_variant_) {
-      *field_variant_ = error(
+      *field_variant_ = error(make_error_with_location(
           "Could not parse rfl::Variant: Expected the object to have "
-          "exactly one field, but found more than one.");
+          "exactly one field, but found more than one.",
+          _key_loc ? _key_loc : get_source_location(*r_, _var)));
       return;
     }
     try_matching_fields(
@@ -57,7 +72,8 @@ class FieldVariantReader {
       stream << "Could not parse rfl::Variant, could not match field named "
                 "'"
              << _disc_value << "'.";
-      *field_variant_ = error(stream.str());
+      *field_variant_ = error(make_error_with_location(
+          stream.str(), _key_loc ? _key_loc : get_source_location(*r_, _var)));
     }
   }
 
@@ -80,11 +96,12 @@ class FieldVariantReader {
       const auto to_variant = [](ValueType&& _val) {
         return rfl::Variant<FieldTypes...>(FieldType(std::move(_val)));
       };
-      const auto embellish_error = [&](const Error& _e) {
+      const auto embellish_error = [&](Error _e) {
         std::stringstream stream;
         stream << "Could not parse rfl::Variant with field '"
-               << std::string(_disc_value) << "': " << _e.what();
-        return Error(stream.str());
+               << std::string(_disc_value) << "': ";
+        return wrap_error(stream.str(), std::string(_disc_value),
+                          std::move(_e));
       };
       *field_variant_ = Parser<R, W, ValueType, ProcessorsType>::read(*r_, _var)
                             .transform(to_variant)

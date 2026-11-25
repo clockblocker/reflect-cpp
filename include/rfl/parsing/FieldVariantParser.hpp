@@ -15,6 +15,7 @@
 #include "FieldVariantReader.hpp"
 #include "Parser_base.hpp"
 #include "schema/Type.hpp"
+#include "wrap_error.hpp"
 
 namespace rfl::parsing {
 
@@ -53,9 +54,10 @@ struct FieldVariantParser {
         return error(std::move(*err));
       }
       if (!field_variant) {
-        return error(
+        return error(make_error_with_location(
             "Could not parse: Expected the object to have "
-            "exactly one field, but found none.");
+            "exactly one field, but found none.",
+            get_source_location(_r, _obj)));
       }
       return std::move(*field_variant);
     };

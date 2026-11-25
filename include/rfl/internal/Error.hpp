@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -11,6 +12,23 @@
 #include "cold.hpp"
 
 namespace rfl::internal {
+
+/// Describes the position of a failure in the source text, for formats that
+/// track source locations (such as YAML).
+struct SourceLocation {
+  /// 1-based line number in the source text.
+  size_t line = 0;
+
+  /// 1-based column number in the source text.
+  size_t column = 0;
+
+  /// True if the location points directly at the offending node (for example,
+  /// a bad value, an unknown key, or a duplicate key). False if it points at
+  /// an enclosing node, such as the parent mapping of a missing field.
+  bool exact = true;
+
+  bool operator==(const SourceLocation&) const = default;
+};
 
 /// Describes a single failure contained in an Error: where it occurred and
 /// what went wrong.
@@ -27,6 +45,10 @@ struct ErrorDetail {
   /// The message describing the failure, without the "Failed to parse field
   /// '...': " prefixes that Error::what() contains for every level of nesting.
   std::string message;
+
+  /// The position of the failure in the source text, if the reader tracks
+  /// source locations.
+  std::optional<SourceLocation> location = std::nullopt;
 
   bool operator==(const ErrorDetail&) const = default;
 };
@@ -99,6 +121,20 @@ class Error {
       return {ErrorDetail{.path = {}, .message = std::move(what_)}};
     }
     return std::move(*details_);
+  }
+
+  /// Returns true if explicit details are present and every detail already
+  /// carries a source location.
+  bool has_all_source_locations() const noexcept {
+    if (!details_.has_value()) {
+      return false;
+    }
+    for (const auto& detail : *details_) {
+      if (!detail.location.has_value()) {
+        return false;
+      }
+    }
+    return true;
   }
 
  private:

@@ -71,6 +71,7 @@
 #include "schema/Type.hpp"
 #include "schemaful/IsSchemafulReader.hpp"
 #include "schemaful/IsSchemafulWriter.hpp"
+#include "wrap_error.hpp"
 
 namespace rfl::parsing {
 
@@ -91,6 +92,21 @@ struct Parser {
    * @return A Result containing the parsed value or an error.
    */
   static RFL_ALWAYS_INLINE auto read(const R& _r, const InputVarType& _var) {
+    if constexpr (requires { _r.source_location(_var); }) {
+      auto res = read_impl(_r, _var);
+      if (!res) [[unlikely]] {
+        return decltype(res)(error(
+            attach_source_location(_r, _var, std::move(res).error())));
+      }
+      return res;
+    } else {
+      return read_impl(_r, _var);
+    }
+  }
+
+ private:
+  static RFL_ALWAYS_INLINE auto read_impl(const R& _r,
+                                          const InputVarType& _var) {
     if constexpr (internal::is_basic_type_v<T>) {
       return ParserBasicType<R, W, T, ProcessorsType>::read(_r, _var);
 
@@ -276,6 +292,7 @@ struct Parser {
     }
   }
 
+ public:
   /**
    * @brief Writes a value to the output.
    *
