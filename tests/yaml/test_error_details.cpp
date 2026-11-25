@@ -6,6 +6,7 @@
 #include <optional>
 #include <rfl.hpp>
 #include <rfl/yaml.hpp>
+#include <set>
 #include <string>
 #include <tuple>
 #include <variant>
@@ -58,13 +59,14 @@ TEST(yaml, test_error_details_source_locations_value_key_parent) {
       "items:\n"
       "  - name: first\n"
       "    code: 0\n"
-      "    unknown_field: 42\n";
+      "    unknown_field: 42\n"
+      "  - name: second\n";
 
   const auto result = rfl::yaml::read<Config, rfl::NoExtraFields>(yaml_str);
   ASSERT_FALSE(result);
 
   const auto details = result.error().details();
-  ASSERT_EQ(details.size(), 2) << result.error().what();
+  ASSERT_EQ(details.size(), 3) << result.error().what();
 
   // Validator error points directly at the bad value (line 4, col 11: "0").
   EXPECT_EQ(details[0].path, (Path{"items", size_t{0}, "code"}));
@@ -80,20 +82,11 @@ TEST(yaml, test_error_details_source_locations_value_key_parent) {
   EXPECT_EQ(details[1].location,
             (rfl::SourceLocation{.line = 5, .column = 5, .exact = true}));
 
-  // Missing field points at its parent mapping (line 3, col 5) with exact=false.
-  const std::string missing_yaml =
-      "title: ok\n"
-      "items:\n"
-      "  - name: only_name\n";
-  const auto missing_res = rfl::yaml::read<Config>(missing_yaml);
-  ASSERT_FALSE(missing_res);
-  ASSERT_EQ(missing_res.error().details().size(), 1);
-  EXPECT_EQ(missing_res.error().details()[0].path,
-            (Path{"items", size_t{0}, "code"}));
-  EXPECT_EQ(missing_res.error().details()[0].message,
-            "Field named 'code' not found.");
-  EXPECT_EQ(missing_res.error().details()[0].location,
-            (rfl::SourceLocation{.line = 3, .column = 5, .exact = false}));
+  // Missing field points at its parent mapping (line 6, col 5) with exact=false.
+  EXPECT_EQ(details[2].path, (Path{"items", size_t{1}, "code"}));
+  EXPECT_EQ(details[2].message, "Field named 'code' not found.");
+  EXPECT_EQ(details[2].location,
+            (rfl::SourceLocation{.line = 6, .column = 5, .exact = false}));
 }
 
 TEST(yaml, test_error_details_type_conversion_and_enum_locations) {
@@ -138,26 +131,118 @@ TEST(yaml, test_error_details_syntax_error_location) {
   EXPECT_GE(details[0].location->line, 2u);
 }
 
-TEST(yaml, test_error_details_map_value_and_key_locations) {
+TEST(yaml, test_error_details_collects_all_sequence_errors) {
   const std::string yaml_str =
-      "1: bad_val\n"
-      "bad_key: 2\n";
+      "title: batch\n"
+      "items:\n"
+      "  - name: zero\n"
+      "    code: -1\n"
+      "  - name: one\n"
+      "    code: 10\n"
+      "  - name: two\n"
+      "    code: abc\n";
 
-  const auto result = rfl::yaml::read<std::map<int, int>>(yaml_str);
+  const auto result = rfl::yaml::read<Config>(yaml_str);
   ASSERT_FALSE(result);
 
   const auto details = result.error().details();
   ASSERT_EQ(details.size(), 2) << result.error().what();
 
-  // Map value error points at the value.
-  EXPECT_EQ(details[0].path, (Path{"1"}));
+  EXPECT_EQ(details[0].path, (Path{"items", size_t{0}, "code"}));
   EXPECT_EQ(details[0].location,
-            (rfl::SourceLocation{.line = 1, .column = 4, .exact = true}));
+            (rfl::SourceLocation{.line = 4, .column = 11, .exact = true}));
+
+  EXPECT_EQ(details[1].path, (Path{"items", size_t{2}, "code"}));
+  EXPECT_EQ(details[1].location,
+            (rfl::SourceLocation{.line = 8, .column = 11, .exact = true}));
+}
+
+TEST(yaml, test_error_details_sequence_fail_fast) {
+  const std::string yaml_str =
+      "title: batch\n"
+      "items:\n"
+      "  - name: zero\n"
+      "    code: -1\n"
+      "  - name: one\n"
+      "    code: 10\n"
+      "  - name: two\n"
+      "    code: abc\n";
+
+  const auto result = rfl::yaml::read<Config, rfl::FailFast>(yaml_str);
+  ASSERT_FALSE(result);
+
+  const auto details = result.error().details();
+  ASSERT_EQ(details.size(), 1) << result.error().what();
+  EXPECT_EQ(details[0].path, (Path{"items", size_t{0}, "code"}));
+  EXPECT_EQ(details[0].location,
+            (rfl::SourceLocation{.line = 4, .column = 11, .exact = true}));
+}
+
+TEST(yaml, test_error_details_array_tuple_set_and_map) {
+  struct Containers {
+    std::array<int, 3> arr;
+    std::tuple<int, std::string, int> tup;
+    std::set<int> set;
+    std::map<int, int> map;
+  };
+
+  const std::string yaml_str =
+      "arr:\n"
+      "  - bad0\n"
+      "  - 2\n"
+      "  - bad2\n"
+      "tup:\n"
+      "  - bad_int\n"
+      "  - ok\n"
+      "  - bad_int2\n"
+      "set:\n"
+      "  - bad_s0\n"
+      "  - 1\n"
+      "  - 1\n"
+      "  - bad_s3\n"
+      "map:\n"
+      "  1: bad_val\n"
+      "  bad_key: 2\n";
+
+  const auto result = rfl::yaml::read<Containers>(yaml_str);
+  ASSERT_FALSE(result);
+
+  const auto details = result.error().details();
+  ASSERT_EQ(details.size(), 8) << result.error().what();
+
+  EXPECT_EQ(details[0].path, (Path{"arr", size_t{0}}));
+  EXPECT_EQ(details[0].location,
+            (rfl::SourceLocation{.line = 2, .column = 5, .exact = true}));
+
+  EXPECT_EQ(details[1].path, (Path{"arr", size_t{2}}));
+  EXPECT_EQ(details[1].location,
+            (rfl::SourceLocation{.line = 4, .column = 5, .exact = true}));
+
+  EXPECT_EQ(details[2].path, (Path{"tup", size_t{0}}));
+  EXPECT_EQ(details[2].location,
+            (rfl::SourceLocation{.line = 6, .column = 5, .exact = true}));
+
+  EXPECT_EQ(details[3].path, (Path{"tup", size_t{2}}));
+  EXPECT_EQ(details[3].location,
+            (rfl::SourceLocation{.line = 8, .column = 5, .exact = true}));
+
+  EXPECT_EQ(details[4].path, (Path{"set", size_t{0}}));
+  EXPECT_EQ(details[4].location,
+            (rfl::SourceLocation{.line = 10, .column = 5, .exact = true}));
+
+  EXPECT_EQ(details[5].path, (Path{"set", size_t{3}}));
+  EXPECT_EQ(details[5].location,
+            (rfl::SourceLocation{.line = 13, .column = 5, .exact = true}));
+
+  // Map value error points at the value.
+  EXPECT_EQ(details[6].path, (Path{"map", "1"}));
+  EXPECT_EQ(details[6].location,
+            (rfl::SourceLocation{.line = 15, .column = 6, .exact = true}));
 
   // Map key error points at the key.
-  EXPECT_EQ(details[1].path, (Path{"bad_key"}));
-  EXPECT_EQ(details[1].location,
-            (rfl::SourceLocation{.line = 2, .column = 1, .exact = true}));
+  EXPECT_EQ(details[7].path, (Path{"map", "bad_key"}));
+  EXPECT_EQ(details[7].location,
+            (rfl::SourceLocation{.line = 16, .column = 3, .exact = true}));
 }
 
 TEST(yaml, test_error_details_tagged_union_and_variant) {

@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include "../Result.hpp"
+#include "../internal/fail_fast_v.hpp"
 #include "../internal/is_array.hpp"
 #include "Parser_base.hpp"
 #include "wrap_error.hpp"
@@ -20,13 +21,15 @@ class ArrayReader {
   static constexpr size_t size_ = _size;
 
  public:
+  static constexpr bool fail_fast = internal::fail_fast_v<ProcessorsType>;
+
   /**
    * @brief Constructor.
    * @param _r The reader to use.
    * @param _array The array to read into.
    */
   ArrayReader(const R* _r, std::array<T, _size>* _array)
-      : array_(_array), num_set_(0), r_(_r) {}
+      : array_(_array), num_set_(0), num_failed_(0), r_(_r) {}
 
   ~ArrayReader() = default;
 
@@ -54,22 +57,33 @@ class ArrayReader {
    * @return An error if reading fails or if the array is already full, std::nullopt otherwise.
    */
   std::optional<Error> read(const InputVarType& _var) const {
-    if (num_set_ == size_) {
-      return attach_source_location(
-          *r_, _var,
-          Error("Expected " + std::to_string(size_) +
-                " elements, got at least " + std::to_string(size_ + 1) + "."));
+    const auto idx = num_set_ + num_failed_;
+    if (idx >= size_) [[unlikely]] {
+      ++num_failed_;
+      if (idx == size_) {
+        return attach_source_location(
+            *r_, _var,
+            Error("Expected " + std::to_string(size_) +
+                  " elements, got at least " + std::to_string(size_ + 1) +
+                  "."));
+      }
+      return std::nullopt;
     }
     auto res =
         Parser<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(*r_, _var);
     if (res) {
-      move_to(&((*array_)[num_set_]), &(*res));
+      if (num_failed_ == 0) [[likely]] {
+        move_to(&((*array_)[num_set_]), &(*res));
+        ++num_set_;
+      } else {
+        ++num_failed_;
+      }
     } else {
+      ++num_failed_;
       return wrap_error(
-          "Failed to parse element " + std::to_string(num_set_) + ": ",
-          num_set_, std::move(res).error());
+          "Failed to parse element " + std::to_string(idx) + ": ", idx,
+          std::move(res).error());
     }
-    ++num_set_;
     return std::optional<Error>();
   }
 
@@ -103,8 +117,11 @@ class ArrayReader {
   /// The underlying array.
   std::array<T, size_>* array_;
 
-  /// Indicates the current field
+  /// Number of contiguous prefix elements constructed in *array_.
   mutable size_t num_set_;
+
+  /// Number of elements seen after the first failure (not constructed in *array_).
+  mutable size_t num_failed_;
 
   /// The underlying reader.
   const R* r_;

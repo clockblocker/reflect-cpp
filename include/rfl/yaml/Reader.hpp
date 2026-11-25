@@ -20,6 +20,7 @@
 #include "../Result.hpp"
 #include "../always_false.hpp"
 #include "../common.hpp"
+#include "../parsing/to_single_error_message.hpp"
 #include "../parsing/wrap_error.hpp"
 
 namespace rfl {
@@ -249,11 +250,19 @@ struct Reader {
         return err;
       }
     }
+    std::vector<Error> errors;
     for (size_t i = 0; i < _arr.node_.size(); ++i) {
       auto err = _array_reader.read(InputVarType(_arr.node_[i]));
       if (err) {
-        return err;
+        if constexpr (is_fail_fast<ArrayReader>()) {
+          return err;
+        } else {
+          errors.emplace_back(std::move(*err));
+        }
       }
+    }
+    if (!errors.empty()) {
+      return parsing::to_single_error(std::move(errors));
     }
     return std::nullopt;
   }
@@ -325,6 +334,15 @@ struct Reader {
   }
 
  private:
+  template <class ArrayReader>
+  static constexpr bool is_fail_fast() noexcept {
+    if constexpr (requires { ArrayReader::fail_fast; }) {
+      return ArrayReader::fail_fast;
+    } else {
+      return false;
+    }
+  }
+
   /// @brief The YAML document as a string view, used for context and error
   /// reporting.
   std::string_view yaml_str_;

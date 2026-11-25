@@ -8,6 +8,7 @@
 
 #include "../Result.hpp"
 #include "../Tuple.hpp"
+#include "../internal/fail_fast_v.hpp"
 #include "../internal/is_array.hpp"
 #include "AreReaderAndWriter.hpp"
 #include "Parser_base.hpp"
@@ -24,6 +25,8 @@ class TupleReader {
   static constexpr size_t size_ = rfl::tuple_size_v<TupleType>;
 
  public:
+  static constexpr bool fail_fast = internal::fail_fast_v<ProcessorsType>;
+
   /**
    * @brief Constructor.
    *
@@ -31,7 +34,7 @@ class TupleReader {
    * @param _tuple The tuple to read into.
    */
   TupleReader(const R* _r, TupleType* _tuple)
-      : num_set_(0), r_(_r), tuple_(_tuple) {}
+      : num_set_(0), num_failed_(0), r_(_r), tuple_(_tuple) {}
 
   ~TupleReader() = default;
 
@@ -62,8 +65,13 @@ class TupleReader {
    * @return An optional error.
    */
   std::optional<Error> read(const InputVarType& _var) const {
+    const auto idx = num_set_ + num_failed_;
+    if (idx > size_) [[unlikely]] {
+      ++num_failed_;
+      return std::nullopt;
+    }
     std::optional<Error> err;
-    read_impl(_var, &err);
+    read_impl(idx, _var, &err);
     return err;
   }
 
@@ -107,26 +115,33 @@ class TupleReader {
   }
 
   template <size_t _i = 0>
-  void read_impl(const InputVarType& _var, std::optional<Error>* _err) const {
+  void read_impl(const size_t _idx, const InputVarType& _var,
+                 std::optional<Error>* _err) const {
     if constexpr (_i < size_) {
-      if (num_set_ == _i) {
+      if (_idx == _i) {
         using CurrentType =
             std::remove_cvref_t<rfl::tuple_element_t<_i, TupleType>>;
 
         auto res = Parser<R, W, CurrentType, ProcessorsType>::read(*r_, _var);
 
         if (res) {
-          move_to(&(rfl::get<_i>(*tuple_)), &(*res));
-          ++num_set_;
+          if (num_failed_ == 0) [[likely]] {
+            move_to(&(rfl::get<_i>(*tuple_)), &(*res));
+            ++num_set_;
+          } else {
+            ++num_failed_;
+          }
         } else {
+          ++num_failed_;
           *_err =
               wrap_error("Failed to parse field " + std::to_string(_i) + ": ",
                          _i, std::move(res).error());
         }
         return;
       }
-      read_impl<_i + 1>(_var, _err);
+      read_impl<_i + 1>(_idx, _var, _err);
     } else {
+      ++num_failed_;
       std::stringstream stream;
       stream << "Expected " << size_ << " fields, but got at least one more.";
       *_err = attach_source_location(*r_, _var, Error(stream.str()));
@@ -153,8 +168,11 @@ class TupleReader {
   }
 
  private:
-  /// Indicates the last field that was set.
+  /// Number of contiguous prefix fields constructed in *tuple_.
   mutable size_t num_set_;
+
+  /// Number of fields seen after the first failure (not constructed in *tuple_).
+  mutable size_t num_failed_;
 
   /// The underlying reader.
   const R* r_;
