@@ -108,9 +108,9 @@ source file is compiled.
 `rfl::yaml::read` populates `ErrorDetail::location` (`rfl::SourceLocation{line, column, exact}`) with 1-based line and column numbers from `yaml-cpp`:
 
 - Type conversion, validator, enum, and syntax errors point at the offending value (`exact = true`).
-- Unknown fields under `rfl::NoExtraFields` point at the offending key (`exact = true`).
+- Unknown fields under `rfl::NoExtraFields` and duplicate mapping keys under `rfl::NoDuplicateKeys` point at the offending key (`exact = true`).
 - Missing required fields point at the enclosing mapping or sequence (`exact = false`).
 
-Sequence reading collects errors from all failing elements (unless `rfl::FailFast` is passed), matching object field error aggregation. Recursive YAML aliases are rejected and reported through `rfl::Result`.
+Sequence reading collects errors from all failing elements (unless `rfl::FailFast` is passed), matching object field error aggregation. Pass `rfl::NoDuplicateKeys` to reject duplicate mapping keys; recursive YAML aliases are always rejected and reported through `rfl::Result`.
 
 

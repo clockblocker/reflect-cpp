@@ -21,6 +21,7 @@
 #include "../internal/is_implicit_value.hpp"
 #include "../internal/is_literal.hpp"
 #include "../internal/is_validator.hpp"
+#include "../internal/no_duplicate_keys_v.hpp"
 #include "../internal/processed_t.hpp"
 #include "../internal/ptr_cast.hpp"
 #include "../internal/to_ptr_named_tuple.hpp"
@@ -94,6 +95,9 @@ struct Parser {
    * @return A Result containing the parsed value or an error.
    */
   static RFL_ALWAYS_INLINE auto read(const R& _r, const InputVarType& _var) {
+    static_assert(!internal::no_duplicate_keys_v<ProcessorsType> ||
+                      internal::reader_supports_no_duplicate_keys_v<R>,
+                  "rfl::NoDuplicateKeys is not supported by this reader.");
     if constexpr (requires { _r.source_location(_var); }) {
       auto res = read_impl(_r, _var);
       if (!res) [[unlikely]] {
