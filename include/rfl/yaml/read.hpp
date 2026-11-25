@@ -46,7 +46,9 @@ Result<internal::wrap_in_rfl_array_t<T>> read(const std::string& _yaml_str) {
   try {
     const auto var = InputVarType(YAML::Load(_yaml_str));
     return read<T, Ps...>(var, _yaml_str);
-  } catch (std::exception& e) {
+  } catch (const YAML::Exception& e) {
+    return error(Reader::make_error(e.what(), e.mark));
+  } catch (const std::exception& e) {
     return error(e.what());
   }
 }

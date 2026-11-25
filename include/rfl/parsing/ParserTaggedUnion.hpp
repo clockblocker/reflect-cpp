@@ -2,6 +2,7 @@
 #define RFL_PARSING_PARSER_TAGGED_UNION_HPP_
 
 #include <map>
+#include <optional>
 #include <sstream>
 #include <type_traits>
 #include <utility>
@@ -75,14 +76,14 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
 
     } else {
       const auto get_disc =
-          [&_r](InputObjectOrArrayType _obj_or_arr) -> Result<std::string> {
+          [&_r](InputObjectOrArrayType _obj_or_arr) -> Result<Discriminator> {
         return get_discriminator(_r, _obj_or_arr);
       };
 
       const auto to_result =
-          [&_r, _var](const std::string& _disc_value) -> ResultType {
+          [&_r, _var](const Discriminator& _disc) -> ResultType {
         return find_matching_alternative(
-            _r, _disc_value, _var,
+            _r, _disc, _var,
             std::make_integer_sequence<int, sizeof...(AlternativeTypes)>());
       };
 
@@ -137,9 +138,14 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
   }
 
  private:
+  struct Discriminator {
+    std::string value;
+    std::optional<SourceLocation> location;
+  };
+
   template <int... _is>
   static ResultType find_matching_alternative(
-      const R& _r, const std::string& _disc_value, const InputVarType& _var,
+      const R& _r, const Discriminator& _disc, const InputVarType& _var,
       std::integer_sequence<int, _is...>) noexcept {
     using PossibleTags =
         possible_tags_t<TaggedUnion<_discriminator, AlternativeTypes...>>;
@@ -147,7 +153,7 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
                   "Duplicate tags are not allowed inside tagged unions.");
     ResultType res = error("");
     bool match_found = false;
-    (set_if_disc_value_matches<_is>(_r, _disc_value, _var, &res, &match_found),
+    (set_if_disc_value_matches<_is>(_r, _disc.value, _var, &res, &match_found),
      ...);
     if (match_found) [[likely]] {
       return res;
@@ -155,10 +161,10 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
       const auto names = PossibleTags::names();
       std::stringstream stream;
       stream << "Could not parse tagged union, could not match "
-             << _discriminator.str() << " '" << _disc_value
+             << _discriminator.str() << " '" << _disc.value
              << "'. The following tags are allowed: "
              << internal::strings::join(", ", names);
-      return error(stream.str());
+      return error(make_error_with_location(stream.str(), _disc.location));
     }
   }
 
@@ -207,27 +213,39 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
   }
 
   /// Retrieves the discriminator from an object
-  static Result<std::string> get_discriminator(
+  static Result<Discriminator> get_discriminator(
       const R& _r, const InputObjectOrArrayType& _obj_or_arr) noexcept {
-    const auto to_type = [&_r](auto _var) {
-      return _r.template to_basic_type<std::string>(_var);
+    const auto make_disc_error =
+        [](const std::optional<SourceLocation>& _loc) {
+          std::stringstream stream;
+          stream << "Could not parse tagged union: Could not find field '"
+                 << _discriminator.str()
+                 << "' or type of field was not a string.";
+          return make_error_with_location(stream.str(), _loc);
+        };
+
+    const auto to_type = [&](auto _var) -> Result<Discriminator> {
+      const auto loc = get_source_location(_r, _var, /*_exact=*/true);
+      auto res = _r.template to_basic_type<std::string>(_var);
+      if (!res) {
+        return error(make_disc_error(loc));
+      }
+      return Discriminator{.value = std::move(*res), .location = loc};
     };
 
-    const auto embellish_error = [](const auto&) {
-      std::stringstream stream;
-      stream << "Could not parse tagged union: Could not find field '"
-             << _discriminator.str() << "' or type of field was not a string.";
-      return Error(stream.str());
+    const auto missing_error = [&](const auto&) {
+      return make_disc_error(
+          get_source_location(_r, _obj_or_arr, /*_exact=*/false));
     };
 
     if constexpr (no_field_names_) {
       return _r.get_field_from_array(0, _obj_or_arr)
-          .and_then(to_type)
-          .transform_error(embellish_error);
+          .transform_error(missing_error)
+          .and_then(to_type);
     } else {
       return _r.get_field_from_object(_discriminator.str(), _obj_or_arr)
-          .and_then(to_type)
-          .transform_error(embellish_error);
+          .transform_error(missing_error)
+          .and_then(to_type);
     }
   }
 

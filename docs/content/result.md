@@ -146,6 +146,16 @@ Found 2 errors:
 If your program needs to know where each failure occurred, for instance to show each message next to the right input in a form, use `.details()` instead. It returns a `std::vector<rfl::ErrorDetail>` with one entry per failure:
 
 ```cpp
+struct SourceLocation {
+  // 1-based line and column in the source text.
+  size_t line = 0;
+  size_t column = 0;
+
+  // True if the location points at the offending value or key; false if it
+  // points at an enclosing node, such as the parent mapping of a missing field.
+  bool exact = true;
+};
+
 struct ErrorDetail {
   using PathSegment = std::variant<std::string, size_t>;
 
@@ -154,6 +164,9 @@ struct ErrorDetail {
 
   // The message, without the "Failed to parse field '...': " prefixes.
   std::string message;
+
+  // Source position when the reader tracks source locations (such as YAML).
+  std::optional<SourceLocation> location = std::nullopt;
 };
 ```
 

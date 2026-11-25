@@ -1,6 +1,7 @@
 #ifndef RFL_PARSING_MAPREADER_HPP_
 #define RFL_PARSING_MAPREADER_HPP_
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -44,7 +45,20 @@ class MapReader {
    */
   void read(const std::string_view& _name,
             const InputVarType& _var) const noexcept {
-    auto res = get_pair(_name, _var);
+    read(_name, _var, std::nullopt);
+  }
+
+  /**
+   * @brief Reads a single field into the map, with an optional source location
+   * for the key.
+   *
+   * @param _name The name of the field.
+   * @param _var The input variable to read from.
+   * @param _key_loc The source location of the key, if available.
+   */
+  void read(const std::string_view& _name, const InputVarType& _var,
+            const std::optional<SourceLocation>& _key_loc) const noexcept {
+    auto res = get_pair(_name, _var, _key_loc);
     if (res) {
       map_->emplace(std::move(*res));
     } else {
@@ -104,10 +118,16 @@ class MapReader {
   }
 
   Result<std::pair<KeyType, ValueType>> get_pair(
-      const std::string_view& _name, const InputVarType& _var) const noexcept {
+      const std::string_view& _name, const InputVarType& _var,
+      const std::optional<SourceLocation>& _key_loc) const noexcept {
     const auto to_pair = [&](ValueType&& _val) {
       auto pair = std::make_pair(std::string(_name), std::move(_val));
-      return make_key(std::move(pair));
+      auto key_res = make_key(std::move(pair));
+      if (!key_res && _key_loc) {
+        return Result<std::pair<KeyType, ValueType>>(error(
+            attach_source_location(_key_loc, std::move(key_res).error())));
+      }
+      return key_res;
     };
     return Parser<R, W, std::remove_cvref_t<ValueType>, ProcessorsType>::read(
                *r_, _var)

@@ -66,7 +66,7 @@ class TupleReader {
     if (num_set_ == size_) {
       std::stringstream stream;
       stream << "Expected " << size_ << " fields, but got at least one more.";
-      return Error(stream.str());
+      return attach_source_location(*r_, _var, Error(stream.str()));
     }
     std::optional<Error> err;
     [&]<size_t... _is>(std::integer_sequence<size_t, _is...>) {

@@ -3,6 +3,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string_view>
 #include <type_traits>
@@ -55,8 +56,22 @@ class ViewReaderWithDefault {
    * @param _var The input variable to read from.
    */
   void read(const std::string_view& _name, const InputVarType& _var) const {
+    read(_name, _var, std::nullopt);
+  }
+
+  /**
+   * @brief Reads a single field into the view, with an optional source
+   * location for the key.
+   *
+   * @param _name The name of the field.
+   * @param _var The input variable to read from.
+   * @param _key_loc The source location of the key, if available.
+   */
+  void read(const std::string_view& _name, const InputVarType& _var,
+            const std::optional<SourceLocation>& _key_loc) const {
     if (should_stop_on_field_error<ProcessorsType>(*errors_)) return;
-    assign_to_matching_field(*r_, _name, _var, view_, errors_, found_.get(),
+    assign_to_matching_field(*r_, _name, _var, _key_loc, view_, errors_,
+                             found_.get(),
                              std::make_integer_sequence<int, size_>());
   }
 
@@ -116,11 +131,10 @@ class ViewReaderWithDefault {
   }
 
   template <int... is>
-  static void assign_to_matching_field(const R& _r,
-                                       const std::string_view& _current_name,
-                                       const auto& _var, auto* _view,
-                                       auto* _errors, auto* _found,
-                                       std::integer_sequence<int, is...>) {
+  static void assign_to_matching_field(
+      const R& _r, const std::string_view& _current_name, const auto& _var,
+      const std::optional<SourceLocation>& _key_loc, auto* _view, auto* _errors,
+      auto* _found, std::integer_sequence<int, is...>) {
     bool already_assigned = false;
 
     (assign_if_field_matches<is>(_r, _current_name, _var, _view, _errors,
@@ -138,8 +152,9 @@ class ViewReaderWithDefault {
         stream << "Value named '" << std::string(_current_name)
                << "' not used. Remove the rfl::NoExtraFields processor or add "
                   "rfl::ExtraFields to avoid this error message.";
-        _errors->emplace_back(
-            make_nested_error(std::string(_current_name), stream.str()));
+        _errors->emplace_back(make_nested_error(
+            std::string(_current_name), stream.str(),
+            _key_loc ? _key_loc : get_source_location(_r, _var)));
       }
     }
   }

@@ -2,6 +2,7 @@
 #define RFL_PARSING_VIEWREADER_HPP_
 
 #include <array>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -50,9 +51,22 @@ class ViewReader {
    * @param _var The input variable to read from.
    */
   void read(const std::string_view& _name, const InputVarType& _var) const {
+    read(_name, _var, std::nullopt);
+  }
+
+  /**
+   * @brief Reads a single field into the view, with an optional source
+   * location for the key.
+   *
+   * @param _name The name of the field.
+   * @param _var The input variable to read from.
+   * @param _key_loc The source location of the key, if available.
+   */
+  void read(const std::string_view& _name, const InputVarType& _var,
+            const std::optional<SourceLocation>& _key_loc) const {
     if (should_stop_on_field_error<ProcessorsType>(*errors_)) return;
-    assign_to_matching_field(*r_, _name, _var, view_, errors_, found_, set_,
-                             std::make_integer_sequence<int, size_>());
+    assign_to_matching_field(*r_, _name, _var, _key_loc, view_, errors_, found_,
+                             set_, std::make_integer_sequence<int, size_>());
   }
 
   /**
@@ -63,7 +77,8 @@ class ViewReader {
    */
   void read(const int _index, const InputVarType& _var) const {
     if (should_stop_on_field_error<ProcessorsType>(*errors_)) return;
-    assign_to_matching_field(*r_, _index, _var, view_, errors_, found_, set_,
+    assign_to_matching_field(*r_, _index, _var, std::nullopt, view_, errors_,
+                             found_, set_,
                              std::make_integer_sequence<int, size_>());
   }
 
@@ -71,8 +86,8 @@ class ViewReader {
   template <int i>
   void read(std::integral_constant<int, i>, const InputVarType& _var) const {
     if (should_stop_on_field_error<ProcessorsType>(*errors_)) return;
-    assign_to_matching_field(*r_, i, _var, view_, errors_, found_, set_,
-                             std::integer_sequence<int, i>());
+    assign_to_matching_field(*r_, i, _var, std::nullopt, view_, errors_, found_,
+                             set_, std::integer_sequence<int, i>());
   }
 
   /**
@@ -158,11 +173,10 @@ class ViewReader {
   }
 
   template <int... is>
-  static void assign_to_matching_field(const R& _r,
-                                       const auto _current_name_or_index,
-                                       const auto& _var, auto* _view,
-                                       auto* _errors, auto* _found, auto* _set,
-                                       std::integer_sequence<int, is...>) {
+  static void assign_to_matching_field(
+      const R& _r, const auto _current_name_or_index, const auto& _var,
+      const std::optional<SourceLocation>& _key_loc, auto* _view, auto* _errors,
+      auto* _found, auto* _set, std::integer_sequence<int, is...>) {
     bool already_assigned = false;
 
     (assign_if_field_matches<is>(_r, _current_name_or_index, _var, _view,
@@ -187,7 +201,8 @@ class ViewReader {
         std::stringstream stream;
         stream << "Value named '" << _current_name_or_index << "' not used.";
         _errors->emplace_back(make_nested_error(
-            to_path_segment(_current_name_or_index), stream.str()));
+            to_path_segment(_current_name_or_index), stream.str(),
+            _key_loc ? _key_loc : get_source_location(_r, _var)));
       }
     }
   }

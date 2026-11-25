@@ -11,6 +11,7 @@
 #include "../internal/bitset.hpp"
 #include "Parser_base.hpp"
 #include "schema/Type.hpp"
+#include "wrap_error.hpp"
 
 namespace rfl::parsing {
 
@@ -24,13 +25,19 @@ struct ParserBitset {
 
   static Result<Type> read(const R& _r,
                            const typename R::InputVarType& _var) noexcept {
-    return ReprParser::read(_r, _var).and_then([](const auto& _value) {
+    auto res = ReprParser::read(_r, _var).and_then([](const auto& _value) {
       if constexpr (std::is_same_v<Representation, std::string>) {
         return internal::bitset_from_string<N>(_value);
       } else {
         return internal::bitset_from_bytes<N>(_value);
       }
     });
+    if constexpr (requires { _r.source_location(_var); }) {
+      if (!res) [[unlikely]] {
+        return error(attach_source_location(_r, _var, std::move(res).error()));
+      }
+    }
+    return res;
   }
 
   template <class P>

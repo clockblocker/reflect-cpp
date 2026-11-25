@@ -15,6 +15,7 @@
 #include "Parser_base.hpp"
 #include "call_destructors_on_array_where_necessary.hpp"
 #include "schema/Type.hpp"
+#include "wrap_error.hpp"
 
 namespace rfl::parsing {
 
@@ -71,7 +72,8 @@ struct ParserArray {
     err = array_reader.check_size();
     if (err) {
       call_destructors_on_array_where_necessary(array_reader.num_set(), ptr);
-      return error(std::move(*err));
+      return error(attach_source_location(_r, _var, std::move(*err),
+                                          /*_exact=*/false));
     }
     auto result = Result<std::array<T, _size>>(std::move(*ptr));
     call_destructors_on_array_where_necessary(array_reader.num_set(), ptr);

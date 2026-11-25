@@ -14,11 +14,13 @@
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "../Result.hpp"
 #include "../always_false.hpp"
 #include "../common.hpp"
+#include "../parsing/wrap_error.hpp"
 
 namespace rfl {
 namespace yaml {
@@ -81,6 +83,58 @@ struct Reader {
   /// @param _yaml_str The YAML document as a string view.
   Reader(const std::string_view& _yaml_str) noexcept : yaml_str_(_yaml_str) {}
 
+  /// @brief Converts a yaml-cpp Mark (0-based) into a 1-based SourceLocation.
+  static std::optional<SourceLocation> mark_to_location(
+      const YAML::Mark& _mark, const bool _exact = true) noexcept {
+    if (_mark.is_null() || _mark.line < 0 || _mark.column < 0) {
+      return std::nullopt;
+    }
+    return SourceLocation{.line = static_cast<size_t>(_mark.line) + 1,
+                          .column = static_cast<size_t>(_mark.column) + 1,
+                          .exact = _exact};
+  }
+
+  /// @brief Extracts a 1-based SourceLocation from a YAML::Node, if valid.
+  static std::optional<SourceLocation> node_location(
+      const YAML::Node& _node, const bool _exact = true) noexcept {
+    if (!_node.IsDefined()) {
+      return std::nullopt;
+    }
+    return mark_to_location(_node.Mark(), _exact);
+  }
+
+  /// @brief Creates an Error carrying a source location from a yaml-cpp Mark.
+  static Error make_error(std::string _msg, const YAML::Mark& _mark,
+                          const bool _exact = true) {
+    return parsing::make_error_with_location(std::move(_msg),
+                                             mark_to_location(_mark, _exact));
+  }
+
+  /// @brief Creates an Error carrying a source location from a YAML::Node.
+  static Error make_error(std::string _msg, const YAML::Node& _node,
+                          const bool _exact = true) {
+    return parsing::make_error_with_location(std::move(_msg),
+                                             node_location(_node, _exact));
+  }
+
+  /// @brief Returns the 1-based source location of a YAML value node.
+  std::optional<SourceLocation> source_location(
+      const InputVarType& _var) const noexcept {
+    return node_location(_var.node_);
+  }
+
+  /// @brief Returns the 1-based source location of a YAML mapping node.
+  std::optional<SourceLocation> source_location(
+      const InputObjectType& _obj) const noexcept {
+    return node_location(_obj.node_);
+  }
+
+  /// @brief Returns the 1-based source location of a YAML sequence node.
+  std::optional<SourceLocation> source_location(
+      const InputArrayType& _arr) const noexcept {
+    return node_location(_arr.node_);
+  }
+
   /// @brief Retrieves an element from a YAML sequence by index.
   /// @param _idx The index of the element in the array.
   /// @param _arr The YAMLInputArray representing the sequence.
@@ -88,7 +142,8 @@ struct Reader {
   rfl::Result<InputVarType> get_field_from_array(
       const size_t _idx, const InputArrayType& _arr) const noexcept {
     if (_idx >= _arr.node_.size()) {
-      return error("Index " + std::to_string(_idx) + " of of bounds.");
+      return error(make_error("Index " + std::to_string(_idx) + " of of bounds.",
+                              _arr.node_, /*_exact=*/false));
     }
     return InputVarType(_arr.node_[_idx]);
   }
@@ -102,7 +157,8 @@ struct Reader {
       const std::string& _name, const InputObjectType& _obj) const noexcept {
     auto var = InputVarType(_obj.node_[_name]);
     if (!var.node_) {
-      return error("Object contains no field named '" + _name + "'.");
+      return error(make_error("Object contains no field named '" + _name + "'.",
+                              _obj.node_, /*_exact=*/false));
     }
     return var;
   }
@@ -154,8 +210,13 @@ struct Reader {
         static_assert(rfl::always_false_v<T>, "Unsupported type.");
       }
 
-    } catch (std::exception& e) {
-      return error(e.what());
+    } catch (const YAML::Exception& e) {
+      if (!e.mark.is_null()) {
+        return error(make_error(e.what(), e.mark));
+      }
+      return error(make_error(e.what(), _var.node_));
+    } catch (const std::exception& e) {
+      return error(make_error(e.what(), _var.node_));
     }
   }
 
@@ -166,7 +227,7 @@ struct Reader {
   rfl::Result<InputArrayType> to_array(
       const InputVarType& _var) const noexcept {
     if (!_var.node_.IsSequence()) {
-      return error("Could not cast to sequence!");
+      return error(make_error("Could not cast to sequence!", _var.node_));
     }
     return InputArrayType(_var.node_);
   }
@@ -181,7 +242,7 @@ struct Reader {
                                   const InputArrayType& _arr) const noexcept {
     const ActiveNodeGuard guard(_arr.node_);
     if (guard.is_cycle()) {
-      return Error("Recursive YAML alias detected.");
+      return make_error("Recursive YAML alias detected.", _arr.node_);
     }
     if constexpr (requires { _array_reader.reserve(_arr.node_.size()); }) {
       if (auto err = _array_reader.reserve(_arr.node_.size())) {
@@ -189,7 +250,7 @@ struct Reader {
       }
     }
     for (size_t i = 0; i < _arr.node_.size(); ++i) {
-      auto err = _array_reader.read(_arr.node_[i]);
+      auto err = _array_reader.read(InputVarType(_arr.node_[i]));
       if (err) {
         return err;
       }
@@ -208,14 +269,24 @@ struct Reader {
                                    const InputObjectType& _obj) const noexcept {
     const ActiveNodeGuard guard(_obj.node_);
     if (guard.is_cycle()) {
-      return Error("Recursive YAML alias detected.");
+      return make_error("Recursive YAML alias detected.", _obj.node_);
     }
     for (const auto& p : _obj.node_) {
+      std::string k;
       try {
-        const auto k = p.first.as<std::string>();
-        _object_reader.read(std::string_view(k), InputVarType(p.second));
-      } catch (std::exception& e) {
+        k = p.first.as<std::string>();
+      } catch (const std::exception&) {
         continue;
+      }
+      const auto key_loc = node_location(p.first);
+      if constexpr (requires {
+                      _object_reader.read(std::string_view(k),
+                                          InputVarType(p.second), key_loc);
+                    }) {
+        _object_reader.read(std::string_view(k), InputVarType(p.second),
+                            key_loc);
+      } else {
+        _object_reader.read(std::string_view(k), InputVarType(p.second));
       }
     }
     return std::nullopt;
@@ -228,7 +299,7 @@ struct Reader {
   rfl::Result<InputObjectType> to_object(
       const InputVarType& _var) const noexcept {
     if (!_var.node_.IsMap()) {
-      return error("Could not cast to map!");
+      return error(make_error("Could not cast to map!", _var.node_));
     }
     return InputObjectType(_var.node_);
   }
@@ -243,8 +314,13 @@ struct Reader {
       const InputVarType _var) const noexcept {
     try {
       return T::from_yaml_obj(_var);
-    } catch (std::exception& e) {
-      return error(e.what());
+    } catch (const YAML::Exception& e) {
+      if (!e.mark.is_null()) {
+        return error(make_error(e.what(), e.mark));
+      }
+      return error(make_error(e.what(), _var.node_));
+    } catch (const std::exception& e) {
+      return error(make_error(e.what(), _var.node_));
     }
   }
 
