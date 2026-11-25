@@ -2,6 +2,7 @@
 #define RFL_YAML_LOAD_HPP_
 
 #include "../Result.hpp"
+#include "../SourceMap.hpp"
 #include "../io/load_string.hpp"
 #include "read.hpp"
 
@@ -18,6 +19,18 @@ template <class T, class... Ps>
 Result<T> load(const std::string& _fname) {
   const auto read_string = [](const auto& _str) {
     return read<T, Ps...>(_str);
+  };
+  return rfl::io::load_string(_fname).and_then(read_string);
+}
+
+/// Loads an object from a YAML file and populates _source_map on success.
+template <class T, class... Ps>
+Result<T> load(const std::string& _fname, SourceMap* _source_map) {
+  if (_source_map) {
+    _source_map->clear();
+  }
+  const auto read_string = [_source_map](const auto& _str) {
+    return read<T, Ps...>(_str, _source_map);
   };
   return rfl::io::load_string(_fname).and_then(read_string);
 }

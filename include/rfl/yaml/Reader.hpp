@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "../Result.hpp"
+#include "../SourceMap.hpp"
 #include "../always_false.hpp"
 #include "../common.hpp"
 #include "../parsing/to_single_error_message.hpp"
@@ -396,6 +397,10 @@ struct Reader {
   /// reporting.
   std::string_view yaml_str_;
 };
+
+/// @brief Builds a path-to-SourceLocation map for all nodes in a parsed YAML
+/// tree, allowing post-parse validation to locate fields and elements.
+RFL_API SourceMap build_source_map(const YAML::Node& _root);
 
 }  // namespace yaml
 }  // namespace rfl

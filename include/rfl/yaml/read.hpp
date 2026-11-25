@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "../Processors.hpp"
+#include "../SourceMap.hpp"
 #include "../internal/no_field_names_v.hpp"
 #include "../internal/wrap_in_rfl_array_t.hpp"
 #include "Parser.hpp"
@@ -75,6 +76,54 @@ auto read(std::istream& _stream) {
   const auto yaml_str = std::string(std::istreambuf_iterator<char>(_stream),
                                     std::istreambuf_iterator<char>());
   return read<T, Ps...>(yaml_str);
+}
+
+/// Parses an object from a YAML var and populates _source_map on success.
+template <class T, class... Ps>
+auto read(const InputVarType& _var, const std::string& _yaml_str,
+          SourceMap* _source_map) {
+  if (_source_map) {
+    _source_map->clear();
+  }
+  auto res = read<T, Ps...>(_var, _yaml_str);
+  if (res && _source_map) {
+    *_source_map = build_source_map(_var.node_);
+  }
+  return res;
+}
+
+/// Parses an object from a YAML string and populates _source_map on success.
+template <class T, class... Ps>
+Result<internal::wrap_in_rfl_array_t<T>> read(const std::string& _yaml_str,
+                                              SourceMap* _source_map) {
+  if (_source_map) {
+    _source_map->clear();
+  }
+  try {
+    const auto var = InputVarType(YAML::Load(_yaml_str));
+    return read<T, Ps...>(var, _yaml_str, _source_map);
+  } catch (const YAML::Exception& e) {
+    return error(Reader::make_error(e.what(), e.mark));
+  } catch (const std::exception& e) {
+    return error(e.what());
+  }
+}
+
+/// Parses an object from a YAML string_view and populates _source_map on
+/// success.
+template <class T, class... Ps>
+Result<internal::wrap_in_rfl_array_t<T>> read(const std::string_view _yaml_str,
+                                              SourceMap* _source_map) {
+  return read<T, Ps...>(std::string(_yaml_str), _source_map);
+}
+
+/// Parses an object from an istream containing YAML and populates _source_map
+/// on success.
+template <class T, class... Ps>
+auto read(std::istream& _stream, SourceMap* _source_map) {
+  const auto yaml_str = std::string(std::istreambuf_iterator<char>(_stream),
+                                    std::istreambuf_iterator<char>());
+  return read<T, Ps...>(yaml_str, _source_map);
 }
 
 }  // namespace yaml
