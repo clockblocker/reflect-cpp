@@ -1,6 +1,7 @@
 #ifndef RFL_CLI_READ_APP_HPP_
 #define RFL_CLI_READ_APP_HPP_
 
+#include <initializer_list>
 #include <map>
 #include <string>
 #include <string_view>
@@ -164,6 +165,31 @@ template <class T, class... Ps>
 rfl::Result<std::variant<T, HelpOrVersion>> read_app(int argc,
                                                      wchar_t* argv[]) {
   return read_app<T, Ps...>(argc, static_cast<const wchar_t* const*>(argv));
+}
+
+/// Like rfl::cli::read_app, reading every element of a range of narrow or
+/// wide strings (none is skipped as the program name), using `_program_name`
+/// in the help and version output when the rfl::cli::App has no name.
+template <class T, class... Ps,
+          class R = std::initializer_list<std::string_view>>
+  requires(internal::StringRange<R> || internal::WideStringRange<R>)
+rfl::Result<std::variant<T, HelpOrVersion>> read_app(
+    std::string_view _program_name, R&& _args) {
+  return internal::parse_and_read_app<T, Ps...>(
+      std::string(_program_name), [&](const auto& _options) {
+        return internal::parse_argv(std::forward<R>(_args), _options);
+      });
+}
+
+/// Like rfl::cli::read_app, reading every element of a range of narrow or
+/// wide strings, using the rfl::cli::App's name as the program name.
+template <class T, class... Ps,
+          class R = std::initializer_list<std::string_view>>
+  requires(internal::StringRange<R> || internal::WideStringRange<R>)
+rfl::Result<std::variant<T, HelpOrVersion>> read_app(R&& _args) {
+  using ProcessorsType = Processors<SnakeCaseToKebabCase, Ps...>;
+  return read_app<T, Ps...>(internal::app_settings_t<ProcessorsType>::name,
+                            std::forward<R>(_args));
 }
 
 }  // namespace rfl::cli
