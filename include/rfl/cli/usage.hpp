@@ -85,6 +85,8 @@ struct UsageArg {
   /// Rendered constraints, such as "Range: 1..65535.".
   std::vector<std::string> constraints;
   std::optional<std::string> default_value;
+  /// Optional help section header (from rfl::Group).
+  std::string group;
 };
 
 template <class NamedTupleType, class ProcessorsType, size_t _i>
@@ -499,6 +501,10 @@ class UsageCollector {
     if (_default) {
       _arg.default_value = usage_default_to_string(*_default, delimiter_);
     }
+    if (const auto it = options_->option_groups.find(_arg.name);
+        it != options_->option_groups.end()) {
+      _arg.group = it->second;
+    }
     args_.emplace_back(std::move(_arg));
   }
 
@@ -678,12 +684,12 @@ inline std::string format_usage(const std::string& _program_name,
   constexpr size_t indent = 2;
   constexpr size_t gap = 2;
   const auto continuation = '\n' + std::string(indent + width + gap, ' ');
-  out += "\nArguments:\n";
-  for (const auto& [left, right] : rows) {
-    out += std::string(indent, ' ') + left;
-    if (!right.empty()) {
-      out += std::string(width - left.size() + gap, ' ');
-      for (const char c : right) {
+  const auto emit_row = [&](const std::string& _left,
+                            const std::string& _right) {
+    out += std::string(indent, ' ') + _left;
+    if (!_right.empty()) {
+      out += std::string(width - _left.size() + gap, ' ');
+      for (const char c : _right) {
         if (c == '\n') {
           out += continuation;
         } else {
@@ -692,6 +698,40 @@ inline std::string format_usage(const std::string& _program_name,
       }
     }
     out += '\n';
+  };
+
+  const bool has_groups = std::any_of(
+      _args.begin(), _args.end(),
+      [](const UsageArg& _arg) { return !_arg.group.empty(); });
+
+  if (!has_groups) {
+    out += "\nArguments:\n";
+    for (const auto& [left, right] : rows) {
+      emit_row(left, right);
+    }
+    return out;
+  }
+
+  // Emit sections in order of first appearance; ungrouped args (if any) go
+  // under "Arguments".
+  std::vector<std::string> section_order;
+  for (const auto& arg : _args) {
+    const std::string section =
+        arg.group.empty() ? std::string("Arguments") : arg.group;
+    if (std::find(section_order.begin(), section_order.end(), section)
+        == section_order.end()) {
+      section_order.push_back(section);
+    }
+  }
+  for (const auto& section : section_order) {
+    out += "\n" + section + ":\n";
+    for (size_t i = 0; i < _args.size(); ++i) {
+      const std::string arg_section =
+          _args[i].group.empty() ? std::string("Arguments") : _args[i].group;
+      if (arg_section == section) {
+        emit_row(rows[i].first, rows[i].second);
+      }
+    }
   }
   return out;
 }

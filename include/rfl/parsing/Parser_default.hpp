@@ -25,6 +25,7 @@
 #include "../internal/is_basic_type.hpp"
 #include "../internal/is_deprecated.hpp"
 #include "../internal/is_description.hpp"
+#include "../internal/is_group.hpp"
 #include "../internal/is_hidden.hpp"
 #include "../internal/is_implicit_value.hpp"
 #include "../internal/is_literal.hpp"
@@ -586,7 +587,8 @@ struct Parser {
                               ProcessorsType>::to_schema(_definitions);
 
     } else if constexpr (rfl::internal::is_implicit_value<U>::value ||
-                         rfl::internal::is_hidden<U>::value) {
+                         rfl::internal::is_hidden<U>::value ||
+                         rfl::internal::is_group<U>::value) {
       // Read and written through its ReflectionType, but described as the
       // type itself rather than as a named reference, like rfl::Short.
       return Parser<R, W, typename U::Type, ProcessorsType>::to_schema(
