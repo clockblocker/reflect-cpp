@@ -32,6 +32,7 @@
 #include "AllowAbbreviations.hpp"
 #include "OptionsFirst.hpp"
 #include "Parser.hpp"
+#include "PureFlags.hpp"
 #include "SeparateOptionValues.hpp"
 #include "Reader.hpp"
 
@@ -140,6 +141,10 @@ struct Options {
   /// Whether the options end at the first positional argument, so that every
   /// later token is a positional argument (rfl::cli::OptionsFirst).
   bool options_first = false;
+
+  /// Whether short boolean flags never consume a following `true`/`false`/`1`/`0`
+  /// token (rfl::cli::PureFlags).
+  bool pure_flags = false;
 
   /// Returns the long options that `--_prefix` could abbreviate: every
   /// long option that starts with `_prefix`, in alphabetical order. Only the
@@ -674,6 +679,7 @@ Options make_options() {
   }
   options.allow_abbreviations = allow_abbreviations_v<ProcessorsType>;
   options.options_first = options_first_v<ProcessorsType>;
+  options.pure_flags = pure_flags_v<ProcessorsType>;
   using U = unwrapped_option_t<T, ProcessorsType>;
   if constexpr (_all_paths) {
     collect_value_options<T, ProcessorsType, type_list<>>(&options);

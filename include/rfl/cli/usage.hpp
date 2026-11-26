@@ -485,8 +485,16 @@ class UsageCollector {
     _arg.kind = option.kind;
     _arg.implicit_value = std::string(option.implicit_value);
     _arg.is_list = option.is_list;
+    const bool pure_flag =
+        options_->pure_flags && _arg.kind == OptionKind::flag && !_arg.positional;
+    if (pure_flag) {
+      _arg.bare = true;
+    }
     if (_default) {
-      _arg.default_value = usage_default_to_string(*_default, delimiter_);
+      auto def = usage_default_to_string(*_default, delimiter_);
+      if (!(pure_flag && def == "false")) {
+        _arg.default_value = std::move(def);
+      }
     }
     args_.emplace_back(std::move(_arg));
   }
