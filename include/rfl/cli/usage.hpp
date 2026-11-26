@@ -57,6 +57,10 @@ struct UsageOptions {
   /// If non-empty, places built-in `--help` and `--version` in this group
   /// (at the start of the group if fields already use it).
   std::string help_group = {};
+  /// Maximum left-column width used to align option descriptions; options
+  /// wider than this place their description on the next line instead of
+  /// widening every other row. Set to 0 for no cap.
+  size_t max_option_width = 40;
 };
 
 namespace internal {
@@ -742,7 +746,12 @@ inline std::string format_usage(const std::string& _program_name,
   for (const auto& arg : _args) {
     rows.emplace_back(usage_arg_to_string(arg, ", ", _delimiter),
                       usage_help_text(arg));
-    width = std::max(width, rows.back().first.size());
+    const size_t row_w = rows.back().first.size();
+    if (_opts.max_option_width == 0 || row_w <= _opts.max_option_width) {
+      width = std::max(width, row_w);
+    } else {
+      width = std::max(width, _opts.max_option_width);
+    }
   }
 
   constexpr size_t indent = 2;
@@ -752,7 +761,11 @@ inline std::string format_usage(const std::string& _program_name,
                             const std::string& _right) {
     out += std::string(indent, ' ') + _left;
     if (!_right.empty()) {
-      out += std::string(width - _left.size() + gap, ' ');
+      if (_left.size() <= width) {
+        out += std::string(width - _left.size() + gap, ' ');
+      } else {
+        out += continuation;
+      }
       for (const char c : _right) {
         if (c == '\n') {
           out += continuation;

@@ -85,4 +85,25 @@ TEST(cli, test_usage_custom_header_before_usage) {
       << *text;
 }
 
+TEST(cli, test_usage_max_option_width_wraps_wide_options) {
+  struct WideOptions {
+    rfl::Description<"Short flag", rfl::DefaultVal<bool>> verbose = false;
+    rfl::ValueName<"a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z",
+                   rfl::Description<"Very wide value placeholder",
+                                    std::optional<std::string>>>
+        combined_json;
+  };
+  const auto text =
+      rfl::cli::usage<WideOptions, rfl::cli::PureFlags>("tool", true);
+  ASSERT_TRUE(text) << text.error().what();
+  // Short option should not be padded past the 40-char cap.
+  EXPECT_EQ(text->find("--verbose                                          "),
+            std::string::npos)
+      << *text;
+  // Wide option wraps its description onto the next line.
+  EXPECT_NE(text->find("combined-json=<a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z>\n"),
+            std::string::npos)
+      << *text;
+}
+
 }  // namespace test_usage_custom
