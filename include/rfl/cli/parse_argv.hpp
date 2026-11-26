@@ -154,9 +154,11 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         return std::string(_args[++*_i]);
 
       case OptionKind::flag:
-        // -f false: a flag takes a bool literal. Any other token stays where
-        // it is, so `-v input.txt` leaves "input.txt" positional.
-        if (has_next && is_bool_literal(_args[*_i + 1])) {
+        // -f false: a flag takes a bool literal unless PureFlags is set. Any
+        // other token stays where it is, so `-v input.txt` leaves "input.txt"
+        // positional.
+        if (!_options.pure_flags && has_next
+            && is_bool_literal(_args[*_i + 1])) {
           return std::string(_args[++*_i]);
         }
         return std::string();

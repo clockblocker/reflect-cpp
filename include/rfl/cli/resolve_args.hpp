@@ -60,7 +60,7 @@ inline void apply_option_kinds(const Options& _options, ParsedArgs* _parsed) {
     }
     auto& value = it->second;
     if (option.kind == OptionKind::flag && !value.empty()
-        && !is_bool_literal(value)) {
+        && (_options.pure_flags || !is_bool_literal(value))) {
       reclaimed.push_back(value);
       value.clear();
     }

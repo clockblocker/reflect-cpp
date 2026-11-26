@@ -8,6 +8,7 @@
 #include "cli/ListDelimiter.hpp"
 #include "cli/OptionsFirst.hpp"
 #include "cli/Parser.hpp"
+#include "cli/PureFlags.hpp"
 #include "cli/Reader.hpp"
 #include "cli/SeparateOptionValues.hpp"
 #include "cli/options.hpp"
