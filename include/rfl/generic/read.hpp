@@ -19,7 +19,7 @@ namespace generic {
 template <class T, class... Ps>
 auto read(const Generic& _g) {
   const auto r = Reader();
-  return Parser<T, Processors<Ps...>>::read(r, _g);
+  return Parser<T, rfl::internal::flatten_processors_t<Ps...>>::read(r, _g);
 }
 
 }  // namespace generic
