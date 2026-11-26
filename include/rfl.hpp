@@ -29,6 +29,7 @@
 #include "rfl/Field.hpp"
 #include "rfl/Flatten.hpp"
 #include "rfl/Generic.hpp"
+#include "rfl/Group.hpp"
 #include "rfl/Hex.hpp"
 #include "rfl/Hidden.hpp"
 #include "rfl/ImplicitValue.hpp"
