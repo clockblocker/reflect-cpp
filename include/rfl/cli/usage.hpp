@@ -774,7 +774,8 @@ inline std::string format_usage(const std::string& _program_name,
 /// default-constructible, which read<T, rfl::DefaultIfMissing> requires, too.
 template <class T, class... Ps>
 std::optional<Generic> usage_defaults() {
-  using ProcessorsType = Processors<SnakeCaseToKebabCase, Ps...>;
+  using ProcessorsType =
+      rfl::internal::flatten_processors_t<SnakeCaseToKebabCase, Ps...>;
   if constexpr (rfl::internal::default_if_missing_v<ProcessorsType>
                 && std::is_default_constructible_v<T>) {
     try {
@@ -814,7 +815,8 @@ std::optional<Generic> usage_defaults() {
 template <class T, class... Ps>
 rfl::Result<std::string> usage(const std::string& _program_name,
                                const UsageOptions& _opts) {
-  using ProcessorsType = Processors<SnakeCaseToKebabCase, Ps...>;
+  using ProcessorsType =
+      rfl::internal::flatten_processors_t<SnakeCaseToKebabCase, Ps...>;
   using NamedTupleType = rfl::internal::processed_t<T, ProcessorsType>;
   constexpr auto delimiter = internal::list_delimiter_v<ProcessorsType>;
   // The table that read() parses with, so the help shows what the parser
