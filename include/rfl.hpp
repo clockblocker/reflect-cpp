@@ -34,6 +34,7 @@
 #include "rfl/Hidden.hpp"
 #include "rfl/ImplicitValue.hpp"
 #include "rfl/Literal.hpp"
+#include "rfl/MultiToken.hpp"
 #include "rfl/NamedTuple.hpp"
 #include "rfl/NoDuplicateKeys.hpp"
 #include "rfl/NoExtraFields.hpp"

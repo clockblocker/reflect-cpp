@@ -10,6 +10,7 @@
 #include "../Group.hpp"
 #include "../Hidden.hpp"
 #include "../ImplicitValue.hpp"
+#include "../MultiToken.hpp"
 #include "../Positional.hpp"
 #include "../Rename.hpp"
 #include "../Short.hpp"
@@ -62,6 +63,9 @@ template <internal::StringLiteral _value_name, class T>
 class is_default_val<ValueName<_value_name, T>> : public is_default_val<T> {};
 
 template <class T>
+class is_default_val<MultiToken<T>> : public is_default_val<T> {};
+
+template <class T>
 constexpr bool is_default_val_v =
     is_default_val<std::remove_cvref_t<std::remove_pointer_t<T>>>::value;
 
@@ -112,6 +116,14 @@ class is_unwrapped_default_val<ValueName<_value_name, T>>
 template <internal::StringLiteral _new_name,
           internal::StringLiteral _value_name, class T>
 class is_unwrapped_default_val<Rename<_new_name, ValueName<_value_name, T>>>
+    : public is_unwrapped_default_val<T> {};
+
+template <class T>
+class is_unwrapped_default_val<MultiToken<T>>
+    : public is_unwrapped_default_val<T> {};
+
+template <internal::StringLiteral _new_name, class T>
+class is_unwrapped_default_val<Rename<_new_name, MultiToken<T>>>
     : public is_unwrapped_default_val<T> {};
 
 template <class T>

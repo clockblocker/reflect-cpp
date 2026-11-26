@@ -82,6 +82,8 @@ struct UsageArg {
   std::string implicit_value;
   /// Whether the field is a list, which can be repeated.
   bool is_list = false;
+  /// Whether the field accepts multiple space-separated tokens (rfl::MultiToken).
+  bool multi_token = false;
   /// Whether the field is the last positional one and a list, so that it
   /// takes the remaining positional arguments.
   bool takes_rest = false;
@@ -517,6 +519,7 @@ class UsageCollector {
     _arg.kind = option.kind;
     _arg.implicit_value = std::string(option.implicit_value);
     _arg.is_list = option.is_list;
+    _arg.multi_token = option.multi_token;
     const bool pure_flag =
         options_->pure_flags && _arg.kind == OptionKind::flag && !_arg.positional;
     if (pure_flag) {
@@ -602,7 +605,7 @@ inline std::string usage_arg_to_string(const UsageArg& _arg,
       str += "[=" + value + "]";
       break;
     default:
-      str += "=" + value;
+      str += "=" + value + (_arg.multi_token ? "..." : "");
       break;
   }
   return str;

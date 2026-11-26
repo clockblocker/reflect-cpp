@@ -18,6 +18,7 @@
 #include "../Group.hpp"
 #include "../Hidden.hpp"
 #include "../ImplicitValue.hpp"
+#include "../MultiToken.hpp"
 #include "../Positional.hpp"
 #include "../Rename.hpp"
 #include "../Short.hpp"
@@ -29,6 +30,7 @@
 #include "../internal/is_extra_fields.hpp"
 #include "../internal/is_group.hpp"
 #include "../internal/is_hidden.hpp"
+#include "../internal/is_multi_token.hpp"
 #include "../internal/is_named_tuple.hpp"
 #include "../internal/is_positional.hpp"
 #include "../internal/is_short.hpp"
@@ -79,6 +81,10 @@ struct Option {
   /// when it is given without one. It views the rfl::ImplicitValue's
   /// template argument, which lives as long as the program.
   std::string_view implicit_value = {};
+
+  /// Whether a list option consumes multiple space-separated tokens after one
+  /// occurrence (rfl::MultiToken).
+  bool multi_token = false;
 };
 
 /// The options that a target struct accepts, built from its fields by
@@ -284,6 +290,7 @@ struct cli_annotations {
   static constexpr bool is_hidden = false;
   static constexpr bool has_group = false;
   static constexpr bool has_value_name = false;
+  static constexpr bool is_multi_token = false;
   static constexpr size_t num_implicit_value = 0;
   static constexpr rfl::internal::StringLiteral<1> short_name = "";
   static constexpr int count = 0;
@@ -349,6 +356,11 @@ template <rfl::internal::StringLiteral _value_name, class T>
 struct cli_annotations<ValueName<_value_name, T>> : cli_annotations_t<T> {
   static constexpr bool has_value_name = true;
   static constexpr auto value_name = _value_name;
+};
+
+template <class T>
+struct cli_annotations<MultiToken<T>> : cli_annotations_t<T> {
+  static constexpr bool is_multi_token = true;
 };
 
 /// The CLI metadata of the _i-th field of a NamedTuple. InnerType is the
@@ -422,6 +434,7 @@ auto unwrap_option_type() {
                      || rfl::internal::is_hidden_v<U>
                      || rfl::internal::is_group_v<U>
                      || rfl::internal::is_value_name_v<U>
+                     || rfl::internal::is_multi_token_v<U>
                      || parsing::is_rename_v<U>
                      || parsing::is_default_val_v<U>
                      || parsing::is_skip_v<U>) {
@@ -529,6 +542,8 @@ Option implicit_value_option() {
 template <class T, class ProcessorsType>
 Option option_for() {
   using U = unwrapped_option_t<T, ProcessorsType>;
+  static_assert(!cli_annotations_t<T>::is_multi_token || is_option_list_v<U>,
+                "rfl::MultiToken can only wrap a list type (such as std::vector).");
   if constexpr (cli_annotations_t<T>::num_implicit_value > 0) {
     return implicit_value_option<T, ProcessorsType>();
   }
@@ -540,7 +555,8 @@ Option option_for() {
     return Option{OptionKind::other};
   }
   else {
-    return Option{OptionKind::value, is_option_list_v<U>};
+    return Option{OptionKind::value, is_option_list_v<U>, {},
+                  cli_annotations_t<T>::is_multi_token};
   }
 }
 
@@ -624,8 +640,11 @@ void add_option(const std::string& _path, Options* _options) {
     }
   }
   else {
+    static_assert(!cli_annotations_t<T>::is_multi_token || is_option_list_v<U>,
+                  "rfl::MultiToken can only wrap a list type (such as std::vector).");
     _options->long_options[_path] =
-        Option{OptionKind::value, is_option_list_v<U>};
+        Option{OptionKind::value, is_option_list_v<U>, {},
+               cli_annotations_t<T>::is_multi_token};
   }
 }
 
