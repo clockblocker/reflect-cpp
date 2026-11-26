@@ -137,11 +137,11 @@ inline rfl::Result<ResolvedArgs> resolve_args(
 
   // Merge short args.
   for (auto& [short_name, value] : _parsed.short_args) {
-    const auto it = _options.short_options.find(short_name);
-    if (it == _options.short_options.end()) {
+    const auto* long_name_ptr = _options.find_short_target(short_name);
+    if (!long_name_ptr) {
       return rfl::error("Unknown short argument: -" + short_name);
     }
-    const auto& long_name = it->second;
+    const auto& long_name = *long_name_ptr;
     if (result.count(long_name)) {
       return rfl::error(
           "Conflict: '-" + short_name + "' and '--" + long_name
@@ -228,7 +228,7 @@ rfl::Result<std::map<std::string, std::string>> resolve_args(
                       + _parsed.later_occurrences.begin()->first);
   }
   using FlatProcessors = rfl::internal::flatten_processors_t<ProcessorsType>;
-  const auto options = internal::make_options<T, FlatProcessors>();
+  const auto& options = internal::cached_options<T, FlatProcessors>();
   const auto short_names = internal::check_short_names(options);
   if (!short_names) {
     return rfl::error(short_names.error().what());

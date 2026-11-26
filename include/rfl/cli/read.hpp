@@ -53,7 +53,7 @@ rfl::Result<T> parse_and_read(const ParseFn& _parse) {
                 "rfl::cli::App turns on --help and --version, which "
                 "rfl::cli::read cannot report. Call rfl::cli::read_app "
                 "instead.");
-  const auto options = make_options<T, ProcessorsType>();
+  const auto& options = cached_options<T, ProcessorsType>();
   return check_short_names(options)
       .and_then([&](bool) { return _parse(options); })
       .and_then([&](ParsedArgs _parsed) {

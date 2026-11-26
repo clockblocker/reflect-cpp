@@ -92,15 +92,15 @@ inline rfl::Result<ParsedArgs> parse_string_views(
 
   // Without rfl::NoExtraFields, `_options` lists only the top-level fields
   // (see make_options), so a nested option such as `--database.replicas` is
-  // looked up in the table of all paths, built the first time one is given.
-  std::optional<Options> all_paths;
-  const auto find_long = [&](const std::string& _key) {
-    if (!_options.make_all_paths
-        || _key.find(path_separator) == std::string::npos) {
+  // looked up in the cached table of all paths on first use.
+  const Options* all_paths = nullptr;
+  const auto find_long = [&](const std::string_view _key) {
+    if (!_options.all_paths_options
+        || _key.find(path_separator) == std::string_view::npos) {
       return _options.find_long(_key);
     }
     if (!all_paths) {
-      all_paths = _options.make_all_paths();
+      all_paths = &_options.all_paths_options();
     }
     return all_paths->find_long(_key);
   };
@@ -129,7 +129,7 @@ inline rfl::Result<ParsedArgs> parse_string_views(
     if (_option.is_list) {
       // Under its long name, so that `-r a --report b` keeps argv order. A
       // short option is only a list if it is in `_options`.
-      return add_long(_options.short_options.find(_key)->second,
+      return add_long(*_options.find_short_target(_key),
                       std::move(_val), _option, _raw);
     }
     result.short_order.emplace_back(_key);

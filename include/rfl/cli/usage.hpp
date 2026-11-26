@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <exception>
 #include <locale>
-#include <map>
 #include <optional>
 #include <ranges>
 #include <sstream>
@@ -402,9 +401,14 @@ class UsageWalker {
       : options_(_options),
         optionals_are_required_(rfl::internal::no_optionals_v<ProcessorsType>),
         delimiter_(_delimiter) {
+    short_names_.reserve(_options->short_options.size());
     for (const auto& [short_name, path] : _options->short_options) {
-      short_names_[path] = short_name;
+      short_names_.emplace_back(path, short_name);
     }
+    std::sort(short_names_.begin(), short_names_.end(),
+              [](const auto& _a, const auto& _b) {
+                return _a.first < _b.first;
+              });
   }
 
   template <class T>
@@ -748,7 +752,7 @@ class UsageWalker {
       return;
     } else {
       auto arg = make_child_arg(_parent, FieldType::name());
-      if (options_->hidden_options.contains(arg.name)) {
+      if (options_->is_hidden(arg.name)) {
         return;
       }
       // NamedTuple has no in-class member initializers; missing DefaultVal
@@ -783,7 +787,7 @@ class UsageWalker {
       return;
     } else {
       auto arg = make_child_arg(_parent, FieldType::name());
-      if (options_->hidden_options.contains(arg.name)) {
+      if (options_->is_hidden(arg.name)) {
         return;
       }
       const FieldVal* field_ptr = nullptr;
@@ -815,9 +819,13 @@ class UsageWalker {
       arg.positional =
           std::find(positionals.begin(), positionals.end(), arg.name)
           != positionals.end();
-      const auto short_it = short_names_.find(arg.name);
-      if (short_it != short_names_.end()) {
-        arg.short_name = short_it->second;
+      const auto short_it = std::lower_bound(
+          short_names_.begin(), short_names_.end(), std::string_view(arg.name),
+          [](const auto& _entry, const std::string_view _key) {
+            return _entry.first < _key;
+          });
+      if (short_it != short_names_.end() && short_it->first == arg.name) {
+        arg.short_name = std::string(short_it->second);
       }
     }
     return arg;
@@ -851,16 +859,13 @@ class UsageWalker {
     if (_default && !(pure_flag && *_default == "false")) {
       _arg.default_value = std::move(_default);
     }
-    if (const auto it = options_->option_groups.find(_arg.name);
-        it != options_->option_groups.end()) {
-      _arg.group = it->second;
+    if (const auto grp = options_->find_group(_arg.name); !grp.empty()) {
+      _arg.group = std::string(grp);
     }
-    if (const auto it = options_->option_value_names.find(_arg.name);
-        it != options_->option_value_names.end()) {
-      const auto& vn = it->second;
-      _arg.value = (!vn.empty() && vn.front() == '<' && vn.back() == '>')
-                       ? vn
-                       : "<" + vn + ">";
+    if (const auto vn = options_->find_value_name(_arg.name); !vn.empty()) {
+      _arg.value = (vn.front() == '<' && vn.back() == '>')
+                       ? std::string(vn)
+                       : "<" + std::string(vn) + ">";
       _arg.has_custom_value_name = true;
     }
     args_.emplace_back(std::move(_arg));
@@ -882,7 +887,7 @@ class UsageWalker {
   const Options* options_;
   const bool optionals_are_required_;
   const std::optional<char> delimiter_;
-  std::map<std::string, std::string> short_names_;
+  std::vector<std::pair<std::string_view, std::string_view>> short_names_;
   std::vector<UsageArg> args_;
 };
 
@@ -1161,9 +1166,8 @@ rfl::Result<std::string> usage(const std::string& _program_name,
   // The table that read() parses with, so the help shows what the parser
   // accepts, including the options inside nested structs and maps, and the
   // built-in options of rfl::cli::App that read_app handles.
-  auto options =
-      internal::make_options<T, ProcessorsType, /*_all_paths=*/true>();
-  const auto builtin = internal::add_builtin_options<T, ProcessorsType>(&options);
+  const auto& [options, builtin] =
+      internal::cached_app_options<T, ProcessorsType, /*_all_paths=*/true>();
   return internal::check_short_names(options).and_then(
       [&](auto) -> rfl::Result<std::string> {
         try {

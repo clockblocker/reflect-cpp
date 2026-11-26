@@ -1,17 +1,16 @@
 #ifndef RFL_CLI_OPTIONS_HPP_
 #define RFL_CLI_OPTIONS_HPP_
 
+#include <algorithm>
 #include <cstddef>
-#include <map>
+#include <memory>
 #include <optional>
-#include <set>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
-#include "../Box.hpp"
 #include "../DefaultVal.hpp"
 #include "../Deprecated.hpp"
 #include "../Description.hpp"
@@ -84,20 +83,21 @@ struct Option {
   bool multi_token = false;
 };
 
-/// The options that a target struct accepts, built from its fields by
-/// make_options on every read. parse_argv uses it to decide whether an
-/// option takes the next token as its value and whether a long option is
-/// known, and resolve_args to map short aliases and positional arguments to
-/// fields. Paths are dotted
-/// (`database.host`) and use the field names after processors (kebab-case,
-/// rfl::Rename) are applied.
+/// The options that a target struct accepts, built once per <T, ProcessorsType>
+/// by make_options and cached via cached_options. parse_argv uses it to decide
+/// whether an option takes the next token as its value and whether a long
+/// option is known, and resolve_args to map short aliases and positional
+/// arguments to fields. Paths are dotted (`database.host`) and use the field
+/// names after processors (kebab-case, rfl::Rename) are applied.
+/// All keyed tables are flat sorted vectors searched with std::string_view via
+/// std::lower_bound after finalize().
 struct Options {
-  /// The long options, by path.
-  std::map<std::string, Option> long_options;
+  /// The long options, sorted by path.
+  std::vector<std::pair<std::string, Option>> long_options;
 
-  /// The short aliases given by rfl::Short (`p` for `-p`), mapped to the path
-  /// of their field.
-  std::map<std::string, std::string> short_options;
+  /// The short aliases given by rfl::Short (`p` for `-p`), sorted by short
+  /// name, mapped to the path of their field.
+  std::vector<std::pair<std::string, std::string>> short_options;
 
   /// The paths of the rfl::Positional fields, in declaration order, wherever
   /// rfl::Positional sits among a field's wrappers. Each takes one positional
@@ -107,23 +107,25 @@ struct Options {
 
   /// Prefixes (ending in path_separator, or empty for the root) under which
   /// the keys are not known in advance, such as maps and rfl::ExtraFields.
-  /// Maps to the option of a direct sub-key.
-  std::map<std::string, Option> open_prefixes;
+  /// Sorted by prefix; maps to the option of a direct sub-key.
+  std::vector<std::pair<std::string, Option>> open_prefixes;
 
   /// For the open prefixes whose sub-keys hold structs or maps: the options
   /// inside one such value, with paths relative to it, so that
-  /// `--servers.eu.port` is looked up as `port`.
-  std::map<std::string, rfl::Box<Options>> open_prefix_options;
+  /// `--servers.eu.port` is looked up as `port`. Sorted by prefix.
+  std::vector<std::pair<std::string, std::unique_ptr<Options>>>
+      open_prefix_options;
 
   /// Paths of fields wrapped in rfl::Hidden, which are parsed normally but
-  /// omitted from usage() and --help.
-  std::set<std::string> hidden_options;
+  /// omitted from usage() and --help. Sorted.
+  std::vector<std::string> hidden_options;
 
-  /// Section header name for fields wrapped in rfl::Group, by path.
-  std::map<std::string, std::string> option_groups;
+  /// Section header name for fields wrapped in rfl::Group, sorted by path.
+  std::vector<std::pair<std::string, std::string>> option_groups;
 
-  /// Custom value placeholder name for fields wrapped in rfl::ValueName, by path.
-  std::map<std::string, std::string> option_value_names;
+  /// Custom value placeholder name for fields wrapped in rfl::ValueName,
+  /// sorted by path.
+  std::vector<std::pair<std::string, std::string>> option_value_names;
 
   /// Whether options that match no field are an error (rfl::NoExtraFields).
   bool reject_unknown = false;
@@ -141,11 +143,11 @@ struct Options {
   /// when it is given without '=' (rfl::cli::SeparateOptionValues).
   bool separate_values = false;
 
-  /// Builds the table with every long option through nested structs and
-  /// maps, if this one lists only the top-level fields (see make_options).
+  /// Returns the cached table with every long option through nested structs
+  /// and maps, if this one lists only the top-level fields (see make_options).
   /// parse_argv looks up nested options in it, for instance to tell whether
   /// a repeated nested option is a list.
-  Options (*make_all_paths)() = nullptr;
+  const Options& (*all_paths_options)() = nullptr;
 
   /// Whether tokens such as `-5` and `-.5` are short options rather than
   /// negative numbers. They are when parse_argv is called without the
@@ -166,6 +168,24 @@ struct Options {
   /// token (rfl::cli::PureFlags).
   bool pure_flags = false;
 
+  /// Sorts all lookup tables so binary search lookups work. Must be called
+  /// after populating or mutating any keyed table.
+  void finalize() {
+    sort_pairs(long_options);
+    sort_pairs(short_options);
+    sort_pairs(open_prefixes);
+    sort_pairs(open_prefix_options);
+    for (auto& entry : open_prefix_options) {
+      entry.second->finalize();
+    }
+    std::sort(hidden_options.begin(), hidden_options.end());
+    hidden_options.erase(
+        std::unique(hidden_options.begin(), hidden_options.end()),
+        hidden_options.end());
+    sort_pairs(option_groups);
+    sort_pairs(option_value_names);
+  }
+
   /// Returns the long options that `--_prefix` could abbreviate: every
   /// long option that starts with `_prefix`, in alphabetical order. Only the
   /// last segment of a dotted name is abbreviated, so `_prefix` must spell
@@ -175,14 +195,14 @@ struct Options {
   /// them. Only meaningful if find_long(_prefix) is unknown: an exact match
   /// always wins.
   std::vector<std::string> find_abbreviations(
-      const std::string& _prefix
+      const std::string_view _prefix
   ) const {
     std::vector<std::string> names;
     if (_prefix.empty() || _prefix.back() == path_separator) {
       return names;
     }
     const auto last_separator = _prefix.rfind(path_separator);
-    for (auto it = long_options.lower_bound(_prefix);
+    for (auto it = lower_bound_pair(long_options, _prefix);
          it != long_options.end() && it->first.starts_with(_prefix); ++it) {
       if (it->first.rfind(path_separator) == last_separator) {
         names.push_back(it->first);
@@ -192,26 +212,24 @@ struct Options {
   }
 
   /// Returns the long option `--_name`.
-  Option find_long(const std::string& _name) const {
-    const auto it = long_options.find(_name);
-    if (it != long_options.end()) {
-      return it->second;
+  Option find_long(const std::string_view _name) const {
+    if (const auto* opt = find_pair(long_options, _name)) {
+      return *opt;
     }
 
     // A key below an open leaf field (for example a variant of structs): the
     // reader decides what it means.
-    for (auto pos = _name.find(path_separator); pos != std::string::npos;
+    for (auto pos = _name.find(path_separator); pos != std::string_view::npos;
          pos = _name.find(path_separator, pos + 1)) {
-      const auto parent = long_options.find(_name.substr(0, pos));
-      if (parent != long_options.end()
-          && parent->second.kind == OptionKind::other) {
+      if (const auto* parent = find_pair(long_options, _name.substr(0, pos));
+          parent && parent->kind == OptionKind::other) {
         return Option{OptionKind::other};
       }
     }
 
     // A key inside a map or a struct with rfl::ExtraFields. The longest
     // matching prefix wins.
-    const std::pair<const std::string, Option>* open = nullptr;
+    const std::pair<std::string, Option>* open = nullptr;
     for (const auto& p : open_prefixes) {
       if (_name.size() > p.first.size() && _name.starts_with(p.first)
           && (!open || p.first.size() > open->first.size())) {
@@ -221,7 +239,7 @@ struct Options {
     if (open) {
       const auto rest = _name.substr(open->first.size());
       const auto sep = rest.find(path_separator);
-      if (open->first.empty() && sep != std::string::npos) {
+      if (open->first.empty() && sep != std::string_view::npos) {
         // A dotted key whose leading segment is a known nested struct or map
         // field (e.g. `--database.nope` beside rfl::ExtraFields) belongs to
         // that field, not to ExtraFields.
@@ -231,12 +249,11 @@ struct Options {
           return Option{};
         }
       }
-      if (sep == std::string::npos) {
+      if (sep == std::string_view::npos) {
         return open->second;
       }
-      const auto nested = open_prefix_options.find(open->first);
-      if (nested != open_prefix_options.end()) {
-        return nested->second->find_long(rest.substr(sep + 1));
+      if (const auto* nested = find_pair(open_prefix_options, open->first)) {
+        return (*nested)->find_long(rest.substr(sep + 1));
       }
       return open->second.kind == OptionKind::other ? Option{OptionKind::other}
                                                     : Option{};
@@ -245,10 +262,34 @@ struct Options {
     return Option{};
   }
 
+  /// Returns the long option path that `-_name` stands for, or nullptr.
+  const std::string* find_short_target(const std::string_view _name) const {
+    return find_pair(short_options, _name);
+  }
+
   /// Returns the option that the short alias `-_name` stands for.
-  Option find_short(const std::string& _name) const {
-    const auto it = short_options.find(_name);
-    return it == short_options.end() ? Option{} : find_long(it->second);
+  Option find_short(const std::string_view _name) const {
+    const auto* target = find_short_target(_name);
+    return target ? find_long(*target) : Option{};
+  }
+
+  /// Whether `_path` is hidden from usage() and --help.
+  bool is_hidden(const std::string_view _path) const {
+    const auto it =
+        std::lower_bound(hidden_options.begin(), hidden_options.end(), _path);
+    return it != hidden_options.end() && *it == _path;
+  }
+
+  /// Returns the rfl::Group name for `_path`, or empty string_view if none.
+  std::string_view find_group(const std::string_view _path) const {
+    const auto* g = find_pair(option_groups, _path);
+    return g ? std::string_view(*g) : std::string_view{};
+  }
+
+  /// Returns the rfl::ValueName for `_path`, or empty string_view if none.
+  std::string_view find_value_name(const std::string_view _path) const {
+    const auto* vn = find_pair(option_value_names, _path);
+    return vn ? std::string_view(*vn) : std::string_view{};
   }
 
   /// Whether the last rfl::Positional field is a list. It then takes every
@@ -258,11 +299,38 @@ struct Options {
   }
 
  private:
+  template <class V>
+  static void sort_pairs(std::vector<std::pair<std::string, V>>& _vec) {
+    std::stable_sort(_vec.begin(), _vec.end(),
+                     [](const auto& _a, const auto& _b) {
+                       return _a.first < _b.first;
+                     });
+  }
+
+  template <class V>
+  static typename std::vector<std::pair<std::string, V>>::const_iterator
+  lower_bound_pair(const std::vector<std::pair<std::string, V>>& _vec,
+                   const std::string_view _key) {
+    return std::lower_bound(
+        _vec.begin(), _vec.end(), _key,
+        [](const auto& _entry, const std::string_view _k) {
+          return std::string_view(_entry.first) < _k;
+        });
+  }
+
+  template <class V>
+  static const V* find_pair(
+      const std::vector<std::pair<std::string, V>>& _vec,
+      const std::string_view _key) {
+    const auto it = lower_bound_pair(_vec, _key);
+    return (it != _vec.end() && it->first == _key) ? &it->second : nullptr;
+  }
+
   static bool has_prefix(
-      const std::map<std::string, Option>& _map, const std::string& _prefix
-  ) {
-    const auto it = _map.lower_bound(_prefix);
-    return it != _map.end() && it->first.starts_with(_prefix);
+      const std::vector<std::pair<std::string, Option>>& _vec,
+      const std::string_view _prefix) {
+    const auto it = lower_bound_pair(_vec, _prefix);
+    return it != _vec.end() && it->first.starts_with(_prefix);
   }
 };
 
@@ -565,14 +633,14 @@ void collect_value_options(Options* _options);
 template <class T, class ProcessorsType, class VisitedType>
 void add_open_prefix(const std::string& _prefix, Options* _options) {
   using U = unwrapped_option_t<T, ProcessorsType>;
-  _options->open_prefixes[_prefix] = option_for<T, ProcessorsType>();
+  _options->open_prefixes.emplace_back(_prefix, option_for<T, ProcessorsType>());
   if constexpr (cli_annotations_t<T>::num_implicit_value == 0
                 && (parsing::is_string_map_v<U>
                     || (is_option_struct_v<U>
                         && !VisitedType::template contains<U>))) {
-    auto nested = rfl::Box<Options>::make();
+    auto nested = std::make_unique<Options>();
     collect_value_options<T, ProcessorsType, VisitedType>(nested.get());
-    _options->open_prefix_options.insert_or_assign(_prefix, std::move(nested));
+    _options->open_prefix_options.emplace_back(_prefix, std::move(nested));
   }
 }
 
@@ -589,7 +657,7 @@ void collect_value_options(Options* _options) {
     collect_options<U, ProcessorsType, VisitedType>("", _options);
   }
   else {
-    _options->open_prefixes[""] = Option{OptionKind::other};
+    _options->open_prefixes.emplace_back("", Option{OptionKind::other});
   }
 }
 
@@ -597,25 +665,25 @@ template <class T, class ProcessorsType, class VisitedType>
 void add_option(const std::string& _path, Options* _options) {
   using U = unwrapped_option_t<T, ProcessorsType>;
   if constexpr (cli_annotations_t<T>::is_hidden) {
-    _options->hidden_options.insert(_path);
+    _options->hidden_options.push_back(_path);
   }
   if constexpr (cli_annotations_t<T>::has_group) {
-    _options->option_groups[_path] =
-        std::string(cli_annotations_t<T>::group_name.string_view());
+    _options->option_groups.emplace_back(
+        _path, std::string(cli_annotations_t<T>::group_name.string_view()));
   }
   if constexpr (cli_annotations_t<T>::has_value_name) {
-    _options->option_value_names[_path] =
-        std::string(cli_annotations_t<T>::value_name.string_view());
+    _options->option_value_names.emplace_back(
+        _path, std::string(cli_annotations_t<T>::value_name.string_view()));
   }
   if constexpr (cli_annotations_t<T>::num_implicit_value > 0) {
-    _options->long_options[_path] =
-        implicit_value_option<T, ProcessorsType>();
+    _options->long_options.emplace_back(
+        _path, implicit_value_option<T, ProcessorsType>());
   }
   else if constexpr (std::is_same_v<U, bool>) {
-    _options->long_options[_path] = Option{OptionKind::flag};
+    _options->long_options.emplace_back(_path, Option{OptionKind::flag});
   }
   else if constexpr (is_open_option_v<U>) {
-    _options->long_options[_path] = Option{OptionKind::other};
+    _options->long_options.emplace_back(_path, Option{OptionKind::other});
   }
   else if constexpr (parsing::is_string_map_v<U>) {
     add_open_prefix<typename U::mapped_type, ProcessorsType, VisitedType>(
@@ -624,8 +692,8 @@ void add_option(const std::string& _path, Options* _options) {
   else if constexpr (is_option_struct_v<U>) {
     if constexpr (VisitedType::template contains<U>) {
       // A recursive type: stop here and let the reader handle deeper keys.
-      _options->open_prefixes[_path + path_separator] =
-          Option{OptionKind::other};
+      _options->open_prefixes.emplace_back(_path + path_separator,
+                                           Option{OptionKind::other});
     }
     else {
       collect_options<U, ProcessorsType, VisitedType>(
@@ -635,9 +703,9 @@ void add_option(const std::string& _path, Options* _options) {
   else {
     static_assert(!cli_annotations_t<T>::is_multi_token || is_option_list_v<U>,
                   "rfl::MultiToken can only wrap a list type (such as std::vector).");
-    _options->long_options[_path] =
-        Option{OptionKind::value, is_option_list_v<U>, {},
-               cli_annotations_t<T>::is_multi_token};
+    _options->long_options.emplace_back(
+        _path, Option{OptionKind::value, is_option_list_v<U>, {},
+                      cli_annotations_t<T>::is_multi_token});
   }
 }
 
@@ -673,12 +741,18 @@ template <class NamedTupleType, size_t _i>
 void add_short_and_positional(Options* _options) {
   using Info = field_info<NamedTupleType, _i>;
   if constexpr (Info::is_short) {
-    const auto name =
-        std::string(get_short_name<NamedTupleType, _i>().string_view());
-    if (!_options->short_options.emplace(name, std::string(Info::name()))
-             .second
-        && _options->duplicate_short_name.empty()) {
-      _options->duplicate_short_name = name;
+    constexpr auto short_lit = get_short_name<NamedTupleType, _i>();
+    const auto name = short_lit.string_view();
+    const bool already_exists = std::any_of(
+        _options->short_options.begin(), _options->short_options.end(),
+        [&](const auto& _entry) { return _entry.first == name; });
+    if (already_exists) {
+      if (_options->duplicate_short_name.empty()) {
+        _options->duplicate_short_name = std::string(name);
+      }
+    } else {
+      _options->short_options.emplace_back(std::string(name),
+                                           std::string(Info::name()));
     }
   }
   if constexpr (Info::is_positional) {
@@ -698,8 +772,8 @@ template <class FieldType, class ProcessorsType>
 void add_top_level_option(Options* _options) {
   using T = std::remove_cvref_t<typename FieldType::Type>;
   if constexpr (!rfl::internal::is_extra_fields_v<T>) {
-    _options->long_options[std::string(FieldType::name())] =
-        option_for<T, ProcessorsType>();
+    _options->long_options.emplace_back(std::string(FieldType::name()),
+                                        option_for<T, ProcessorsType>());
   }
 }
 
@@ -715,6 +789,12 @@ void collect_top_level_options(Options* _options) {
   }(std::make_index_sequence<NT::size()>());
 }
 
+template <class T, class ProcessorsType,
+          bool _all_paths = rfl::internal::no_extra_fields_v<ProcessorsType>
+                            || separate_option_values_v<ProcessorsType>
+                            || allow_abbreviations_v<ProcessorsType>>
+const Options& cached_options();
+
 /// Derives the options that T accepts from its fields: the long options,
 /// with whether each is a flag, takes a value or has an implicit value, and
 /// the rfl::Short aliases and rfl::Positional fields of the top-level struct.
@@ -726,11 +806,7 @@ void collect_top_level_options(Options* _options) {
 /// rfl::cli::SeparateOptionValues, to tell whether a nested option takes the
 /// next token, and rfl::cli::AllowAbbreviations, to abbreviate nested
 /// options, need them all.
-/// @return The options, with reject_unknown set if ProcessorsType contains
-/// rfl::NoExtraFields, separate_values if it contains
-/// rfl::cli::SeparateOptionValues, allow_abbreviations if it contains
-/// rfl::cli::AllowAbbreviations, and options_first if it contains
-/// rfl::cli::OptionsFirst
+/// @return The finalized options table
 template <class T, class ProcessorsType,
           bool _all_paths = rfl::internal::no_extra_fields_v<ProcessorsType>
                             || separate_option_values_v<ProcessorsType>
@@ -741,7 +817,7 @@ Options make_options() {
   options.reject_unknown = rfl::internal::no_extra_fields_v<ProcessorsType>;
   options.separate_values = separate_option_values_v<ProcessorsType>;
   if constexpr (!_all_paths) {
-    options.make_all_paths = &make_options<T, ProcessorsType, true>;
+    options.all_paths_options = &cached_options<T, ProcessorsType, true>;
   }
   options.allow_abbreviations = allow_abbreviations_v<ProcessorsType>;
   options.options_first = options_first_v<ProcessorsType>;
@@ -765,6 +841,16 @@ Options make_options() {
       options.negative_numbers_are_options = true;
     }
   }
+  options.finalize();
+  return options;
+}
+
+/// Returns a process-lifetime cached Options table for
+/// <T, ProcessorsType, _all_paths>, avoiding table construction and sorting
+/// on every read() call.
+template <class T, class ProcessorsType, bool _all_paths>
+const Options& cached_options() {
+  static const Options options = make_options<T, ProcessorsType, _all_paths>();
   return options;
 }
 
