@@ -7,6 +7,7 @@
 #include "../DefaultVal.hpp"
 #include "../Deprecated.hpp"
 #include "../Description.hpp"
+#include "../Hidden.hpp"
 #include "../ImplicitValue.hpp"
 #include "../Positional.hpp"
 #include "../Rename.hpp"
@@ -50,6 +51,9 @@ class is_default_val<ImplicitValue<T, _implicit>> : public is_default_val<T> {
 };
 
 template <class T>
+class is_default_val<Hidden<T>> : public is_default_val<T> {};
+
+template <class T>
 constexpr bool is_default_val_v =
     is_default_val<std::remove_cvref_t<std::remove_pointer_t<T>>>::value;
 
@@ -74,6 +78,14 @@ class is_unwrapped_default_val<ImplicitValue<T, _implicit>>
 template <internal::StringLiteral _new_name, class T,
           internal::StringLiteral _implicit>
 class is_unwrapped_default_val<Rename<_new_name, ImplicitValue<T, _implicit>>>
+    : public is_unwrapped_default_val<T> {};
+
+template <class T>
+class is_unwrapped_default_val<Hidden<T>>
+    : public is_unwrapped_default_val<T> {};
+
+template <internal::StringLiteral _new_name, class T>
+class is_unwrapped_default_val<Rename<_new_name, Hidden<T>>>
     : public is_unwrapped_default_val<T> {};
 
 template <class T>

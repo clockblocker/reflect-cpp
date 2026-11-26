@@ -24,6 +24,7 @@
 #include "../internal/is_description.hpp"
 #include "../internal/is_field.hpp"
 #include "../internal/is_flatten_field.hpp"
+#include "../internal/is_hidden.hpp"
 #include "../internal/is_implicit_value.hpp"
 #include "../internal/is_literal.hpp"
 #include "../internal/is_named_tuple.hpp"
@@ -100,9 +101,9 @@ constexpr bool is_value_wrapper_v =
     !std::is_pointer_v<U> &&
     (is_skip_v<U> || internal::is_default_val_v<U> || is_rename_v<U> ||
      internal::is_flatten_field_v<U> || is_short_v<U> || is_positional_v<U> ||
-     internal::is_implicit_value_v<U> || internal::is_field_v<U> ||
-     internal::is_description_v<U> || internal::is_deprecated_v<U> ||
-     is_commented_v<U>);
+     internal::is_implicit_value_v<U> || internal::is_hidden_v<U> ||
+     internal::is_field_v<U> || internal::is_description_v<U> ||
+     internal::is_deprecated_v<U> || is_commented_v<U>);
 
 /// Looks for rfl::Validators whose value is invalid inside _value and records
 /// them in _check. The parser uses it when a Validator has kept an invalid

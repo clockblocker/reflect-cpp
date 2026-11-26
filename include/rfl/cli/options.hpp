@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -14,6 +15,7 @@
 #include "../DefaultVal.hpp"
 #include "../Deprecated.hpp"
 #include "../Description.hpp"
+#include "../Hidden.hpp"
 #include "../ImplicitValue.hpp"
 #include "../Positional.hpp"
 #include "../Rename.hpp"
@@ -23,6 +25,7 @@
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/has_reflector.hpp"
 #include "../internal/is_extra_fields.hpp"
+#include "../internal/is_hidden.hpp"
 #include "../internal/is_named_tuple.hpp"
 #include "../internal/is_positional.hpp"
 #include "../internal/is_short.hpp"
@@ -104,6 +107,10 @@ struct Options {
   /// inside one such value, with paths relative to it, so that
   /// `--servers.eu.port` is looked up as `port`.
   std::map<std::string, rfl::Box<Options>> open_prefix_options;
+
+  /// Paths of fields wrapped in rfl::Hidden, which are parsed normally but
+  /// omitted from usage() and --help.
+  std::set<std::string> hidden_options;
 
   /// Whether options that match no field are an error (rfl::NoExtraFields).
   bool reject_unknown = false;
@@ -264,6 +271,7 @@ template <class T>
 struct cli_annotations {
   static constexpr bool is_short = false;
   static constexpr bool is_positional = false;
+  static constexpr bool is_hidden = false;
   static constexpr size_t num_implicit_value = 0;
   static constexpr rfl::internal::StringLiteral<1> short_name = "";
   static constexpr int count = 0;
@@ -312,6 +320,11 @@ struct cli_annotations<ImplicitValue<T, _implicit>> : cli_annotations_t<T> {
   static constexpr auto implicit_value = _implicit;
 };
 
+template <class T>
+struct cli_annotations<Hidden<T>> : cli_annotations_t<T> {
+  static constexpr bool is_hidden = true;
+};
+
 /// The CLI metadata of the _i-th field of a NamedTuple. InnerType is the
 /// declared type of the field, whichever wrappers it consists of.
 template <class NamedTupleType, size_t _i>
@@ -323,6 +336,7 @@ struct field_info {
 
   static constexpr bool is_positional = Annotations::is_positional;
   static constexpr bool is_short = Annotations::is_short;
+  static constexpr bool is_hidden = Annotations::is_hidden;
   static constexpr bool has_implicit_value =
       Annotations::num_implicit_value > 0;
 
@@ -379,6 +393,7 @@ auto unwrap_option_type() {
   else if constexpr (rfl::internal::is_short_v<U>
                      || rfl::internal::is_positional_v<U>
                      || rfl::internal::is_implicit_value_v<U>
+                     || rfl::internal::is_hidden_v<U>
                      || parsing::is_rename_v<U>
                      || parsing::is_default_val_v<U>
                      || parsing::is_skip_v<U>) {
@@ -544,6 +559,9 @@ void collect_value_options(Options* _options) {
 template <class T, class ProcessorsType, class VisitedType>
 void add_option(const std::string& _path, Options* _options) {
   using U = unwrapped_option_t<T, ProcessorsType>;
+  if constexpr (cli_annotations_t<T>::is_hidden) {
+    _options->hidden_options.insert(_path);
+  }
   if constexpr (cli_annotations_t<T>::num_implicit_value > 0) {
     _options->long_options[_path] =
         implicit_value_option<T, ProcessorsType>();

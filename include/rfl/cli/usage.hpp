@@ -443,6 +443,9 @@ class UsageCollector {
     for (const auto& [name, type] : _object.types_) {
       auto arg = UsageArg{};
       arg.name = is_root ? name : _parent.name + path_separator + name;
+      if (options_->hidden_options.contains(arg.name)) {
+        continue;
+      }
       // Children of an optional object are only needed if it is given.
       arg.required = _parent.required;
       if (is_root) {
