@@ -168,6 +168,39 @@ struct Options {
   /// token (rfl::cli::PureFlags).
   bool pure_flags = false;
 
+  /// Records one leaf long option along with its optional hidden/group/value_name
+  /// metadata. Non-template to avoid per-field template instantiations.
+  void add_leaf_option(std::string _path, const Option& _opt,
+                       const bool _hidden, const std::string_view _group,
+                       const std::string_view _value_name) {
+    if (_hidden) {
+      hidden_options.push_back(_path);
+    }
+    if (!_group.empty()) {
+      option_groups.emplace_back(_path, std::string(_group));
+    }
+    if (!_value_name.empty()) {
+      option_value_names.emplace_back(_path, std::string(_value_name));
+    }
+    long_options.emplace_back(std::move(_path), _opt);
+  }
+
+  /// Records a short alias (and tracks the first duplicate, if any).
+  void add_short_alias(const std::string_view _short_name,
+                       const std::string_view _long_name) {
+    const bool already_exists = std::any_of(
+        short_options.begin(), short_options.end(),
+        [&](const auto& _entry) { return _entry.first == _short_name; });
+    if (already_exists) {
+      if (duplicate_short_name.empty()) {
+        duplicate_short_name = std::string(_short_name);
+      }
+    } else {
+      short_options.emplace_back(std::string(_short_name),
+                                 std::string(_long_name));
+    }
+  }
+
   /// Sorts all lookup tables so binary search lookups work. Must be called
   /// after populating or mutating any keyed table.
   void finalize() {
@@ -662,119 +695,92 @@ void collect_value_options(Options* _options) {
 }
 
 template <class T, class ProcessorsType, class VisitedType>
-void add_option(const std::string& _path, Options* _options) {
-  using U = unwrapped_option_t<T, ProcessorsType>;
-  if constexpr (cli_annotations_t<T>::is_hidden) {
-    _options->hidden_options.push_back(_path);
-  }
-  if constexpr (cli_annotations_t<T>::has_group) {
-    _options->option_groups.emplace_back(
-        _path, std::string(cli_annotations_t<T>::group_name.string_view()));
-  }
-  if constexpr (cli_annotations_t<T>::has_value_name) {
-    _options->option_value_names.emplace_back(
-        _path, std::string(cli_annotations_t<T>::value_name.string_view()));
-  }
-  if constexpr (cli_annotations_t<T>::num_implicit_value > 0) {
-    _options->long_options.emplace_back(
-        _path, implicit_value_option<T, ProcessorsType>());
-  }
-  else if constexpr (std::is_same_v<U, bool>) {
-    _options->long_options.emplace_back(_path, Option{OptionKind::flag});
-  }
-  else if constexpr (is_open_option_v<U>) {
-    _options->long_options.emplace_back(_path, Option{OptionKind::other});
-  }
-  else if constexpr (parsing::is_string_map_v<U>) {
-    add_open_prefix<typename U::mapped_type, ProcessorsType, VisitedType>(
-        _path + path_separator, _options);
-  }
-  else if constexpr (is_option_struct_v<U>) {
-    if constexpr (VisitedType::template contains<U>) {
-      // A recursive type: stop here and let the reader handle deeper keys.
-      _options->open_prefixes.emplace_back(_path + path_separator,
-                                           Option{OptionKind::other});
-    }
-    else {
-      collect_options<U, ProcessorsType, VisitedType>(
-          _path + path_separator, _options);
-    }
-  }
-  else {
-    static_assert(!cli_annotations_t<T>::is_multi_token || is_option_list_v<U>,
-                  "rfl::MultiToken can only wrap a list type (such as std::vector).");
-    _options->long_options.emplace_back(
-        _path, Option{OptionKind::value, is_option_list_v<U>, {},
-                      cli_annotations_t<T>::is_multi_token});
-  }
-}
-
-template <class FieldType, class ProcessorsType, class VisitedType>
-void add_option_for_field(const std::string& _prefix, Options* _options) {
-  using T = std::remove_cvref_t<typename FieldType::Type>;
-  if constexpr (rfl::internal::is_extra_fields_v<T>) {
-    add_open_prefix<typename T::mapped_type, ProcessorsType, VisitedType>(
-        _prefix, _options);
-  }
-  else {
-    add_option<T, ProcessorsType, VisitedType>(
-        _prefix + std::string(FieldType::name()), _options);
-  }
-}
-
-template <class T, class ProcessorsType, class VisitedType>
 void collect_options(const std::string& _prefix, Options* _options) {
   using NT = option_fields_t<T, ProcessorsType>;
   using NextVisitedType = typename VisitedType::template add<T>;
   [&]<size_t... _is>(std::index_sequence<_is...>) {
-    (add_option_for_field<
-         rfl::tuple_element_t<_is, typename NT::Fields>, ProcessorsType,
-         NextVisitedType>(_prefix, _options),
-     ...);
-  }(std::make_index_sequence<NT::size()>());
-}
-
-/// Adds the short alias and the positional slot of the _i-th top-level
-/// field, if it has them. Two fields with the same short name are kept as
-/// an error (Options::duplicate_short_name).
-template <class NamedTupleType, size_t _i>
-void add_short_and_positional(Options* _options) {
-  using Info = field_info<NamedTupleType, _i>;
-  if constexpr (Info::is_short) {
-    constexpr auto short_lit = get_short_name<NamedTupleType, _i>();
-    const auto name = short_lit.string_view();
-    const bool already_exists = std::any_of(
-        _options->short_options.begin(), _options->short_options.end(),
-        [&](const auto& _entry) { return _entry.first == name; });
-    if (already_exists) {
-      if (_options->duplicate_short_name.empty()) {
-        _options->duplicate_short_name = std::string(name);
+    auto add_one = [&]<size_t _i>() {
+      using FieldType = rfl::tuple_element_t<_i, typename NT::Fields>;
+      using FT = std::remove_cvref_t<typename FieldType::Type>;
+      if constexpr (rfl::internal::is_extra_fields_v<FT>) {
+        add_open_prefix<typename FT::mapped_type, ProcessorsType,
+                        NextVisitedType>(_prefix, _options);
+      } else {
+        using U = unwrapped_option_t<FT, ProcessorsType>;
+        using Ann = cli_annotations_t<FT>;
+        std::string path = _prefix + std::string(FieldType::name());
+        constexpr bool is_hidden = Ann::is_hidden;
+        constexpr auto group_name =
+            Ann::has_group ? Ann::group_name.string_view() : std::string_view{};
+        constexpr auto value_name =
+            Ann::has_value_name ? Ann::value_name.string_view()
+                                : std::string_view{};
+        if constexpr (Ann::num_implicit_value > 0) {
+          _options->add_leaf_option(
+              std::move(path), implicit_value_option<FT, ProcessorsType>(),
+              is_hidden, group_name, value_name);
+        } else if constexpr (std::is_same_v<U, bool>) {
+          _options->add_leaf_option(std::move(path), Option{OptionKind::flag},
+                                    is_hidden, group_name, value_name);
+        } else if constexpr (is_open_option_v<U>) {
+          _options->add_leaf_option(std::move(path), Option{OptionKind::other},
+                                    is_hidden, group_name, value_name);
+        } else if constexpr (parsing::is_string_map_v<U>) {
+          if constexpr (is_hidden) {
+            _options->hidden_options.push_back(path);
+          }
+          if constexpr (!group_name.empty()) {
+            _options->option_groups.emplace_back(path, std::string(group_name));
+          }
+          if constexpr (!value_name.empty()) {
+            _options->option_value_names.emplace_back(path,
+                                                      std::string(value_name));
+          }
+          add_open_prefix<typename U::mapped_type, ProcessorsType,
+                          NextVisitedType>(path + path_separator, _options);
+        } else if constexpr (is_option_struct_v<U>) {
+          if constexpr (is_hidden) {
+            _options->hidden_options.push_back(path);
+          }
+          if constexpr (NextVisitedType::template contains<U>) {
+            _options->open_prefixes.emplace_back(path + path_separator,
+                                                 Option{OptionKind::other});
+          } else {
+            collect_options<U, ProcessorsType, NextVisitedType>(
+                path + path_separator, _options);
+          }
+        } else {
+          static_assert(
+              !Ann::is_multi_token || is_option_list_v<U>,
+              "rfl::MultiToken can only wrap a list type (such as std::vector).");
+          _options->add_leaf_option(
+              std::move(path),
+              Option{OptionKind::value, is_option_list_v<U>, {},
+                     Ann::is_multi_token},
+              is_hidden, group_name, value_name);
+        }
       }
-    } else {
-      _options->short_options.emplace_back(std::string(name),
-                                           std::string(Info::name()));
-    }
-  }
-  if constexpr (Info::is_positional) {
-    _options->positionals.emplace_back(Info::name());
-  }
+    };
+    (add_one.template operator()<_is>(), ...);
+  }(std::make_index_sequence<NT::size()>());
 }
 
 template <class T, class ProcessorsType>
 void collect_short_and_positional(Options* _options) {
   using NT = option_fields_t<T, ProcessorsType>;
   [&]<size_t... _is>(std::index_sequence<_is...>) {
-    (add_short_and_positional<NT, _is>(_options), ...);
+    auto add_one = [&]<size_t _i>() {
+      using Info = field_info<NT, _i>;
+      if constexpr (Info::is_short) {
+        constexpr auto short_lit = get_short_name<NT, _i>();
+        _options->add_short_alias(short_lit.string_view(), Info::name());
+      }
+      if constexpr (Info::is_positional) {
+        _options->positionals.emplace_back(Info::name());
+      }
+    };
+    (add_one.template operator()<_is>(), ...);
   }(std::make_index_sequence<NT::size()>());
-}
-
-template <class FieldType, class ProcessorsType>
-void add_top_level_option(Options* _options) {
-  using T = std::remove_cvref_t<typename FieldType::Type>;
-  if constexpr (!rfl::internal::is_extra_fields_v<T>) {
-    _options->long_options.emplace_back(std::string(FieldType::name()),
-                                        option_for<T, ProcessorsType>());
-  }
 }
 
 /// Adds the options of the top-level fields of T, which is all that short
@@ -783,9 +789,15 @@ template <class T, class ProcessorsType>
 void collect_top_level_options(Options* _options) {
   using NT = option_fields_t<T, ProcessorsType>;
   [&]<size_t... _is>(std::index_sequence<_is...>) {
-    (add_top_level_option<rfl::tuple_element_t<_is, typename NT::Fields>,
-                          ProcessorsType>(_options),
-     ...);
+    auto add_one = [&]<size_t _i>() {
+      using FieldType = rfl::tuple_element_t<_i, typename NT::Fields>;
+      using FT = std::remove_cvref_t<typename FieldType::Type>;
+      if constexpr (!rfl::internal::is_extra_fields_v<FT>) {
+        _options->long_options.emplace_back(std::string(FieldType::name()),
+                                            option_for<FT, ProcessorsType>());
+      }
+    };
+    (add_one.template operator()<_is>(), ...);
   }(std::make_index_sequence<NT::size()>());
 }
 
