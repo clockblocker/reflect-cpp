@@ -22,6 +22,7 @@
 #include "../Rename.hpp"
 #include "../Short.hpp"
 #include "../Tuple.hpp"
+#include "../ValueName.hpp"
 #include "../internal/StringLiteral.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/has_reflector.hpp"
@@ -31,6 +32,7 @@
 #include "../internal/is_named_tuple.hpp"
 #include "../internal/is_positional.hpp"
 #include "../internal/is_short.hpp"
+#include "../internal/is_value_name.hpp"
 #include "../internal/no_extra_fields_v.hpp"
 #include "../internal/processed_t.hpp"
 #include "../parsing/is_string_map.hpp"
@@ -116,6 +118,9 @@ struct Options {
 
   /// Section header name for fields wrapped in rfl::Group, by path.
   std::map<std::string, std::string> option_groups;
+
+  /// Custom value placeholder name for fields wrapped in rfl::ValueName, by path.
+  std::map<std::string, std::string> option_value_names;
 
   /// Whether options that match no field are an error (rfl::NoExtraFields).
   bool reject_unknown = false;
@@ -278,11 +283,13 @@ struct cli_annotations {
   static constexpr bool is_positional = false;
   static constexpr bool is_hidden = false;
   static constexpr bool has_group = false;
+  static constexpr bool has_value_name = false;
   static constexpr size_t num_implicit_value = 0;
   static constexpr rfl::internal::StringLiteral<1> short_name = "";
   static constexpr int count = 0;
   static constexpr rfl::internal::StringLiteral<1> implicit_value = "";
   static constexpr rfl::internal::StringLiteral<1> group_name = "";
+  static constexpr rfl::internal::StringLiteral<1> value_name = "";
 };
 
 template <class T>
@@ -336,6 +343,12 @@ template <rfl::internal::StringLiteral _group, class T>
 struct cli_annotations<Group<_group, T>> : cli_annotations_t<T> {
   static constexpr bool has_group = true;
   static constexpr auto group_name = _group;
+};
+
+template <rfl::internal::StringLiteral _value_name, class T>
+struct cli_annotations<ValueName<_value_name, T>> : cli_annotations_t<T> {
+  static constexpr bool has_value_name = true;
+  static constexpr auto value_name = _value_name;
 };
 
 /// The CLI metadata of the _i-th field of a NamedTuple. InnerType is the
@@ -408,6 +421,7 @@ auto unwrap_option_type() {
                      || rfl::internal::is_implicit_value_v<U>
                      || rfl::internal::is_hidden_v<U>
                      || rfl::internal::is_group_v<U>
+                     || rfl::internal::is_value_name_v<U>
                      || parsing::is_rename_v<U>
                      || parsing::is_default_val_v<U>
                      || parsing::is_skip_v<U>) {
@@ -579,6 +593,10 @@ void add_option(const std::string& _path, Options* _options) {
   if constexpr (cli_annotations_t<T>::has_group) {
     _options->option_groups[_path] =
         std::string(cli_annotations_t<T>::group_name.string_view());
+  }
+  if constexpr (cli_annotations_t<T>::has_value_name) {
+    _options->option_value_names[_path] =
+        std::string(cli_annotations_t<T>::value_name.string_view());
   }
   if constexpr (cli_annotations_t<T>::num_implicit_value > 0) {
     _options->long_options[_path] =

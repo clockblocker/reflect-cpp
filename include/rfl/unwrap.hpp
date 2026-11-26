@@ -13,6 +13,7 @@
 #include "internal/is_positional.hpp"
 #include "internal/is_rename.hpp"
 #include "internal/is_short.hpp"
+#include "internal/is_value_name.hpp"
 
 namespace rfl {
 
@@ -22,7 +23,8 @@ template <class T>
 constexpr bool is_metadata_wrapper_v =
     is_default_val_v<T> || is_description_v<T> || is_deprecated_v<T> ||
     is_rename_v<T> || is_short_v<T> || is_positional_v<T> ||
-    is_implicit_value_v<T> || is_hidden_v<T> || is_group_v<T>;
+    is_implicit_value_v<T> || is_hidden_v<T> || is_group_v<T> ||
+    is_value_name_v<T>;
 
 }  // namespace internal
 

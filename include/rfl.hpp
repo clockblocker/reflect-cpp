@@ -60,6 +60,7 @@
 #include "rfl/ToAllCaps.hpp"
 #include "rfl/UnderlyingEnums.hpp"
 #include "rfl/Validator.hpp"
+#include "rfl/ValueName.hpp"
 #include "rfl/Variant.hpp"
 #include "rfl/VariantsAsOneOf.hpp"
 #include "rfl/Vectorstring.hpp"

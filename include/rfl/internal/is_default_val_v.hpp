@@ -13,6 +13,7 @@
 #include "../Positional.hpp"
 #include "../Rename.hpp"
 #include "../Short.hpp"
+#include "../ValueName.hpp"
 #include "StringLiteral.hpp"
 
 namespace rfl::internal {
@@ -57,6 +58,9 @@ class is_default_val<Hidden<T>> : public is_default_val<T> {};
 template <internal::StringLiteral _group, class T>
 class is_default_val<Group<_group, T>> : public is_default_val<T> {};
 
+template <internal::StringLiteral _value_name, class T>
+class is_default_val<ValueName<_value_name, T>> : public is_default_val<T> {};
+
 template <class T>
 constexpr bool is_default_val_v =
     is_default_val<std::remove_cvref_t<std::remove_pointer_t<T>>>::value;
@@ -99,6 +103,15 @@ class is_unwrapped_default_val<Group<_group, T>>
 template <internal::StringLiteral _new_name, internal::StringLiteral _group,
           class T>
 class is_unwrapped_default_val<Rename<_new_name, Group<_group, T>>>
+    : public is_unwrapped_default_val<T> {};
+
+template <internal::StringLiteral _value_name, class T>
+class is_unwrapped_default_val<ValueName<_value_name, T>>
+    : public is_unwrapped_default_val<T> {};
+
+template <internal::StringLiteral _new_name,
+          internal::StringLiteral _value_name, class T>
+class is_unwrapped_default_val<Rename<_new_name, ValueName<_value_name, T>>>
     : public is_unwrapped_default_val<T> {};
 
 template <class T>

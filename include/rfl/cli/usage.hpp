@@ -95,6 +95,8 @@ struct UsageArg {
   /// The placeholder for one value: "<value>", "<bool>" or "<a|b|c>". Lists
   /// are rendered from it with the list delimiter.
   std::string value = "<value>";
+  /// Whether `value` was explicitly set via rfl::ValueName.
+  bool has_custom_value_name = false;
   /// The allowed values of enums and literals.
   std::vector<std::string> choices;
   std::string description;
@@ -530,6 +532,13 @@ class UsageCollector {
         it != options_->option_groups.end()) {
       _arg.group = it->second;
     }
+    if (const auto it = options_->option_value_names.find(_arg.name);
+        it != options_->option_value_names.end()) {
+      const auto& vn = it->second;
+      _arg.value =
+          (!vn.empty() && vn.front() == '<' && vn.back() == '>') ? vn : "<" + vn + ">";
+      _arg.has_custom_value_name = true;
+    }
     args_.emplace_back(std::move(_arg));
   }
 
@@ -562,7 +571,7 @@ class UsageCollector {
 /// (ListDelimiter<"">), every occurrence is one item: "<value>".
 inline std::string usage_value_to_string(const UsageArg& _arg,
                                          const std::optional<char> _delimiter) {
-  if (!_arg.is_list || !_delimiter) {
+  if (_arg.has_custom_value_name || !_arg.is_list || !_delimiter) {
     return _arg.value;
   }
   const auto d = std::string(1, *_delimiter);
