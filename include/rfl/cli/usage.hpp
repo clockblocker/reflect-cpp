@@ -20,6 +20,7 @@
 #include "../Result.hpp"
 #include "../SnakeCaseToKebabCase.hpp"
 #include "../generic/Writer.hpp"
+#include "../internal/DeferredDefaults.hpp"
 #include "../internal/default_if_missing_v.hpp"
 #include "../internal/is_default_val_v.hpp"
 #include "../internal/is_extra_fields.hpp"
@@ -136,7 +137,14 @@ bool usage_default_vals_are_optional() {
       static_cast<void>(T{});
       return true;
     } catch (const std::exception&) {
-      return false;
+      try {
+        rfl::internal::DeferredDefaults deferred;
+        const auto scope = rfl::internal::DeferredDefaults::Scope(&deferred);
+        static_cast<void>(T{});
+        return true;
+      } catch (const std::exception&) {
+        return false;
+      }
     }
   } else {
     return false;

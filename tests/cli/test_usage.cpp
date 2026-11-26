@@ -255,39 +255,40 @@ struct WithPortAndDefaultVal {
 };
 
 TEST(cli, test_usage_defaults_without_default_construction) {
-  // The parser fills in a missing DefaultVal field only after it
-  // default-constructed the struct. If that throws (`port`'s zero value
-  // fails its validator) or the struct has no default constructor, the
-  // field is required, and the help shows it without a default.
-  static_assert(!std::is_default_constructible_v<WithPortAndDefaultVal>);
-  // With a bare DefaultVal, every read fails, and so does usage: the schema
-  // takes the defaults from a default-constructed struct.
-  const auto invalid = rfl::cli::usage<WithInvalidDefault>("app", true);
-  ASSERT_FALSE(invalid);
-  EXPECT_EQ(std::string(invalid.error().what()),
-            "Value expected to be greater than or equal to 1, but got 0.");
+  // With deferred Validator defaults (PR #38), a Validator whose default
+  // value is invalid does not prevent reading or usage() from keeping the
+  // valid defaults on other fields, while marking the invalid field required.
+  const auto deferred = rfl::cli::usage<WithInvalidDefault>("app", true);
+  ASSERT_TRUE(deferred) << deferred.error().what();
+  EXPECT_EQ(rfl::cli::usage<WithInvalidDefault>("app").value(),
+            "Usage: app --port=<value> [--threads=<value>]\n");
   EXPECT_EQ(rfl::cli::usage<WithInvalidWrappedDefault>("app").value(),
-            "Usage: app --port=<value> -t|--threads=<value>\n");
+            "Usage: app --port=<value> [-t|--threads=<value>]\n");
   EXPECT_EQ(rfl::cli::usage<WithInvalidWrappedDefaultInside>("app").value(),
-            "Usage: app --server.port=<value> --server.threads=<value>\n");
+            "Usage: app --server.port=<value> [--server.threads=<value>]\n");
+
+  const char* port_only[] = {"app", "--port=1"};
+  const auto bare =
+      rfl::cli::read<WithInvalidDefault>(2, const_cast<char**>(port_only));
+  ASSERT_TRUE(bare) << bare.error().what();
+  EXPECT_EQ(bare.value().threads.get(), 4);
+  const auto wrapped_def = rfl::cli::read<WithInvalidWrappedDefault>(
+      2, const_cast<char**>(port_only));
+  ASSERT_TRUE(wrapped_def) << wrapped_def.error().what();
+  EXPECT_EQ(wrapped_def.value().threads.value().get(), 4);
+  const char* nested[] = {"app", "--server.port=1"};
+  const auto nested_def = rfl::cli::read<WithInvalidWrappedDefaultInside>(
+      2, const_cast<char**>(nested));
+  ASSERT_TRUE(nested_def) << nested_def.error().what();
+  EXPECT_EQ(nested_def.value().server.threads.value().get(), 4);
+
+  // If the struct has no default constructor, a wrapped DefaultVal is
+  // required, and the help shows it without a default.
+  static_assert(!std::is_default_constructible_v<WithPortAndDefaultVal>);
   EXPECT_EQ(rfl::cli::usage<WithPortAndDefaultVal>("app").value(),
             "Usage: app --port=<value> --retries=<value>\n");
-
-  // A bare DefaultVal makes every read fail; a wrapped one is required.
-  const char* both[] = {"app", "--port=1", "--threads=2"};
-  EXPECT_FALSE(rfl::cli::read<WithInvalidDefault>(3, const_cast<char**>(both)));
-  const auto wrapped = rfl::cli::read<WithInvalidWrappedDefault>(
-      3, const_cast<char**>(both));
-  ASSERT_TRUE(wrapped) << wrapped.error().what();
-  EXPECT_EQ(wrapped.value().threads.value().get(), 2);
-  const char* port_only[] = {"app", "--port=1"};
-  EXPECT_FALSE(rfl::cli::read<WithInvalidWrappedDefault>(
-      2, const_cast<char**>(port_only)));
   EXPECT_FALSE(rfl::cli::read<WithPortAndDefaultVal>(
       2, const_cast<char**>(port_only)));
-  const char* nested[] = {"app", "--server.port=1"};
-  EXPECT_FALSE(rfl::cli::read<WithInvalidWrappedDefaultInside>(
-      2, const_cast<char**>(nested)));
 
   // With rfl::DefaultIfMissing nothing is required, but the defaults are
   // unknown without T{}, so usage() leaves them out.
