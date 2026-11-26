@@ -319,7 +319,7 @@ struct NamedTupleParser {
         _schema->types_[std::string(F::name())] = std::move(s);
       }
     }
-  };
+  }
 
   /// Sets the default value of the DefaultVal node in `_schema`. Rename,
   /// Short, Positional and ImplicitValue leave no node in the schema, but
