@@ -41,6 +41,20 @@
 
 namespace rfl::cli {
 
+/// Runtime customization for `rfl::cli::usage` and `rfl::cli::read_app`.
+struct UsageOptions {
+  bool detailed = true;
+  /// If non-empty, replaces the auto-generated synopsis after "Usage: ".
+  std::string synopsis = {};
+  /// If non-empty, shown after the Usage line in detailed output.
+  std::string description = {};
+  /// If non-empty, appended after a blank line at the end of detailed output.
+  std::string footer = {};
+  /// If non-empty, places built-in `--help` and `--version` in this group
+  /// (at the start of the group if fields already use it).
+  std::string help_group = {};
+};
+
 namespace internal {
 
 /// Whether a top-level field is required, which the schema cannot tell the
@@ -624,10 +638,11 @@ inline std::string usage_help_text(const UsageArg& _arg) {
 
 /// The rows of the built-in options of rfl::cli::App that no field takes.
 inline std::vector<UsageArg> builtin_usage_args(
-    const BuiltinOptions& _builtin) {
+    const BuiltinOptions& _builtin,
+    const std::string& _help_group = std::string()) {
   auto args = std::vector<UsageArg>();
-  const auto make = [](std::string_view _name, std::string_view _short_name,
-                       std::string _description) {
+  const auto make = [&](std::string_view _name, std::string_view _short_name,
+                        std::string _description) {
     auto arg = UsageArg{};
     arg.name = std::string(_name);
     arg.short_name = std::string(_short_name);
@@ -635,6 +650,7 @@ inline std::vector<UsageArg> builtin_usage_args(
     arg.bare = true;
     arg.required = false;
     arg.description = std::move(_description);
+    arg.group = _help_group;
     return arg;
   };
   if (_builtin.help) {
@@ -654,22 +670,36 @@ inline std::vector<UsageArg> builtin_usage_args(
 /// argument (rfl::cli::OptionsFirst), so the synopsis lists them first.
 inline std::string format_usage(const std::string& _program_name,
                                 const std::vector<UsageArg>& _args,
-                                const bool _detailed,
+                                const UsageOptions& _opts,
                                 const std::optional<char> _delimiter,
                                 const bool _options_first,
                                 const std::string& _header) {
-  auto synopsis = _args;
-  if (_options_first) {
-    std::stable_partition(synopsis.begin(), synopsis.end(),
-                          [](const UsageArg& _arg) { return !_arg.positional; });
+  auto out = _opts.detailed ? _header : std::string();
+  if (!_opts.synopsis.empty()) {
+    out += "Usage: " + _opts.synopsis + "\n";
+  } else {
+    auto synopsis = _args;
+    if (_options_first) {
+      std::stable_partition(synopsis.begin(), synopsis.end(),
+                            [](const UsageArg& _arg) { return !_arg.positional; });
+    }
+    out += "Usage: " + _program_name;
+    for (const auto& arg : synopsis) {
+      const auto str = usage_arg_to_string(arg, "|", _delimiter);
+      out += arg.required ? " " + str : " [" + str + "]";
+    }
+    out += '\n';
   }
-  auto out = (_detailed ? _header : std::string()) + "Usage: " + _program_name;
-  for (const auto& arg : synopsis) {
-    const auto str = usage_arg_to_string(arg, "|", _delimiter);
-    out += arg.required ? " " + str : " [" + str + "]";
+  if (!_opts.detailed) {
+    return out;
   }
-  out += '\n';
-  if (!_detailed || _args.empty()) {
+  if (!_opts.description.empty()) {
+    out += "\n" + _opts.description + "\n";
+  }
+  if (_args.empty()) {
+    if (!_opts.footer.empty()) {
+      out += "\n" + _opts.footer + "\n";
+    }
     return out;
   }
 
@@ -709,29 +739,31 @@ inline std::string format_usage(const std::string& _program_name,
     for (const auto& [left, right] : rows) {
       emit_row(left, right);
     }
-    return out;
-  }
-
-  // Emit sections in order of first appearance; ungrouped args (if any) go
-  // under "Arguments".
-  std::vector<std::string> section_order;
-  for (const auto& arg : _args) {
-    const std::string section =
-        arg.group.empty() ? std::string("Arguments") : arg.group;
-    if (std::find(section_order.begin(), section_order.end(), section)
-        == section_order.end()) {
-      section_order.push_back(section);
-    }
-  }
-  for (const auto& section : section_order) {
-    out += "\n" + section + ":\n";
-    for (size_t i = 0; i < _args.size(); ++i) {
-      const std::string arg_section =
-          _args[i].group.empty() ? std::string("Arguments") : _args[i].group;
-      if (arg_section == section) {
-        emit_row(rows[i].first, rows[i].second);
+  } else {
+    // Emit sections in order of first appearance; ungrouped args (if any) go
+    // under "Arguments".
+    std::vector<std::string> section_order;
+    for (const auto& arg : _args) {
+      const std::string section =
+          arg.group.empty() ? std::string("Arguments") : arg.group;
+      if (std::find(section_order.begin(), section_order.end(), section)
+          == section_order.end()) {
+        section_order.push_back(section);
       }
     }
+    for (const auto& section : section_order) {
+      out += "\n" + section + ":\n";
+      for (size_t i = 0; i < _args.size(); ++i) {
+        const std::string arg_section =
+            _args[i].group.empty() ? std::string("Arguments") : _args[i].group;
+        if (arg_section == section) {
+          emit_row(rows[i].first, rows[i].second);
+        }
+      }
+    }
+  }
+  if (!_opts.footer.empty()) {
+    out += "\n" + _opts.footer + "\n";
   }
   return out;
 }
@@ -781,7 +813,7 @@ std::optional<Generic> usage_defaults() {
 /// rfl::DefaultVal and default-constructing it throws.
 template <class T, class... Ps>
 rfl::Result<std::string> usage(const std::string& _program_name,
-                               const bool _detailed = false) {
+                               const UsageOptions& _opts) {
   using ProcessorsType = Processors<SnakeCaseToKebabCase, Ps...>;
   using NamedTupleType = rfl::internal::processed_t<T, ProcessorsType>;
   constexpr auto delimiter = internal::list_delimiter_v<ProcessorsType>;
@@ -806,18 +838,43 @@ rfl::Result<std::string> usage(const std::string& _program_name,
           auto collector = internal::UsageCollector(
               &definition, &meta, &options,
               rfl::internal::no_optionals_v<ProcessorsType>, delimiter);
-          auto args = internal::builtin_usage_args(builtin);
-          const auto fields = collector.collect(
+          auto builtin_args =
+              internal::builtin_usage_args(builtin, _opts.help_group);
+          auto fields = collector.collect(
               rfl::internal::default_if_missing_v<ProcessorsType>,
               internal::usage_defaults<T, Ps...>());
-          args.insert(args.end(), fields.begin(), fields.end());
+          auto args = std::vector<internal::UsageArg>();
+          if (!_opts.help_group.empty() && !builtin_args.empty()) {
+            const auto pos = std::find_if(
+                fields.begin(), fields.end(),
+                [&](const internal::UsageArg& _a) {
+                  return _a.group == _opts.help_group;
+                });
+            if (pos != fields.end()) {
+              args.insert(args.end(), fields.begin(), pos);
+              args.insert(args.end(), builtin_args.begin(), builtin_args.end());
+              args.insert(args.end(), pos, fields.end());
+            } else {
+              args = std::move(builtin_args);
+              args.insert(args.end(), fields.begin(), fields.end());
+            }
+          } else {
+            args = std::move(builtin_args);
+            args.insert(args.end(), fields.begin(), fields.end());
+          }
           return internal::format_usage(
-              _program_name, args, _detailed, delimiter, options.options_first,
+              _program_name, args, _opts, delimiter, options.options_first,
               internal::app_header<ProcessorsType>(_program_name));
         } catch (std::exception& e) {
           return error(e.what());
         }
       });
+}
+
+template <class T, class... Ps>
+rfl::Result<std::string> usage(const std::string& _program_name,
+                               const bool _detailed = false) {
+  return usage<T, Ps...>(_program_name, UsageOptions{.detailed = _detailed});
 }
 
 }  // namespace rfl::cli
