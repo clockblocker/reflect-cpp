@@ -45,6 +45,9 @@ namespace rfl::cli {
 /// Runtime customization for `rfl::cli::usage` and `rfl::cli::read_app`.
 struct UsageOptions {
   bool detailed = true;
+  /// If non-empty, shown before the Usage line in detailed output (overrides
+  /// any header from rfl::cli::App).
+  std::string header = {};
   /// If non-empty, replaces the auto-generated synopsis after "Usage: ".
   std::string synopsis = {};
   /// If non-empty, shown after the Usage line in detailed output.
@@ -682,7 +685,18 @@ inline std::string format_usage(const std::string& _program_name,
                                 const std::optional<char> _delimiter,
                                 const bool _options_first,
                                 const std::string& _header) {
-  auto out = _opts.detailed ? _header : std::string();
+  auto out = std::string();
+  if (_opts.detailed) {
+    if (!_opts.header.empty()) {
+      out += _opts.header;
+      if (!out.ends_with('\n')) {
+        out += '\n';
+      }
+      out += '\n';
+    } else {
+      out += _header;
+    }
+  }
   if (!_opts.synopsis.empty()) {
     out += "Usage: " + _opts.synopsis + "\n";
   } else {

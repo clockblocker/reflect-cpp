@@ -71,4 +71,18 @@ TEST(cli, test_usage_custom_synopsis_description_footer_and_help_group) {
   EXPECT_EQ(text.find("input-filenames"), std::string::npos);
 }
 
+TEST(cli, test_usage_custom_header_before_usage) {
+  const rfl::cli::UsageOptions opts{
+      .detailed = true,
+      .header = "solc, the Solidity commandline compiler.\n\nNo warranty.",
+      .synopsis = "solc [options] [input_file...]",
+  };
+  const auto text = rfl::cli::usage<CatOptions>("solc", opts);
+  ASSERT_TRUE(text) << text.error().what();
+  EXPECT_TRUE(text->starts_with(
+      "solc, the Solidity commandline compiler.\n\nNo warranty.\n\n"
+      "Usage: solc [options] [input_file...]\n"))
+      << *text;
+}
+
 }  // namespace test_usage_custom
