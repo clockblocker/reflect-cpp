@@ -55,4 +55,25 @@ TEST(cli, test_pure_flags_grouped_and_explicit_equals) {
   EXPECT_EQ(res2->ids.value().get(), (std::vector<std::string>{"1"}));
 }
 
+struct UsageFlagConfig {
+  rfl::Short<"v", rfl::Description<"Verbose output", rfl::DefaultVal<bool>>>
+      verbose = false;
+  rfl::Description<"Use color", rfl::DefaultVal<bool>> color = true;
+  rfl::Positional<std::string> input;
+};
+
+TEST(cli, test_pure_flags_usage_formatting) {
+  const auto text =
+      rfl::cli::usage<UsageFlagConfig, rfl::cli::PureFlags>("tool", true);
+  ASSERT_TRUE(text) << text.error().what();
+  // Pure flags omit `[=<bool>]` in both synopsis and argument rows.
+  EXPECT_NE(text->find("Usage: tool [-v|--verbose] [--color] <input>\n"),
+            std::string::npos)
+      << *text;
+  EXPECT_EQ(text->find("[=<bool>]"), std::string::npos) << *text;
+  // Default: false. is suppressed for pure flags, while Default: true. is kept.
+  EXPECT_EQ(text->find("Default: false."), std::string::npos) << *text;
+  EXPECT_NE(text->find("Default: true."), std::string::npos) << *text;
+}
+
 }  // namespace test_pure_flags
