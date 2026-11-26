@@ -1,10 +1,7 @@
 #ifndef RFL_MULTITOKEN_HPP_
 #define RFL_MULTITOKEN_HPP_
 
-#include <type_traits>
-#include <utility>
-
-#include "default.hpp"
+#include "internal/TransparentWrapper.hpp"
 
 namespace rfl {
 
@@ -15,118 +12,38 @@ namespace rfl {
 /// Consumes subsequent tokens until the next option or `--`.
 /// For non-CLI formats (JSON, YAML, etc.), this is transparent.
 template <class T>
-struct MultiToken {
-  /// The underlying type.
-  using Type = T;
-
-  /// Every format reads and writes the underlying value directly.
-  using ReflectionType = Type;
+struct MultiToken : internal::TransparentWrapper<MultiToken<T>, T> {
+  using Base = internal::TransparentWrapper<MultiToken<T>, T>;
+  using Base::Base;
+  using Base::operator=;
 
   MultiToken()
-    requires std::is_default_constructible_v<Type>
-      : value_(Type()) {}
-
-  MultiToken(const Type& _value) : value_(_value) {}
-
-  MultiToken(Type&& _value) noexcept(
-      std::is_nothrow_move_constructible_v<Type>)
-      : value_(std::move(_value)) {}
-
-  MultiToken(MultiToken<T>&& _field) = default;
-
-  MultiToken(const MultiToken<T>& _field) = default;
+    requires std::is_default_constructible_v<T>
+  = default;
+  MultiToken(const MultiToken&) = default;
+  MultiToken(MultiToken&&) = default;
+  MultiToken& operator=(const MultiToken&) = default;
+  MultiToken& operator=(MultiToken&&) = default;
 
   template <class U>
-  MultiToken(const MultiToken<U>& _field) : value_(_field.get()) {}
+  MultiToken(const MultiToken<U>& _field) : Base(_field.get()) {}
 
   template <class U>
   MultiToken(MultiToken<U>&& _field) noexcept(
-      std::is_nothrow_constructible_v<Type, U&&>)
-      : value_(std::move(_field.value_)) {}
-
-  template <class U>
-    requires std::is_convertible_v<U, Type>
-  MultiToken(const U& _value) : value_(_value) {}
-
-  template <class U>
-    requires std::is_convertible_v<U, Type>
-  MultiToken(U&& _value) noexcept(std::is_nothrow_constructible_v<Type, U&&>)
-      : value_(std::forward<U>(_value)) {}
-
-  template <class U = Type>
-    requires std::is_default_constructible_v<U>
-  MultiToken(const Default&) : value_(Type()) {}
-
-  ~MultiToken() = default;
-
-  const Type& get() const noexcept { return value_; }
-
-  Type& get() noexcept { return value_; }
-
-  Type& operator*() noexcept { return value_; }
-
-  const Type& operator*() const noexcept { return value_; }
-
-  Type& operator()() noexcept { return value_; }
-
-  const Type& operator()() const noexcept { return value_; }
-
-  Type* operator->() noexcept { return &value_; }
-
-  const Type* operator->() const noexcept { return &value_; }
-
-  auto& operator=(const Type& _value) {
-    value_ = _value;
-    return *this;
-  }
-
-  auto& operator=(Type&& _value) noexcept(
-      std::is_nothrow_move_assignable_v<Type>) {
-    value_ = std::move(_value);
-    return *this;
-  }
-
-  template <class U>
-    requires std::is_convertible_v<U, Type>
-  auto& operator=(const U& _value) {
-    value_ = _value;
-    return *this;
-  }
-
-  template <class U = Type>
-    requires std::is_default_constructible_v<U>
-  auto& operator=(const Default&) {
-    value_ = Type();
-    return *this;
-  }
-
-  MultiToken<T>& operator=(const MultiToken<T>& _field) = default;
-
-  MultiToken<T>& operator=(MultiToken<T>&& _field) = default;
+      std::is_nothrow_constructible_v<T, U&&>)
+      : Base(std::move(_field.value_)) {}
 
   template <class U>
   auto& operator=(const MultiToken<U>& _field) {
-    value_ = _field.get();
+    this->value_ = _field.get();
     return *this;
   }
 
   template <class U>
   auto& operator=(MultiToken<U>&& _field) {
-    value_ = std::move(_field.value_);
+    this->value_ = std::move(_field.value_);
     return *this;
   }
-
-  void set(const Type& _value) { value_ = _value; }
-
-  void set(Type&& _value) { value_ = std::move(_value); }
-
-  Type& value() noexcept { return value_; }
-
-  const Type& value() const noexcept { return value_; }
-
-  const Type& reflection() const { return value_; }
-
-  Type value_;
 };
 
 }  // namespace rfl

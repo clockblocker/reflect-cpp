@@ -15,6 +15,7 @@
 #include "../Generic.hpp"
 #include "../Result.hpp"
 #include "../apply.hpp"
+#include "../internal/TransparentWrapper.hpp"
 #include "../internal/has_reflection_method_v.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/has_reflector.hpp"
@@ -24,14 +25,9 @@
 #include "../internal/is_description.hpp"
 #include "../internal/is_field.hpp"
 #include "../internal/is_flatten_field.hpp"
-#include "../internal/is_group.hpp"
-#include "../internal/is_hidden.hpp"
-#include "../internal/is_implicit_value.hpp"
 #include "../internal/is_literal.hpp"
-#include "../internal/is_multi_token.hpp"
 #include "../internal/is_named_tuple.hpp"
 #include "../internal/is_validator.hpp"
-#include "../internal/is_value_name.hpp"
 #include "../num_fields.hpp"
 #include "../to_view.hpp"
 #include "../type_name_t.hpp"
@@ -104,10 +100,9 @@ constexpr bool is_value_wrapper_v =
     !std::is_pointer_v<U> &&
     (is_skip_v<U> || internal::is_default_val_v<U> || is_rename_v<U> ||
      internal::is_flatten_field_v<U> || is_short_v<U> || is_positional_v<U> ||
-     internal::is_implicit_value_v<U> || internal::is_hidden_v<U> ||
-     internal::is_group_v<U> || internal::is_value_name_v<U> ||
-     internal::is_multi_token_v<U> || internal::is_field_v<U> || internal::is_description_v<U> ||
-     internal::is_deprecated_v<U> || is_commented_v<U>);
+     internal::is_transparent_wrapper_v<U> || internal::is_field_v<U> ||
+     internal::is_description_v<U> || internal::is_deprecated_v<U> ||
+     is_commented_v<U>);
 
 /// Looks for rfl::Validators whose value is invalid inside _value and records
 /// them in _check. The parser uses it when a Validator has kept an invalid

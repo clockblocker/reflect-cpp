@@ -22,16 +22,12 @@
 #include "../internal/has_reflection_method_v.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/has_reflector.hpp"
+#include "../internal/TransparentWrapper.hpp"
 #include "../internal/is_basic_type.hpp"
 #include "../internal/is_deprecated.hpp"
 #include "../internal/is_description.hpp"
-#include "../internal/is_group.hpp"
-#include "../internal/is_hidden.hpp"
-#include "../internal/is_implicit_value.hpp"
 #include "../internal/is_literal.hpp"
-#include "../internal/is_multi_token.hpp"
 #include "../internal/is_validator.hpp"
-#include "../internal/is_value_name.hpp"
 #include "../internal/no_duplicate_keys_v.hpp"
 #include "../internal/processed_t.hpp"
 #include "../internal/ptr_cast.hpp"
@@ -588,11 +584,7 @@ struct Parser {
       return ParserPositional<R, W, typename U::Type,
                               ProcessorsType>::to_schema(_definitions);
 
-    } else if constexpr (rfl::internal::is_implicit_value<U>::value ||
-                         rfl::internal::is_hidden<U>::value ||
-                         rfl::internal::is_group<U>::value ||
-                         rfl::internal::is_value_name<U>::value ||
-                         rfl::internal::is_multi_token<U>::value) {
+    } else if constexpr (rfl::internal::is_transparent_wrapper_v<U>) {
       // Read and written through its ReflectionType, but described as the
       // type itself rather than as a named reference, like rfl::Short.
       return Parser<R, W, typename U::Type, ProcessorsType>::to_schema(

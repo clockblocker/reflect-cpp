@@ -7,15 +7,11 @@
 #include "../DefaultVal.hpp"
 #include "../Deprecated.hpp"
 #include "../Description.hpp"
-#include "../Group.hpp"
-#include "../Hidden.hpp"
-#include "../ImplicitValue.hpp"
-#include "../MultiToken.hpp"
 #include "../Positional.hpp"
 #include "../Rename.hpp"
 #include "../Short.hpp"
-#include "../ValueName.hpp"
 #include "StringLiteral.hpp"
+#include "TransparentWrapper.hpp"
 
 namespace rfl::internal {
 
@@ -49,28 +45,17 @@ template <internal::StringLiteral _deprecation_message,
 class is_default_val<Deprecated<_deprecation_message, _description, T>>
     : public is_default_val<T> {};
 
-template <class T, internal::StringLiteral _implicit>
-class is_default_val<ImplicitValue<T, _implicit>> : public is_default_val<T> {
-};
-
 template <class T>
-class is_default_val<Hidden<T>> : public is_default_val<T> {};
-
-template <internal::StringLiteral _group, class T>
-class is_default_val<Group<_group, T>> : public is_default_val<T> {};
-
-template <internal::StringLiteral _value_name, class T>
-class is_default_val<ValueName<_value_name, T>> : public is_default_val<T> {};
-
-template <class T>
-class is_default_val<MultiToken<T>> : public is_default_val<T> {};
+  requires TransparentWrapperType<T>
+class is_default_val<T> : public is_default_val<typename T::Type> {};
 
 template <class T>
 constexpr bool is_default_val_v =
     is_default_val<std::remove_cvref_t<std::remove_pointer_t<T>>>::value;
 
-/// Whether T is an rfl::DefaultVal itself or inside rfl::Rename, but not
-/// inside rfl::Short, rfl::Positional, rfl::Description or rfl::Deprecated.
+/// Whether T is an rfl::DefaultVal itself or inside rfl::Rename / transparent
+/// CLI wrappers, but not inside rfl::Short, rfl::Positional, rfl::Description
+/// or rfl::Deprecated.
 template <class T>
 class is_unwrapped_default_val : public std::false_type {};
 
@@ -81,50 +66,15 @@ template <internal::StringLiteral _new_name, class T>
 class is_unwrapped_default_val<Rename<_new_name, DefaultVal<T>>>
     : public std::true_type {};
 
-// rfl::ImplicitValue is transparent to every format but the command line, so
-// a DefaultVal in it counts as unwrapped.
-template <class T, internal::StringLiteral _implicit>
-class is_unwrapped_default_val<ImplicitValue<T, _implicit>>
-    : public is_unwrapped_default_val<T> {};
-
-template <internal::StringLiteral _new_name, class T,
-          internal::StringLiteral _implicit>
-class is_unwrapped_default_val<Rename<_new_name, ImplicitValue<T, _implicit>>>
-    : public is_unwrapped_default_val<T> {};
-
 template <class T>
-class is_unwrapped_default_val<Hidden<T>>
-    : public is_unwrapped_default_val<T> {};
+  requires TransparentWrapperType<T>
+class is_unwrapped_default_val<T>
+    : public is_unwrapped_default_val<typename T::Type> {};
 
 template <internal::StringLiteral _new_name, class T>
-class is_unwrapped_default_val<Rename<_new_name, Hidden<T>>>
-    : public is_unwrapped_default_val<T> {};
-
-template <internal::StringLiteral _group, class T>
-class is_unwrapped_default_val<Group<_group, T>>
-    : public is_unwrapped_default_val<T> {};
-
-template <internal::StringLiteral _new_name, internal::StringLiteral _group,
-          class T>
-class is_unwrapped_default_val<Rename<_new_name, Group<_group, T>>>
-    : public is_unwrapped_default_val<T> {};
-
-template <internal::StringLiteral _value_name, class T>
-class is_unwrapped_default_val<ValueName<_value_name, T>>
-    : public is_unwrapped_default_val<T> {};
-
-template <internal::StringLiteral _new_name,
-          internal::StringLiteral _value_name, class T>
-class is_unwrapped_default_val<Rename<_new_name, ValueName<_value_name, T>>>
-    : public is_unwrapped_default_val<T> {};
-
-template <class T>
-class is_unwrapped_default_val<MultiToken<T>>
-    : public is_unwrapped_default_val<T> {};
-
-template <internal::StringLiteral _new_name, class T>
-class is_unwrapped_default_val<Rename<_new_name, MultiToken<T>>>
-    : public is_unwrapped_default_val<T> {};
+  requires TransparentWrapperType<T>
+class is_unwrapped_default_val<Rename<_new_name, T>>
+    : public is_unwrapped_default_val<typename T::Type> {};
 
 template <class T>
 constexpr bool is_unwrapped_default_val_v = is_unwrapped_default_val<
