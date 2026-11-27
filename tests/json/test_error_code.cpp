@@ -88,8 +88,53 @@ struct ThrowingCustomValidator {
   }
 };
 
-struct ObsLikeRequest {
-  rfl::Validator<std::string, rfl::Size<rfl::Minimum<1>>> scene_name;
+struct NonStaticCodeValidator {
+  std::string code = "should_not_be_used";
+  static rfl::Result<int> validate(const int _v) {
+    if (_v < 0) {
+      return rfl::error("must be non-negative");
+    }
+    return _v;
+  }
+  template <class T>
+  static rfl::parsing::schema::ValidationType to_schema() {
+    return rfl::parsing::schema::ValidationType{
+        rfl::parsing::schema::ValidationType::AllOf{}};
+  }
+};
+
+struct NullPtrCodeValidator {
+  static constexpr const char* code = nullptr;
+  static rfl::Result<int> validate(const int _v) {
+    if (_v < 0) {
+      return rfl::error("bad");
+    }
+    return _v;
+  }
+  template <class T>
+  static rfl::parsing::schema::ValidationType to_schema() {
+    return rfl::parsing::schema::ValidationType{
+        rfl::parsing::schema::ValidationType::AllOf{}};
+  }
+};
+
+struct CharArrayCodeValidator {
+  static constexpr char code[] = "char_array_rule";
+  static rfl::Result<int> validate(const int _v) {
+    if (_v < 0) {
+      return rfl::error("bad");
+    }
+    return _v;
+  }
+  template <class T>
+  static rfl::parsing::schema::ValidationType to_schema() {
+    return rfl::parsing::schema::ValidationType{
+        rfl::parsing::schema::ValidationType::AllOf{}};
+  }
+};
+
+struct MediaRequest {
+  rfl::Validator<std::string, rfl::Size<rfl::Minimum<1>>> item_name;
   rfl::Validator<int, rfl::Minimum<0>, rfl::Maximum<100>> volume;
 };
 
@@ -272,13 +317,34 @@ TEST(json, test_error_code_custom_validators_and_all_of) {
     EXPECT_EQ(res.error().kind(), rfl::ErrorKind::constraint_violation);
     EXPECT_EQ(res.error().code(), "boom");
   }
+  {
+    // Non-static `code` member is ignored cleanly (must not fail to compile).
+    const auto res =
+        rfl::json::read<rfl::Validator<int, NonStaticCodeValidator>>("-1");
+    ASSERT_FALSE(res);
+    EXPECT_EQ(res.error().kind(), rfl::ErrorKind::constraint_violation);
+    EXPECT_EQ(res.error().code(), "");
+  }
+  {
+    // static constexpr const char* code = nullptr produces empty code safely.
+    const auto res =
+        rfl::json::read<rfl::Validator<int, NullPtrCodeValidator>>("-1");
+    ASSERT_FALSE(res);
+    EXPECT_EQ(res.error().code(), "");
+  }
+  {
+    // static constexpr char code[] = "..." attaches code properly.
+    const auto res =
+        rfl::json::read<rfl::Validator<int, CharArrayCodeValidator>>("-1");
+    ASSERT_FALSE(res);
+    EXPECT_EQ(res.error().code(), "char_array_rule");
+  }
 }
 
-TEST(json, test_error_code_nested_struct_obs_mapping_and_helpers) {
-  // Mirrors obs-websocket RequestCodec mapping: 403 (RequestFieldEmpty) vs
-  // 402 (RequestFieldOutOfRange) purely via ErrorDetail::code without string
+TEST(json, test_error_code_nested_struct_classification_and_helpers) {
+  // Classify constraint violations purely via ErrorDetail::code without string
   // prefix matching.
-  const auto classify_obs = [](const rfl::ErrorDetail& _d) -> int {
+  const auto classify_status = [](const rfl::ErrorDetail& _d) -> int {
     if (_d.kind == rfl::ErrorKind::constraint_violation) {
       if (_d.code == "size.minimum" || _d.code == "code_points.minimum") {
         return 403;
@@ -288,21 +354,21 @@ TEST(json, test_error_code_nested_struct_obs_mapping_and_helpers) {
     return 400;
   };
 
-  const auto res = rfl::json::read<ObsLikeRequest>(
-      R"({"scene_name": "", "volume": 150})");
+  const auto res = rfl::json::read<MediaRequest>(
+      R"({"item_name": "", "volume": 150})");
   ASSERT_FALSE(res);
   const auto details = res.error().details();
   ASSERT_EQ(details.size(), 2u);
 
-  EXPECT_EQ(details[0].path, (Path{"scene_name"}));
+  EXPECT_EQ(details[0].path, (Path{"item_name"}));
   EXPECT_EQ(details[0].kind, rfl::ErrorKind::constraint_violation);
   EXPECT_EQ(details[0].code, "size.minimum");
-  EXPECT_EQ(classify_obs(details[0]), 403);
+  EXPECT_EQ(classify_status(details[0]), 403);
 
   EXPECT_EQ(details[1].path, (Path{"volume"}));
   EXPECT_EQ(details[1].kind, rfl::ErrorKind::constraint_violation);
   EXPECT_EQ(details[1].code, "maximum");
-  EXPECT_EQ(classify_obs(details[1]), 402);
+  EXPECT_EQ(classify_status(details[1]), 402);
 
   // Error::code() returns the first detail's code on multi-error results.
   EXPECT_EQ(res.error().code(), "size.minimum");
@@ -350,6 +416,15 @@ TEST(json, test_error_code_nested_struct_obs_mapping_and_helpers) {
   EXPECT_EQ(sv_nested.error().code(), "sv_rule");
   EXPECT_EQ(sv_nested.error().details()[0].path, (Path{"a"}));
 
+  const auto null_nested = rfl::error(
+      "bad", rfl::ErrorKind::constraint_violation, {"a"}, null_code);
+  EXPECT_EQ(null_nested.error().code(), "");
+
+  const auto empty_path_coded = rfl::error(
+      "bad", rfl::ErrorKind::constraint_violation, {}, "custom_rule");
+  EXPECT_EQ(empty_path_coded.error().code(), "custom_rule");
+  EXPECT_TRUE(empty_path_coded.error().details()[0].path.empty());
+
   // Propagation through wrap_error (prefix-only zero-alloc) and nested path
   // wrapping.
   auto leaf = rfl::Error("too small", rfl::ErrorKind::constraint_violation,
@@ -368,13 +443,22 @@ TEST(json, test_error_code_nested_struct_obs_mapping_and_helpers) {
   EXPECT_EQ(chained.details()[0].path, (Path{size_t{0}, "port"}));
   EXPECT_EQ(chained.details()[0].code, "minimum");
 
-  // Validated map keys preserve ErrorDetail::code via MapReader.
+  // Validated map keys (string and numeric) preserve ErrorDetail::code via
+  // MapReader.
   using ValidKey = rfl::Validator<std::string, rfl::Size<rfl::Minimum<3>>>;
   const auto bad_map_key =
       rfl::json::read<std::map<ValidKey, int>>(R"({"ab": 1})");
   ASSERT_FALSE(bad_map_key);
   EXPECT_EQ(bad_map_key.error().kind(), rfl::ErrorKind::constraint_violation);
   EXPECT_EQ(bad_map_key.error().code(), "size.minimum");
+
+  using ValidIntKey = rfl::Validator<int, rfl::Minimum<1>>;
+  const auto bad_int_map_key =
+      rfl::json::read<std::map<ValidIntKey, int>>(R"({"0": 1})");
+  ASSERT_FALSE(bad_int_map_key);
+  EXPECT_EQ(bad_int_map_key.error().kind(),
+            rfl::ErrorKind::constraint_violation);
+  EXPECT_EQ(bad_int_map_key.error().code(), "minimum");
 }
 
 }  // namespace test_json_error_code

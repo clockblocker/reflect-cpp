@@ -199,9 +199,11 @@ const auto result = rfl::json::read<Request, rfl::SnakeCaseToCamelCase>(
 for (const auto& detail : result.error().details()) {
   // First iteration:  path = {"files", 1, "inputFile"},
   //                   kind = rfl::ErrorKind::constraint_violation,
+  //                   code = "size.minimum",
   //                   message = "Size validation failed: ..."
   // Second iteration: path = {"files", 1, "outputFile"},
   //                   kind = rfl::ErrorKind::missing_field,
+  //                   code = "",
   //                   message = "Field named 'outputFile' not found."
 }
 ```

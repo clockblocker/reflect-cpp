@@ -78,11 +78,15 @@ class MapReader {
         [&](auto&& _key) -> Result<std::pair<KeyType, ValueType>> {
       using K = decltype(_key);
       if constexpr (internal::is_validator_v<KeyType>) {
-        return KeyType::from_value(std::forward<K>(_key))
-            .transform([&](KeyType&& _validated) {
-              return std::make_pair(std::move(_validated),
-                                    std::move(_pair.second));
-            });
+        try {
+          return KeyType::from_value(std::forward<K>(_key))
+              .transform([&](KeyType&& _validated) {
+                return std::make_pair(std::move(_validated),
+                                      std::move(_pair.second));
+              });
+        } catch (std::exception& e) {
+          return error(e.what(), ErrorKind::invalid_value);
+        }
       } else {
         try {
           return std::make_pair(KeyType(std::forward<K>(_key)),

@@ -8,6 +8,7 @@
 #endif
 
 #include <concepts>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -108,18 +109,27 @@ inline Unexpected<Error> error(std::string _what, const ErrorKind _kind,
 
 /// Shorthand for a classified unexpected error at a nested path with a
 /// machine-readable code.
+template <class Code>
+  requires(std::convertible_to<Code, std::string_view> &&
+           !std::is_null_pointer_v<std::remove_cvref_t<Code>>)
 inline Unexpected<Error> error(std::string _what, const ErrorKind _kind,
                                std::vector<ErrorDetail::PathSegment> _path,
-                               const std::string_view _code) {
+                               Code&& _code) {
+  std::string_view code_view;
+  if constexpr (std::is_pointer_v<std::remove_cvref_t<Code>>) {
+    code_view = _code ? std::string_view(_code) : std::string_view{};
+  } else {
+    code_view = std::string_view(std::forward<Code>(_code));
+  }
   if (_path.empty()) {
-    return Unexpected<Error>(Error(std::move(_what), _kind, _code));
+    return Unexpected<Error>(Error(std::move(_what), _kind, code_view));
   }
   std::vector<ErrorDetail> details;
   details.push_back(ErrorDetail{
       .path = std::move(_path),
       .message = _what,
       .kind = _kind,
-      .code = std::string(_code),
+      .code = std::string(code_view),
   });
   return Unexpected<Error>(Error(std::move(_what), std::move(details)));
 }

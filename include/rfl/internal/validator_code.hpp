@@ -19,11 +19,15 @@ namespace rfl::internal {
 template <class V>
 constexpr std::string_view validator_code() noexcept {
   if constexpr (requires {
+                  &V::code;
+                  requires !std::is_member_pointer_v<decltype(&V::code)>;
                   { V::code.string_view() }
                       -> std::convertible_to<std::string_view>;
                 }) {
     return V::code.string_view();
   } else if constexpr (requires {
+                         &V::code;
+                         requires !std::is_member_pointer_v<decltype(&V::code)>;
                          { V::code } -> std::convertible_to<std::string_view>;
                        }) {
     using CodeT = std::remove_cvref_t<decltype(V::code)>;
