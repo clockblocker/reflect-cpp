@@ -304,6 +304,21 @@ TEST(json, test_error_kind_variant_field_variant_array_tuple_and_map) {
   ASSERT_FALSE(bad_ts);
   EXPECT_EQ(bad_ts.error().kind(), rfl::ErrorKind::invalid_value);
 
+  // Custom type whose from_reflection returns a type U convertible to T
+  struct ConvertibleProxy {
+    int v;
+  };
+  struct CustomConvertible {
+    using ReflectionType = int;
+    int value = 0;
+    CustomConvertible(ConvertibleProxy _p) : value(_p.v) {}
+    static ConvertibleProxy from_reflection(int _x) { return {_x + 1}; }
+    int reflection() const { return value; }
+  };
+  const auto conv = rfl::json::read<CustomConvertible>("41");
+  ASSERT_TRUE(conv);
+  EXPECT_EQ(conv->value, 42);
+
   // Tuple & Array alignment: missing tuple slot -> missing_field;
   // tuple overflow & std::array size mismatch -> invalid_length.
   const auto tup_missing = rfl::json::read<std::tuple<int, std::string>>("[1]");
