@@ -1,7 +1,6 @@
 #ifndef RFL_JSON_WRITE_HPP_
 #define RFL_JSON_WRITE_HPP_
 
-#include <stdexcept>
 #if __has_include(<yyjson.h>)
 #include <yyjson.h>
 #else
@@ -19,8 +18,38 @@
 namespace rfl {
 namespace json {
 
-/// Convenient alias for the YYJSON pretty flag
+/// Write JSON pretty-printed with 4-space indentation.
 inline constexpr yyjson_write_flag pretty = YYJSON_WRITE_PRETTY;
+
+/// Write JSON pretty-printed with 2-space indentation.
+/// Overrides `pretty` if both are set.
+inline constexpr yyjson_write_flag pretty_two_spaces =
+    YYJSON_WRITE_PRETTY_TWO_SPACES;
+
+/// Escape non-ASCII Unicode characters as `\uXXXX` for ASCII-only output.
+inline constexpr yyjson_write_flag escape_unicode = YYJSON_WRITE_ESCAPE_UNICODE;
+
+/// Escape forward slashes `/` as `\/`.
+inline constexpr yyjson_write_flag escape_slashes = YYJSON_WRITE_ESCAPE_SLASHES;
+
+/// Write Inf and NaN numbers as `Infinity` and `NaN` literals (non-standard).
+inline constexpr yyjson_write_flag write_allow_inf_and_nan =
+    YYJSON_WRITE_ALLOW_INF_AND_NAN;
+
+/// Write Inf and NaN numbers as `null`.
+/// Overrides `write_allow_inf_and_nan` if both are set.
+inline constexpr yyjson_write_flag inf_and_nan_as_null =
+    YYJSON_WRITE_INF_AND_NAN_AS_NULL;
+
+/// Allow invalid UTF-8 byte sequences when encoding string values.
+inline constexpr yyjson_write_flag write_allow_invalid_unicode =
+    YYJSON_WRITE_ALLOW_INVALID_UNICODE;
+
+#if defined(YYJSON_VERSION_HEX) && YYJSON_VERSION_HEX >= 0x000900
+/// Append a trailing newline `\n` at the end of the JSON output.
+/// Requires yyjson >= 0.9.0.
+inline constexpr yyjson_write_flag newline_at_end = YYJSON_WRITE_NEWLINE_AT_END;
+#endif
 
 /// Returns a JSON string representation of the object.
 /// Uses compile-time reflection to serialize a C++ object to JSON format.

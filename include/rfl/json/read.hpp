@@ -18,6 +18,61 @@
 namespace rfl {
 namespace json {
 
+/// Stop after parsing the first JSON value instead of issuing an error if
+/// trailing content follows.
+inline constexpr yyjson_read_flag stop_when_done = YYJSON_READ_STOP_WHEN_DONE;
+
+/// Allow a single trailing comma at the end of an object or array.
+inline constexpr yyjson_read_flag allow_trailing_commas =
+    YYJSON_READ_ALLOW_TRAILING_COMMAS;
+
+/// Allow C-style single-line (//) and multi-line (/* */) comments.
+inline constexpr yyjson_read_flag allow_comments = YYJSON_READ_ALLOW_COMMENTS;
+
+/// Allow Inf/NaN numbers and literals (e.g. 1e999, NaN, inf, -Infinity).
+inline constexpr yyjson_read_flag read_allow_inf_and_nan =
+    YYJSON_READ_ALLOW_INF_AND_NAN;
+
+/// Allow invalid UTF-8 byte sequences when parsing string values.
+inline constexpr yyjson_read_flag read_allow_invalid_unicode =
+    YYJSON_READ_ALLOW_INVALID_UNICODE;
+
+#if defined(YYJSON_VERSION_HEX) && YYJSON_VERSION_HEX >= 0x000B00
+/// Allow and skip a leading UTF-8 BOM before parsing.
+/// Requires yyjson >= 0.11.0.
+inline constexpr yyjson_read_flag allow_bom = YYJSON_READ_ALLOW_BOM;
+#endif
+
+/// Convenience flag for JSONC (comments and trailing commas).
+inline constexpr yyjson_read_flag jsonc =
+    allow_comments | allow_trailing_commas;
+
+#if defined(YYJSON_VERSION_HEX) && YYJSON_VERSION_HEX >= 0x000C00
+/// Allow extended number formats (hexadecimal, leading/trailing decimal point,
+/// leading plus sign). Requires yyjson >= 0.12.0.
+inline constexpr yyjson_read_flag allow_ext_number =
+    YYJSON_READ_ALLOW_EXT_NUMBER;
+
+/// Allow extended escape sequences in strings. Requires yyjson >= 0.12.0.
+inline constexpr yyjson_read_flag allow_ext_escape =
+    YYJSON_READ_ALLOW_EXT_ESCAPE;
+
+/// Allow extended whitespace characters. Requires yyjson >= 0.12.0.
+inline constexpr yyjson_read_flag allow_ext_whitespace =
+    YYJSON_READ_ALLOW_EXT_WHITESPACE;
+
+/// Allow strings enclosed in single quotes. Requires yyjson >= 0.12.0.
+inline constexpr yyjson_read_flag allow_single_quoted_str =
+    YYJSON_READ_ALLOW_SINGLE_QUOTED_STR;
+
+/// Allow unquoted object keys. Requires yyjson >= 0.12.0.
+inline constexpr yyjson_read_flag allow_unquoted_key =
+    YYJSON_READ_ALLOW_UNQUOTED_KEY;
+
+/// Convenience flag for JSON5. Requires yyjson >= 0.12.0.
+inline constexpr yyjson_read_flag json5 = YYJSON_READ_JSON5;
+#endif
+
 using InputObjectType = typename Reader::InputObjectType;
 using InputVarType = typename Reader::InputVarType;
 
