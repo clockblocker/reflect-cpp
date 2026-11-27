@@ -58,6 +58,7 @@
 #include "../internal/is_deprecated.hpp"
 #include "../internal/is_description.hpp"
 #include "../internal/is_extra_fields.hpp"
+#include "../internal/is_safe_default_constructible.hpp"
 #include "../internal/is_skip.hpp"
 #include "../internal/no_extra_fields_v.hpp"
 #include "../internal/nth_element_t.hpp"
@@ -476,7 +477,7 @@ struct NamedTupleParser {
   static Result<NamedTuple<FieldTypes...>> read(
       const R& _r, const InputVarType& _var) noexcept {
     if constexpr (internal::default_if_null_v<ProcessorsType> &&
-                  (std::is_default_constructible_v<
+                  (internal::is_safe_default_constructible_v<
                        typename std::remove_cvref_t<FieldTypes>::Type> &&
                    ...)) {
       if (_r.is_empty(_var)) {
@@ -834,7 +835,7 @@ struct NamedTupleParser {
                         !internal::has_default_val_v<NamedTupleType> &&
                         is_nullable_v<ValueType>) {
             using NonConstT = std::remove_const_t<ValueType>;
-            if constexpr (std::is_default_constructible_v<NonConstT>) {
+            if constexpr (internal::is_safe_default_constructible_v<NonConstT>) {
               auto* const ptr = const_cast<NonConstT*>(rfl::get<_i>(_view));
               const auto reset = [&]() {
                 if constexpr (std::is_const_v<ValueType> ||
@@ -869,7 +870,7 @@ struct NamedTupleParser {
           return;
         }
         using NonConstT = std::remove_const_t<ValueType>;
-        if constexpr (!std::is_default_constructible_v<NonConstT>) {
+        if constexpr (!internal::is_safe_default_constructible_v<NonConstT>) {
           constexpr auto current_name =
               internal::nth_element_t<_i, FieldTypes...>::name();
           std::stringstream stream;

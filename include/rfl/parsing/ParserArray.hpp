@@ -10,6 +10,7 @@
 #include "../Result.hpp"
 #include "../always_false.hpp"
 #include "../internal/default_if_null_v.hpp"
+#include "../internal/is_safe_default_constructible.hpp"
 #include "../internal/ptr_cast.hpp"
 #include "ArrayReader.hpp"
 #include "Parent.hpp"
@@ -49,7 +50,8 @@ struct ParserArray {
   static Result<std::array<T, _size>> read(const R& _r,
                                            const InputVarType& _var) noexcept {
     if constexpr (internal::default_if_null_v<ProcessorsType> &&
-                  std::is_default_constructible_v<std::array<T, _size>>) {
+                  internal::is_safe_default_constructible_v<
+                      std::array<T, _size>>) {
       if (_r.is_empty(_var)) {
         return default_construct<std::array<T, _size>>();
       }

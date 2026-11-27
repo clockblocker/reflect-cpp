@@ -9,6 +9,7 @@
 #include "../internal/add_tags_to_variants_v.hpp"
 #include "../internal/all_fields.hpp"
 #include "../internal/default_if_null_v.hpp"
+#include "../internal/is_safe_default_constructible.hpp"
 #include "../internal/nth_element_t.hpp"
 #include "../internal/variants_as_one_of_v.hpp"
 #include "../visit.hpp"
@@ -58,8 +59,8 @@ class ParserRflVariant<R, W, rfl::Variant<AlternativeTypes...>,
       const R& _r, const InputVarType& _var) noexcept {
     if constexpr (internal::default_if_null_v<ProcessorsType> &&
                   !(is_nullable_v<AlternativeTypes> || ...) &&
-                  std::is_default_constructible_v<
-                      internal::nth_element_t<0, AlternativeTypes...>>) {
+                  internal::is_safe_default_constructible_v<
+                      rfl::Variant<AlternativeTypes...>>) {
       if (_r.is_empty(_var)) {
         return default_construct<rfl::Variant<AlternativeTypes...>>();
       }

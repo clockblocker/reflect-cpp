@@ -229,7 +229,7 @@ struct Parser {
       if constexpr (internal::default_if_null_v<ProcessorsType> &&
                     !is_nullable_v<T>) {
         if (_r.is_empty(_var)) {
-          if constexpr (std::is_default_constructible_v<T>) {
+          if constexpr (internal::is_safe_default_constructible_v<T>) {
             return default_construct<T>();
           } else {
             return Result<T>(
@@ -253,7 +253,7 @@ struct Parser {
     } else if constexpr (schemaful::IsSchemafulReader<R> &&
                          internal::is_literal_v<T>) {
       if constexpr (internal::default_if_null_v<ProcessorsType> &&
-                    std::is_default_constructible_v<T>) {
+                    internal::is_safe_default_constructible_v<T>) {
         if (_r.is_empty(_var)) {
           return default_construct<T>();
         }
@@ -263,7 +263,7 @@ struct Parser {
     } else if constexpr (R::template has_custom_constructor<T>) {
       if constexpr (internal::default_if_null_v<ProcessorsType> &&
                     !is_nullable_v<T> &&
-                    std::is_default_constructible_v<T>) {
+                    internal::is_safe_default_constructible_v<T>) {
         if (_r.is_empty(_var)) {
           return default_construct<T>();
         }
@@ -275,7 +275,7 @@ struct Parser {
         if constexpr (internal::default_if_null_v<ProcessorsType> &&
                       !is_nullable_v<T>) {
           if (_r.is_empty(_var)) {
-            if constexpr (std::is_default_constructible_v<T>) {
+            if constexpr (internal::is_safe_default_constructible_v<T>) {
               return default_construct<T>();
             } else {
               return Result<T>(
@@ -315,9 +315,10 @@ struct Parser {
 
       } else if constexpr (internal::default_if_missing_v<ProcessorsType> ||
                            internal::has_unwrapped_default_val_v<T> ||
-                           ((internal::has_default_val_v<T> ||
-                             internal::default_if_null_v<ProcessorsType>) &&
-                            requires { T{}; })) {
+                           (internal::has_default_val_v<T> &&
+                            requires { T{}; }) ||
+                           (internal::default_if_null_v<ProcessorsType> &&
+                            internal::is_safe_default_constructible_v<T>)) {
         // A DefaultVal inside rfl::Short, rfl::Positional, rfl::Description
         // or rfl::Deprecated is filled in only if T{} exists. Otherwise T is
         // read like a struct without DefaultVal fields, and those fields are
