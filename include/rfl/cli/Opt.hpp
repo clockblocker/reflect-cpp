@@ -298,7 +298,23 @@ struct Opt : rfl::internal::TransparentWrapper<Opt<T, Attrs...>, T> {
   using Base::operator=;
 
   using AttrsInfo = internal::opt_attrs<Attrs...>;
+
+  /// Contextual boolean conversion when the underlying type supports it
+  /// (e.g. `Opt<bool>` or `Opt<std::optional<T>>`).
+  explicit operator bool() const noexcept
+    requires requires(const T& _v) { static_cast<bool>(_v); }
+  {
+    return static_cast<bool>(this->value_);
+  }
 };
+
+/// Shorthand for a boolean CLI flag (`Opt<bool, Attrs...>`).
+template <class... Attrs>
+using Flag = Opt<bool, Attrs...>;
+
+/// Shorthand alias for a typed CLI argument (`Opt<T, Attrs...>`).
+template <class T, class... Attrs>
+using Arg = Opt<T, Attrs...>;
 
 namespace internal {
 
