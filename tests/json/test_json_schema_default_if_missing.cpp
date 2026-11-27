@@ -313,10 +313,12 @@ TEST(json, test_schema_default_if_missing_no_field_names) {
   EXPECT_EQ(schema, expected) << schema;
 }
 
-static_assert(!std::is_default_constructible_v<rfl::Box<NoDefaultCtor>>);
 static_assert(
-    !std::is_default_constructible_v<rfl::CopyableBox<NoDefaultCtor>>);
-static_assert(!std::is_default_constructible_v<rfl::Ref<NoDefaultCtor>>);
+    !rfl::internal::is_safe_default_constructible_v<rfl::Box<NoDefaultCtor>>);
+static_assert(!rfl::internal::is_safe_default_constructible_v<
+              rfl::CopyableBox<NoDefaultCtor>>);
+static_assert(
+    !rfl::internal::is_safe_default_constructible_v<rfl::Ref<NoDefaultCtor>>);
 static_assert(!std::is_default_constructible_v<rfl::Attribute<NoDefaultCtor>>);
 static_assert(!std::is_default_constructible_v<rfl::Short<"a", NoDefaultCtor>>);
 static_assert(
@@ -529,6 +531,91 @@ TEST(json, test_schema_default_if_missing_recursive_structs) {
           R"("nw":{"$ref":"#/$defs/test_json_schema_default_if_missing__NonWritable"})"),
       std::string::npos)
       << nw_node_schema;
+}
+
+namespace recursive_incomplete {
+
+struct DT;
+struct Leaf {
+  int x = 0;
+};
+struct Node {
+  rfl::Box<DT> lesser;
+};
+struct DT {
+  std::variant<Leaf, Node> v;
+};
+
+struct Tree {
+  struct Branch {
+    rfl::Box<Tree> child;
+  };
+  std::optional<Branch> b;
+};
+
+struct DirectNode {
+  int v = 1;
+  rfl::Box<DirectNode> next;
+};
+
+}  // namespace recursive_incomplete
+
+TEST(json, test_schema_default_if_missing_recursive_incomplete_box_ref) {
+  using recursive_incomplete::DirectNode;
+  using recursive_incomplete::DT;
+  using recursive_incomplete::Leaf;
+  using recursive_incomplete::Node;
+  using recursive_incomplete::Tree;
+
+  static_assert(rfl::internal::is_safe_default_constructible_v<DT>);
+  static_assert(rfl::internal::is_safe_default_constructible_v<Node>);
+  static_assert(rfl::internal::is_safe_default_constructible_v<Tree>);
+  static_assert(rfl::internal::is_safe_default_constructible_v<Tree::Branch>);
+  static_assert(!rfl::internal::is_safe_default_constructible_v<DirectNode>);
+  static_assert(
+      !rfl::internal::is_safe_default_constructible_v<WithBoxNoDefault>);
+  static_assert(
+      !rfl::internal::is_safe_default_constructible_v<WithRefNoDefault>);
+
+  // Normal read/write roundtrip for forward-declared recursive variant + Box.
+  const DT dt_val{Node{rfl::make_box<DT>(DT{Leaf{42}})}};
+  const auto dt_json = rfl::json::write(dt_val);
+  const auto dt_parsed = rfl::json::read<DT>(dt_json);
+  ASSERT_TRUE(dt_parsed.has_value()) << dt_parsed.error().what();
+  ASSERT_TRUE(std::holds_alternative<Node>(dt_parsed->v));
+  ASSERT_TRUE(std::holds_alternative<Leaf>(std::get<Node>(dt_parsed->v).lesser->v));
+  EXPECT_EQ(std::get<Leaf>(std::get<Node>(dt_parsed->v).lesser->v).x, 42);
+
+  // Schema generation with DefaultIfMissing for forward-declared DT.
+  const auto dt_schema = rfl::json::to_schema<DT, rfl::DefaultIfMissing>();
+  EXPECT_NE(dt_schema.find(R"("x":{"type":"integer","default":0})"),
+            std::string::npos)
+      << dt_schema;
+  EXPECT_NE(dt_schema.find(R"("default":{"x":0})"), std::string::npos)
+      << dt_schema;
+
+  // Normal read/write roundtrip for nested struct + Box + optional.
+  const Tree tree_val{Tree::Branch{rfl::make_box<Tree>()}};
+  const auto tree_json = rfl::json::write(tree_val);
+  const auto tree_parsed = rfl::json::read<Tree>(tree_json);
+  ASSERT_TRUE(tree_parsed.has_value()) << tree_parsed.error().what();
+  ASSERT_TRUE(tree_parsed->b.has_value());
+  EXPECT_FALSE(tree_parsed->b->child->b.has_value());
+
+  // Schema generation with DefaultIfMissing for Tree.
+  const auto tree_schema = rfl::json::to_schema<Tree, rfl::DefaultIfMissing>();
+  EXPECT_NE(tree_schema.find(R"("required":[])"), std::string::npos)
+      << tree_schema;
+
+  // Cyclic DirectNode must compile and NOT stack-overflow; default is omitted.
+  const auto direct_schema =
+      rfl::json::to_schema<DirectNode, rfl::DefaultIfMissing>();
+  EXPECT_EQ(direct_schema.find("\"default\""), std::string::npos)
+      << direct_schema;
+  EXPECT_NE(direct_schema.find(R"("v":{"type":"integer"})"), std::string::npos)
+      << direct_schema;
+  EXPECT_NE(direct_schema.find(R"("required":[])"), std::string::npos)
+      << direct_schema;
 }
 
 }  // namespace test_json_schema_default_if_missing
