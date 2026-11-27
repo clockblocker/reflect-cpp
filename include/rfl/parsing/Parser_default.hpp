@@ -671,10 +671,11 @@ struct Parser {
 
       } else {
         using NamedTupleType = internal::processed_t<U, ProcessorsType>;
-        // The schema takes the default values of rfl::DefaultVal fields from
-        // a default-constructed instance. A tagged union wrapper holds its
-        // alternative through a pointer that U{} leaves null, so we construct
-        // the wrapper that holds the alternative by value instead.
+        // The schema takes the default values of rfl::DefaultVal fields (and
+        // all fields under rfl::DefaultIfMissing) from a default-constructed
+        // instance. A tagged union wrapper holds its alternative through a
+        // pointer that U{} leaves null, so we construct the wrapper that holds
+        // the alternative by value instead.
         using DefaultsType = tagged_union_wrapper_no_ptr_t<U>;
         if constexpr (internal::has_unwrapped_default_val_v<U>) {
           static_assert(requires { DefaultsType{}; },
@@ -682,26 +683,17 @@ struct Parser {
                         "default-constructible, because the default values "
                         "come from a default-constructed instance.");
         }
-        if constexpr (internal::has_default_val_v<U> &&
+        if constexpr ((internal::has_default_val_v<U> ||
+                       internal::default_if_missing_v<ProcessorsType>) &&
                       requires { DefaultsType{}; }) {
-          bool constructed = false;
           try {
             auto defaults = DefaultsType{};
-            constructed = true;
             auto view = ProcessorsType::template process<DefaultsType>(
                 to_view(defaults));
             (*_definitions)[name] =
                 Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
                     _definitions, &view);
-          } catch (std::exception&) {
-            if (constructed || internal::has_unwrapped_default_val_v<U>) {
-              throw;
-            }
-            // T{} threw, and T's only DefaultVal fields are inside
-            // rfl::Short, rfl::Positional, rfl::Description or
-            // rfl::Deprecated, so it is described like a struct without
-            // DefaultVal fields: those fields are required and have no
-            // default value.
+          } catch (...) {
             (*_definitions)[name] =
                 Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
                     _definitions);

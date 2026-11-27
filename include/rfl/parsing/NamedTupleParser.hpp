@@ -15,8 +15,11 @@
 #include "../internal/has_default_val_v.hpp"
 #include "../internal/has_reflection_method_v.hpp"
 #include "../internal/has_reflection_type_v.hpp"
+#include "../internal/has_reflector.hpp"
 #include "../internal/is_attribute.hpp"
 #include "../internal/is_default_val_v.hpp"
+#include "../internal/is_deprecated.hpp"
+#include "../internal/is_description.hpp"
 #include "../internal/is_extra_fields.hpp"
 #include "../internal/is_skip.hpp"
 #include "../internal/no_extra_fields_v.hpp"
@@ -58,14 +61,51 @@ concept IsReflectionTypeWrapper =
     has_reflection_type_v<T> && !has_reflection_method_v<T> &&
     std::is_aggregate_v<T> && num_fields<T> == 1;
 
+/// Trait for whether the generic writer can serialize `T`, i.e. whether a
+/// schema `default` can be produced for it. Transparent wrappers are unwrapped
+/// recursively. Types that can only be constructed from `ReflectionType` (or
+/// only have a read `Reflector`) cannot be written back to `Generic`.
+template <class T>
+struct can_write_generic {
+  using U = std::remove_cvref_t<T>;
+  static constexpr bool value =
+      (!has_reflection_type_v<U> || has_reflection_method_v<U> ||
+       IsReflectionTypeWrapper<U>) &&
+      (!has_read_reflector<U> || has_write_reflector<U>);
+};
+
+template <class T>
+struct can_write_generic<DefaultVal<T>> : can_write_generic<T> {};
+
+template <StringLiteral _name, class T>
+struct can_write_generic<Rename<_name, T>> : can_write_generic<T> {};
+
+template <StringLiteral _desc, class T>
+struct can_write_generic<Description<_desc, T>> : can_write_generic<T> {};
+
+template <StringLiteral _msg, StringLiteral _desc, class T>
+struct can_write_generic<Deprecated<_msg, _desc, T>> : can_write_generic<T> {};
+
+template <StringLiteral _name, class T>
+struct can_write_generic<Short<_name, T>> : can_write_generic<T> {};
+
+template <class T>
+struct can_write_generic<Positional<T>> : can_write_generic<T> {};
+
+template <class T>
+struct can_write_generic<std::optional<T>> : can_write_generic<T> {};
+
+template <class T>
+struct can_write_generic<std::shared_ptr<T>> : can_write_generic<T> {};
+
+template <class T>
+struct can_write_generic<std::unique_ptr<T>> : can_write_generic<T> {};
+
 /// Satisfied when the generic writer can serialize `T`, i.e. when a schema
 /// `default` can be produced for it. Every type is writable, except those that
 /// can be constructed from `ReflectionType`, but not converted back to it.
 template <class T>
-concept CanWriteGeneric =
-    !has_reflection_type_v<std::remove_cvref_t<T>> ||
-    has_reflection_method_v<std::remove_cvref_t<T>> ||
-    IsReflectionTypeWrapper<std::remove_cvref_t<T>>;
+concept CanWriteGeneric = can_write_generic<std::remove_cvref_t<T>>::value;
 
 /// Satisfied when a schema `default` can be emitted for the field type `T`:
 /// it must contain a `DefaultVal` (see `is_default_val_v`) whose value
@@ -303,11 +343,39 @@ struct NamedTupleParser {
                   !internal::is_extra_fields_v<U>) {
       // Add default value here
       auto s = Parser<R, W, U, ProcessorsType>::to_schema(_definitions);
-      if constexpr (!std::is_same_v<View, void> && internal::CanEmitDefault<U>) {
-        set_default_value(
-            rfl::to_generic<ProcessorsType>(
-                internal::get_default_val(*rfl::get<_i>(*_view)).value()),
-            &s);
+      if constexpr (!std::is_same_v<View, void>) {
+        if (_view != nullptr) {
+          if constexpr (internal::is_default_val_v<U>) {
+            if constexpr (internal::CanEmitDefault<U>) {
+              try {
+                set_default_value(
+                    rfl::to_generic<ProcessorsType>(
+                        internal::get_default_val(*rfl::get<_i>(*_view))
+                            .value()),
+                    &s);
+              } catch (...) {
+              }
+            }
+          } else if constexpr (internal::default_if_missing_v<ProcessorsType> &&
+                               internal::CanWriteGeneric<U>) {
+            const auto& field_val = *rfl::get<_i>(*_view);
+            bool skip_default = false;
+            if constexpr (std::is_pointer_v<U>) {
+              skip_default = (field_val == nullptr);
+            } else if constexpr (!is_required<U, false>()) {
+              skip_default = is_empty(field_val);
+            }
+            if (!skip_default) {
+              try {
+                auto default_val = rfl::to_generic<ProcessorsType>(field_val);
+                s = schema::Type{schema::Type::DefaultVal{
+                    .type_ = Ref<schema::Type>::make(std::move(s)),
+                    .default_value_ = std::move(default_val)}};
+              } catch (...) {
+              }
+            }
+          }
+        }
       }
       if constexpr (_no_field_names) {
         _schema->types_.emplace_back(std::move(s));
