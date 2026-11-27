@@ -1047,6 +1047,114 @@ TEST(json, test_nested_tagged_union_reflection_type_and_reflector) {
   }
 }
 
+// B3b: NamedTuple ReflectionType (TaggedUnionWrapperWithFields must NOT
+// double-wrap the discriminator rfl::Field) + non-live multi-TU post-leaf
+// cleanup (no leak of later TU slots when an earlier TU fails post-leaf).
+class NamedTupleReflAlt {
+ public:
+  using Tag = rfl::Literal<"named_refl">;
+  using ReflectionType = rfl::NamedTuple<rfl::Field<"foo", std::string>>;
+
+  explicit NamedTupleReflAlt(std::string _foo) : foo_(std::move(_foo)) {}
+  const std::string& foo() const { return foo_; }
+  ReflectionType reflection() const { return rfl::make_field<"foo">(foo_); }
+  static NamedTupleReflAlt from_reflection(const ReflectionType& _r) {
+    return NamedTupleReflAlt(_r.get<"foo">());
+  }
+
+ private:
+  std::string foo_;
+};
+
+using NamedReflTU = rfl::TaggedUnion<"kind", NamedTupleReflAlt>;
+
+struct NamedReflEnvelope {
+  int seq;
+  rfl::Flatten<NamedReflTU> payload;
+};
+
+struct TrackedResource {
+  static inline int live_count = 0;
+  int id = 0;
+  explicit TrackedResource(int _id = 0) : id(_id) { ++live_count; }
+  TrackedResource(const TrackedResource& _o) : id(_o.id) { ++live_count; }
+  TrackedResource(TrackedResource&& _o) noexcept : id(_o.id) { ++live_count; }
+  ~TrackedResource() { --live_count; }
+  using ReflectionType = int;
+  int reflection() const { return id; }
+  static TrackedResource from_reflection(int _id) {
+    return TrackedResource(_id);
+  }
+};
+
+struct SecondTUTailAlt {
+  using Tag = rfl::Literal<"tail">;
+  TrackedResource res;
+};
+
+using FirstThrowingTU = rfl::TaggedUnion<"first", CustomReflectorAlt>;
+using SecondTrackedTU = rfl::TaggedUnion<"second", SecondTUTailAlt>;
+
+struct MultiTULeakCheck {
+  int seq;
+  rfl::Flatten<FirstThrowingTU> first_tu;
+  rfl::Flatten<SecondTrackedTU> second_tu;
+};
+
+TEST(json, test_nested_tagged_union_named_tuple_refl_and_multi_tu_cleanup) {
+  // NamedTuple ReflectionType -> flat {"seq":1,"kind":"named_refl","foo":"bar"}
+  // (NOT double-wrapped {"kind":{"kind":"named_refl"}}).
+  {
+    const NamedReflEnvelope env{
+        .seq = 1, .payload = NamedReflTU(NamedTupleReflAlt("bar"))};
+    const auto json = rfl::json::write(env);
+    EXPECT_EQ(json, R"({"seq":1,"kind":"named_refl","foo":"bar"})");
+    const auto parsed =
+        rfl::json::read<NamedReflEnvelope, rfl::NoExtraFields>(json);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error().what();
+    const auto* alt =
+        rfl::get_if<NamedTupleReflAlt>(&parsed->payload.get().variant());
+    ASSERT_NE(alt, nullptr);
+    EXPECT_EQ(alt->foo(), "bar");
+
+    const auto schema =
+        rfl::json::to_schema<NamedReflEnvelope, rfl::NoExtraFields>();
+    const auto schema_parsed = rfl::json::read<rfl::Generic>(schema);
+    ASSERT_TRUE(schema_parsed.has_value()) << schema_parsed.error().what();
+    const auto defs = schema_parsed->to_object()
+                          .value()
+                          .get("$defs")
+                          .value()
+                          .to_object()
+                          .value();
+    const auto env_def = defs.get("test_nested_tagged_union__NamedReflEnvelope")
+                             .value()
+                             .to_object()
+                             .value();
+    const auto props = env_def.get("properties").value().to_object().value();
+    const auto kind_prop = props.get("kind").value().to_object().value();
+    EXPECT_EQ(kind_prop.get("enum")
+                  .value()
+                  .to_array()
+                  .value()[0]
+                  .to_string()
+                  .value(),
+              "named_refl");
+    EXPECT_TRUE(props.get("foo").has_value());
+  }
+
+  // Non-live multi-TU struct where first_tu fails post-leaf (Reflector::to throws
+  // on value=-1) after second_tu already constructed TrackedResource:
+  // TrackedResource must be destroyed cleanly with zero leak.
+  {
+    TrackedResource::live_count = 0;
+    const auto res = rfl::json::read<MultiTULeakCheck>(
+        R"({"seq":1,"first":"custom_refl","value":-1,"second":"tail","res":42})");
+    ASSERT_FALSE(res.has_value());
+    EXPECT_EQ(TrackedResource::live_count, 0);
+  }
+}
+
 // B5: make_tag precedence — TaggedUnion subclass whose alternatives all
 // contain the outer discriminator field uses the inner field literals rather
 // than its own Tag alias (matching plain structs and ReflectionType).
