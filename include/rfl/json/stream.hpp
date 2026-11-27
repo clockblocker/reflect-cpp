@@ -86,7 +86,8 @@ class StreamWriter {
           "NDJSON or JSON Text Sequences.");
     }
     if (!stream_ || stream_->fail() || stream_->bad()) {
-      return error("Output stream is not in a good state.");
+      return error("Output stream is not in a good state.",
+                   ErrorKind::io_error);
     }
     if (stream_->eof()) {
       stream_->clear(stream_->rdstate() & ~std::ios_base::eofbit);
@@ -122,9 +123,15 @@ class StreamWriter {
           break;
       }
       if (stream_->fail() || stream_->bad()) {
-        return error("I/O error while writing JSON record to stream.");
+        return error("I/O error while writing JSON record to stream.",
+                     ErrorKind::io_error);
       }
     } catch (const std::exception& _e) {
+      if (stream_->fail() || stream_->bad()) {
+        return error(std::string("An error occurred while writing to JSON: ") +
+                         _e.what(),
+                     ErrorKind::io_error);
+      }
       return error(std::string("An error occurred while writing to JSON: ") +
                    _e.what());
     }
@@ -134,10 +141,11 @@ class StreamWriter {
   /// Flushes the underlying output stream.
   Result<Nothing> flush() {
     if (!stream_) {
-      return error("StreamWriter has no output stream.");
+      return error("StreamWriter has no output stream.", ErrorKind::io_error);
     }
     if (stream_->fail() || stream_->bad()) {
-      return error("Output stream is not in a good state.");
+      return error("Output stream is not in a good state.",
+                   ErrorKind::io_error);
     }
     if (stream_->eof()) {
       stream_->clear(stream_->rdstate() & ~std::ios_base::eofbit);
@@ -145,11 +153,13 @@ class StreamWriter {
     try {
       stream_->flush();
       if (stream_->fail() || stream_->bad()) {
-        return error("I/O error while flushing JSON stream.");
+        return error("I/O error while flushing JSON stream.",
+                     ErrorKind::io_error);
       }
     } catch (const std::exception& _e) {
       return error(std::string("I/O error while flushing JSON stream: ") +
-                   _e.what());
+                       _e.what(),
+                   ErrorKind::io_error);
     }
     return Nothing{};
   }
@@ -165,11 +175,13 @@ class StreamWriter {
     }
     finished_ = true;
     if (!stream_) {
-      finish_error_ = "StreamWriter has no output stream.";
+      finish_error_ =
+          Error("StreamWriter has no output stream.", ErrorKind::io_error);
       return error(*finish_error_);
     }
     if (stream_->fail() || stream_->bad()) {
-      finish_error_ = "I/O error while finishing JSON stream.";
+      finish_error_ = Error("I/O error while finishing JSON stream.",
+                            ErrorKind::io_error);
       return error(*finish_error_);
     }
     if (stream_->eof()) {
@@ -184,12 +196,15 @@ class StreamWriter {
         }
       }
       if (stream_->fail() || stream_->bad()) {
-        finish_error_ = "I/O error while finishing JSON stream.";
+        finish_error_ = Error("I/O error while finishing JSON stream.",
+                              ErrorKind::io_error);
         return error(*finish_error_);
       }
     } catch (const std::exception& _e) {
       finish_error_ =
-          std::string("I/O error while finishing JSON stream: ") + _e.what();
+          Error(std::string("I/O error while finishing JSON stream: ") +
+                    _e.what(),
+                ErrorKind::io_error);
       return error(*finish_error_);
     }
     return Nothing{};
@@ -201,7 +216,7 @@ class StreamWriter {
   yyjson_write_flag flag_;
   bool started_ = false;
   bool finished_ = false;
-  std::optional<std::string> finish_error_;
+  std::optional<Error> finish_error_;
 };
 
 namespace detail {
@@ -253,7 +268,8 @@ class RFL_API StreamReaderEngine {
   size_t data_size() const noexcept;
   size_t avail() const noexcept;
 
-  std::optional<Result<YYJsonDocPtr>> fail(const std::string& _msg);
+  std::optional<Result<YYJsonDocPtr>> fail(const std::string& _msg,
+                                           ErrorKind _kind = ErrorKind::other);
   std::optional<Result<YYJsonDocPtr>> eof_or_io_error(const char* _eof_msg);
 
   void compact_buffer();

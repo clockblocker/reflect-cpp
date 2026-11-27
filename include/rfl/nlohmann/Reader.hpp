@@ -66,8 +66,12 @@ struct Reader {
 
   rfl::Result<InputVarType> get_field_from_array(
       const size_t _idx, const InputArrayType& _arr) const noexcept {
-    if (!_arr.val_ || !_arr.val_->is_array() || _idx >= _arr.val_->size()) {
-      return error("Index " + std::to_string(_idx) + " out of bounds.");
+    if (!_arr.val_ || !_arr.val_->is_array()) {
+      return error("Could not cast to array.", ErrorKind::invalid_type);
+    }
+    if (_idx >= _arr.val_->size()) {
+      return error("Index " + std::to_string(_idx) + " out of bounds.",
+                   ErrorKind::invalid_length);
     }
     return InputVarType{&(*_arr.val_)[_idx]};
   }
@@ -75,11 +79,12 @@ struct Reader {
   rfl::Result<InputVarType> get_field_from_object(
       const std::string& _name, const InputObjectType& _obj) const noexcept {
     if (!_obj.val_ || !_obj.val_->is_object()) {
-      return error("Could not cast to object.");
+      return error("Could not cast to object.", ErrorKind::invalid_type);
     }
     const auto it = _obj.val_->find(typename BasicJson::string_t(_name));
     if (it == _obj.val_->end()) {
-      return error("Object contains no field named '" + _name + "'.");
+      return error("Object contains no field named '" + _name + "'.",
+                   ErrorKind::missing_field);
     }
     return InputVarType{&it.value()};
   }
@@ -92,7 +97,7 @@ struct Reader {
   std::optional<Error> read_array(const ArrayReader& _array_reader,
                                   const InputArrayType& _arr) const noexcept {
     if (!_arr.val_ || !_arr.val_->is_array()) {
-      return Error("Could not cast to array.");
+      return Error("Could not cast to array.", ErrorKind::invalid_type);
     }
     if constexpr (requires { _array_reader.reserve(_arr.val_->size()); }) {
       if (auto err = _array_reader.reserve(_arr.val_->size())) return err;
@@ -108,7 +113,7 @@ struct Reader {
   std::optional<Error> read_object(const ObjectReader& _object_reader,
                                    const InputObjectType& _obj) const noexcept {
     if (!_obj.val_ || !_obj.val_->is_object()) {
-      return Error("Could not cast to object.");
+      return Error("Could not cast to object.", ErrorKind::invalid_type);
     }
     for (auto it = _obj.val_->begin(); it != _obj.val_->end(); ++it) {
       auto var = InputVarType{&it.value()};
@@ -125,12 +130,14 @@ struct Reader {
     using IntT = typename BasicJson::number_integer_t;
     using UIntT = typename BasicJson::number_unsigned_t;
     using FloatT = typename BasicJson::number_float_t;
-    if (!_var.val_) return error("Could not cast null value.");
+    if (!_var.val_) {
+      return error("Could not cast null value.", ErrorKind::invalid_type);
+    }
 
     if constexpr (std::is_same_v<U, std::string>) {
       const auto* p = _var.val_->template get_ptr<const StrT*>();
       return p ? rfl::Result<T>(std::string(*p))
-               : error("Could not cast to string.");
+               : error("Could not cast to string.", ErrorKind::invalid_type);
     } else if constexpr (std::is_same_v<U, Bytestring>) {
       if (_var.val_->is_binary()) {
         const auto& bin = _var.val_->get_binary();
@@ -143,7 +150,8 @@ struct Reader {
       }
       const auto* p = _var.val_->template get_ptr<const StrT*>();
       return p ? ::rfl::internal::decode_base64(std::string_view(*p))
-               : error("Could not cast to a Base64 string.");
+               : error("Could not cast to a Base64 string.",
+                       ErrorKind::invalid_type);
     } else if constexpr (std::is_same_v<U, Vectorstring>) {
       if (_var.val_->is_binary()) {
         const auto& bin = _var.val_->get_binary();
@@ -156,7 +164,8 @@ struct Reader {
       }
       const auto* p = _var.val_->template get_ptr<const StrT*>();
       if (!p) {
-        return error("Could not cast to a Base64 string.");
+        return error("Could not cast to a Base64 string.",
+                     ErrorKind::invalid_type);
       }
       return ::rfl::internal::decode_base64(std::string_view(*p))
           .transform([](const Bytestring& _bytes) {
@@ -171,7 +180,7 @@ struct Reader {
     } else if constexpr (std::is_same_v<U, bool>) {
       const auto* p = _var.val_->template get_ptr<const BoolT*>();
       return p ? rfl::Result<T>(static_cast<bool>(*p))
-               : error("Could not cast to boolean.");
+               : error("Could not cast to boolean.", ErrorKind::invalid_type);
     } else if constexpr (std::is_floating_point_v<U>) {
       if (const auto* p = _var.val_->template get_ptr<const FloatT*>())
         return static_cast<T>(*p);
@@ -179,35 +188,42 @@ struct Reader {
         return static_cast<T>(*p);
       if (const auto* p = _var.val_->template get_ptr<const IntT*>())
         return static_cast<T>(*p);
-      return error("Could not cast to floating point number.");
+      return error("Could not cast to floating point number.",
+                   ErrorKind::invalid_type);
     } else if constexpr (std::is_unsigned_v<U>) {
       if (const auto* p = _var.val_->template get_ptr<const UIntT*>()) {
         if (*p > static_cast<uint64_t>(std::numeric_limits<U>::max()))
-          return error("Integer is out of range for the target type.");
+          return error("Integer is out of range for the target type.",
+                       ErrorKind::invalid_value);
         return static_cast<T>(*p);
       }
       if (const auto* p = _var.val_->template get_ptr<const IntT*>()) {
         if (*p < 0)
-          return error("Cannot cast negative integer to unsigned type.");
+          return error("Cannot cast negative integer to unsigned type.",
+                       ErrorKind::invalid_value);
         if (static_cast<uint64_t>(*p) >
             static_cast<uint64_t>(std::numeric_limits<U>::max()))
-          return error("Integer is out of range for the target type.");
+          return error("Integer is out of range for the target type.",
+                       ErrorKind::invalid_value);
         return static_cast<T>(*p);
       }
-      return error("Could not cast to unsigned integer.");
+      return error("Could not cast to unsigned integer.",
+                   ErrorKind::invalid_type);
     } else if constexpr (std::is_integral_v<U>) {
       if (const auto* p = _var.val_->template get_ptr<const IntT*>()) {
         if (*p < static_cast<int64_t>(std::numeric_limits<U>::min()) ||
             *p > static_cast<int64_t>(std::numeric_limits<U>::max()))
-          return error("Integer is out of range for the target type.");
+          return error("Integer is out of range for the target type.",
+                       ErrorKind::invalid_value);
         return static_cast<T>(*p);
       }
       if (const auto* p = _var.val_->template get_ptr<const UIntT*>()) {
         if (*p > static_cast<uint64_t>(std::numeric_limits<U>::max()))
-          return error("Integer is out of range for the target type.");
+          return error("Integer is out of range for the target type.",
+                       ErrorKind::invalid_value);
         return static_cast<T>(*p);
       }
-      return error("Could not cast to integer.");
+      return error("Could not cast to integer.", ErrorKind::invalid_type);
     } else {
       static_assert(rfl::always_false_v<T>, "Unsupported type.");
     }
@@ -216,14 +232,14 @@ struct Reader {
   rfl::Result<InputArrayType> to_array(
       const InputVarType& _var) const noexcept {
     if (!_var.val_ || !_var.val_->is_array())
-      return error("Could not cast to array.");
+      return error("Could not cast to array.", ErrorKind::invalid_type);
     return InputArrayType{_var.val_};
   }
 
   rfl::Result<InputObjectType> to_object(
       const InputVarType& _var) const noexcept {
     if (!_var.val_ || !_var.val_->is_object())
-      return error("Could not cast to object.");
+      return error("Could not cast to object.", ErrorKind::invalid_type);
     return InputObjectType{_var.val_};
   }
 

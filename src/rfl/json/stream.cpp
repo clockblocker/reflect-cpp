@@ -114,18 +114,18 @@ size_t StreamReaderEngine::data_size() const noexcept {
 size_t StreamReaderEngine::avail() const noexcept { return data_size() - pos_; }
 
 std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::fail(
-    const std::string& _msg) {
+    const std::string& _msg, const ErrorKind _kind) {
   done_ = true;
-  return error(_msg);
+  return error(_msg, _kind);
 }
 
 std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::eof_or_io_error(
     const char* _eof_msg) {
   done_ = true;
   if (io_error_) {
-    return error("I/O error while reading JSON stream.");
+    return error("I/O error while reading JSON stream.", ErrorKind::io_error);
   }
-  return error(_eof_msg);
+  return error(_eof_msg, ErrorKind::syntax_error);
 }
 
 void StreamReaderEngine::compact_buffer() {
@@ -781,10 +781,11 @@ std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::parse_delimited_value(
   const ScanResult scan = scan_value(true, _is_seq, !_is_seq, &first_nl_err);
 
   if (scan.outcome == ScanOutcome::too_large) {
-    return fail("JSON record exceeds maximum allowed size.");
+    return fail("JSON record exceeds maximum allowed size.",
+                ErrorKind::syntax_error);
   }
   if (scan.outcome == ScanOutcome::io_error) {
-    return fail("I/O error while reading JSON stream.");
+    return fail("I/O error while reading JSON stream.", ErrorKind::io_error);
   }
 
   if (scan.outcome == ScanOutcome::syntax_break && !first_nl_err.empty()) {
@@ -795,9 +796,9 @@ std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::parse_delimited_value(
       advance_past_newline();
     }
     if (io_error_) {
-      return fail("I/O error while reading JSON stream.");
+      return fail("I/O error while reading JSON stream.", ErrorKind::io_error);
     }
-    return error(err_msg);
+    return error(err_msg, ErrorKind::syntax_error);
   }
 
   if (scan.slice_len == 0) {
@@ -813,7 +814,8 @@ std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::parse_delimited_value(
   if (doc) {
     const size_t read_size = yyjson_doc_get_read_size(doc.get());
     if (max_record_bytes_ > 0 && read_size > max_record_bytes_) {
-      return fail("JSON record exceeds maximum allowed size.");
+      return fail("JSON record exceeds maximum allowed size.",
+                  ErrorKind::syntax_error);
     }
     pos_ += read_size;
     compact_buffer();
@@ -829,9 +831,9 @@ std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::parse_delimited_value(
     advance_past_newline();
   }
   if (io_error_) {
-    return fail("I/O error while reading JSON stream.");
+    return fail("I/O error while reading JSON stream.", ErrorKind::io_error);
   }
-  return error(err_msg);
+  return error(err_msg, ErrorKind::syntax_error);
 }
 
 std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::parse_array_value() {
@@ -842,10 +844,11 @@ std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::parse_array_value() {
   const ScanResult scan = scan_value(false, false, false, nullptr);
 
   if (scan.outcome == ScanOutcome::too_large) {
-    return fail("JSON record exceeds maximum allowed size.");
+    return fail("JSON record exceeds maximum allowed size.",
+                ErrorKind::syntax_error);
   }
   if (scan.outcome == ScanOutcome::io_error) {
-    return fail("I/O error while reading JSON stream.");
+    return fail("I/O error while reading JSON stream.", ErrorKind::io_error);
   }
   if (scan.slice_len == 0) {
     return eof_or_io_error("Could not parse document: unexpected end of data");
@@ -859,7 +862,8 @@ std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::parse_array_value() {
   if (doc) {
     const size_t read_size = yyjson_doc_get_read_size(doc.get());
     if (max_record_bytes_ > 0 && read_size > max_record_bytes_) {
-      return fail("JSON record exceeds maximum allowed size.");
+      return fail("JSON record exceeds maximum allowed size.",
+                  ErrorKind::syntax_error);
     }
     pos_ += read_size;
     compact_buffer();
@@ -868,7 +872,8 @@ std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::parse_array_value() {
 
   done_ = true;
   return error("Could not parse document: " +
-               std::string(err.msg ? err.msg : "unknown error"));
+                   std::string(err.msg ? err.msg : "unknown error"),
+               ErrorKind::syntax_error);
 }
 
 std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::next_delimited(
@@ -879,10 +884,11 @@ std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::next_delimited(
     return std::nullopt;
   }
   if (skipped == SkipResult::io_error) {
-    return fail("I/O error while reading JSON stream.");
+    return fail("I/O error while reading JSON stream.", ErrorKind::io_error);
   }
   if (skipped == SkipResult::unclosed_comment) {
-    return fail("Unclosed multi-line comment in JSON stream.");
+    return fail("Unclosed multi-line comment in JSON stream.",
+                ErrorKind::syntax_error);
   }
   return parse_delimited_value(_skip_rs);
 }
@@ -894,13 +900,15 @@ std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::finish_array() {
   const auto skipped = skip_ws(false);
   if (skipped == SkipResult::found) {
     return error(
-        "Unexpected trailing content after closing ']' of JSON array.");
+        "Unexpected trailing content after closing ']' of JSON array.",
+        ErrorKind::syntax_error);
   }
   if (skipped == SkipResult::io_error) {
-    return error("I/O error while reading JSON stream.");
+    return error("I/O error while reading JSON stream.", ErrorKind::io_error);
   }
   if (skipped == SkipResult::unclosed_comment) {
-    return error("Unclosed multi-line comment in JSON stream.");
+    return error("Unclosed multi-line comment in JSON stream.",
+                 ErrorKind::syntax_error);
   }
   return std::nullopt;
 }
@@ -910,7 +918,8 @@ std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::next_array_element() {
       [&](const SkipResult _sr,
           const char* _eof_msg) -> std::optional<Result<YYJsonDocPtr>> {
     if (_sr == SkipResult::unclosed_comment) {
-      return fail("Unclosed multi-line comment in JSON stream.");
+      return fail("Unclosed multi-line comment in JSON stream.",
+                  ErrorKind::syntax_error);
     }
     return eof_or_io_error(_eof_msg);
   };
@@ -922,7 +931,8 @@ std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::next_array_element() {
           skipped, "Expected '[' at start of JSON array, got end of input.");
     }
     if (data_ptr()[pos_] != '[') {
-      return fail("Expected '[' at start of JSON array.");
+      return fail("Expected '[' at start of JSON array.",
+                  ErrorKind::invalid_type);
     }
     ++pos_;
     array_state_ = ArrayState::expect_first;
@@ -956,7 +966,8 @@ std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::next_array_element() {
       return finish_array();
     }
     if (data_ptr()[pos_] != ',') {
-      return fail("Expected ',' or ']' in JSON array.");
+      return fail("Expected ',' or ']' in JSON array.",
+                  ErrorKind::syntax_error);
     }
     ++pos_;  // consume ','
     const auto after_comma = skip_ws(false);
@@ -968,7 +979,8 @@ std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::next_array_element() {
       if (flag_ & YYJSON_READ_ALLOW_TRAILING_COMMAS) {
         return finish_array();
       }
-      return fail("Trailing comma is not allowed in JSON array.");
+      return fail("Trailing comma is not allowed in JSON array.",
+                  ErrorKind::syntax_error);
     }
     return parse_array_value();
   }

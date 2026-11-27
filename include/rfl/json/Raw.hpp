@@ -65,7 +65,8 @@ class Raw {
                                        _str.size(), _flag, nullptr, &err);
     if (!doc) {
       return error("Invalid raw JSON: " +
-                   std::string(err.msg ? err.msg : "parse error"));
+                       std::string(err.msg ? err.msg : "parse error"),
+                   ErrorKind::syntax_error);
     }
     yyjson_doc_free(doc);
     return Raw(_str);
