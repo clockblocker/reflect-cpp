@@ -271,14 +271,14 @@ struct Copy {
   rfl::Positional<rfl::Description<"File to copy", std::string>> source;
   rfl::Short<"o", rfl::Description<"Where to copy it", std::string>> output;
   rfl::Short<"v", std::optional<bool>> verbose;
-  rfl::Short<"j", rfl::DefaultVal<int>> jobs = 1;
+  rfl::DefaultVal<rfl::Short<"j", int>> jobs = 1;
 };
 
 int main(int argc, char* argv[]) {
   const auto result = rfl::cli::read_app<Copy, CopyApp>(argc, argv);
   if (!result) {
     std::cerr << result.error().what() << "\n\n"
-              << rfl::cli::usage<Copy, CopyApp>(argv[0]);
+              << rfl::cli::usage<Copy, CopyApp>(argv[0]).value_or("");
     return 2;
   }
   if (const auto* info = std::get_if<rfl::cli::HelpOrVersion>(&*result)) {

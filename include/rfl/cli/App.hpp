@@ -104,7 +104,7 @@ struct app_settings<App<_name, _version, _about, _help>> {
   static constexpr BuiltinHelp help = AppType::help;
 };
 
-/// The first of Ps that is an rfl::cli::App, or void.
+/// The first of Ps that is or contains an rfl::cli::App, or void.
 template <class... Ps>
 struct find_app {
   using type = void;
@@ -226,10 +226,14 @@ std::string app_header(const std::string& _program_name) {
   auto header = std::string();
   if constexpr (Settings::count > 0) {
     if (!Settings::name.empty() || !Settings::version.empty()) {
-      header += Settings::name.empty() ? _program_name
-                                       : std::string(Settings::name);
+      const auto title = Settings::name.empty() ? _program_name
+                                                : std::string(Settings::name);
+      header += title;
       if (!Settings::version.empty()) {
-        header += " " + std::string(Settings::version);
+        if (!title.empty()) {
+          header += ' ';
+        }
+        header += std::string(Settings::version);
       }
       header += '\n';
     }
@@ -244,13 +248,16 @@ std::string app_header(const std::string& _program_name) {
 }
 
 /// What `--version` prints: "name version", or "program version" if the
-/// name is empty.
+/// name is empty (or just "version" if both are empty).
 template <class ProcessorsType>
 std::string app_version_text(const std::string& _program_name) {
   using Settings = app_settings_t<ProcessorsType>;
-  return (Settings::name.empty() ? _program_name
-                                 : std::string(Settings::name))
-         + " " + std::string(Settings::version) + '\n';
+  const auto title = Settings::name.empty() ? _program_name
+                                            : std::string(Settings::name);
+  if (title.empty()) {
+    return std::string(Settings::version) + '\n';
+  }
+  return title + " " + std::string(Settings::version) + '\n';
 }
 
 }  // namespace internal

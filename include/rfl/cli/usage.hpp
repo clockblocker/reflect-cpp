@@ -7,6 +7,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -351,7 +352,7 @@ inline std::string usage_help_text(const UsageArg& _arg) {
   return text;
 }
 
-/// The rows of the built-in options of rfl::cli::App that no field takes.
+/// The rows of the built-in options enabled by rfl::cli::App.
 inline std::vector<UsageArg> builtin_usage_args(
     const BuiltinOptions& _builtin) {
   auto args = std::vector<UsageArg>();
@@ -438,8 +439,8 @@ inline std::string format_usage(const std::string& _program_name,
 ///
 /// With an rfl::cli::App in Ps, the detailed form starts with its header
 /// (name, version and description), and both forms list the built-in
-/// `-h, --help` and `--version` that rfl::cli::read_app handles, unless a
-/// field takes their names.
+/// `-h, --help` and `--version` options that rfl::cli::App enables (unless
+/// opted out via rfl::cli::BuiltinHelp or an empty version).
 /// @tparam T The struct type that the arguments are parsed into
 /// @tparam Ps The processors passed to `rfl::cli::read`
 /// @param _program_name The name shown after "Usage:", usually argv[0]

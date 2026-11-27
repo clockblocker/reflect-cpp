@@ -304,12 +304,44 @@ TEST(cli, test_help_version_spellings) {
 }
 
 TEST(cli, test_help_version_wide) {
-  const wchar_t* args[] = {L"app", L"--version"};
-  const auto result =
-      rfl::cli::read_app<Copy, CopyApp>(2, const_cast<wchar_t**>(args));
+  const wchar_t* const args[] = {L"app", L"--version"};
+  const auto result = rfl::cli::read_app<Copy, CopyApp>(2, args);
   EXPECT_EQ(text_of(result), "copy 1.2.0\n");
 }
 
-using Strings = std::vector<std::string>;
+TEST(cli, test_help_version_edge_cases) {
+  // Nested Processors<CopyApp>.
+  EXPECT_EQ(
+      (text_of(read_app<Copy, rfl::Processors<CopyApp>>({"--version"}))),
+      "copy 1.2.0\n");
+
+  // Description-only header (empty name and version).
+  using AboutOnlyApp = rfl::cli::App<"", "", "Standalone description.">;
+  const auto about_usage =
+      rfl::cli::usage<Copy, AboutOnlyApp>("./copy", true).value();
+  EXPECT_TRUE(about_usage.starts_with("Standalone description.\n\nUsage: ./copy"))
+      << about_usage;
+
+  // Empty App::name and empty program_name must not emit a leading space.
+  using VerOnlyApp = rfl::cli::App<"", "2.0">;
+  const char* const empty_prog[] = {"", "--version"};
+  EXPECT_EQ(text_of(rfl::cli::read_app<Copy, VerOnlyApp>(2, empty_prog)),
+            "2.0\n");
+  const auto ver_header = rfl::cli::usage<Copy, VerOnlyApp>("", true).value();
+  EXPECT_TRUE(ver_header.starts_with("2.0\n\nUsage: ")) << ver_header;
+
+  // Both --help and --version: help wins in either order.
+  EXPECT_EQ(kind_of(read_app<Copy, CopyApp>({"--help", "--version"})),
+            Kind::help);
+  EXPECT_EQ(kind_of(read_app<Copy, CopyApp>({"--version", "--help"})),
+            Kind::help);
+
+  // Explicit false flags do not trigger help/version.
+  EXPECT_EQ(kind_of(read_app<Copy, CopyApp>({"--help=false", "--version"})),
+            Kind::version);
+  EXPECT_EQ(text_of(read_app<Copy, CopyApp>(
+                {"in.txt", "-o", "out.txt", "-h=false", "--version=false"})),
+            "(struct)");
+}
 
 }  // namespace test_help_version
