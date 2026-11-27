@@ -216,6 +216,65 @@ Also note that this is exactly how tagged unions work in Pydantic. When you
 use the `rfl::NoFieldNames` processor, the tag MUST always be the first entry 
 of the array.
 
+### Nested and flattened `rfl::TaggedUnion`
+
+You can nest `rfl::TaggedUnion`s inside a single flat object using `rfl::Flatten` (or by deriving from `rfl::TaggedUnion` with a `Tag`). This is useful for protocols that perform multi-level dispatch on different discriminator fields within the same object (for example, dispatching first on `"type"` and then on `"event"`):
+
+```cpp
+struct WaveformsLoaded {
+  using Tag = rfl::Literal<"waveforms_loaded">;
+  std::string source;
+};
+
+struct GotoDeclaration {
+  using Tag = rfl::Literal<"goto_declaration">;
+  std::string variable;
+};
+
+using S2CEvent = rfl::TaggedUnion<"event", WaveformsLoaded, GotoDeclaration>;
+
+struct Response {
+  using Tag = rfl::Literal<"response">;
+  std::string command;
+};
+
+struct Event {
+  using Tag = rfl::Literal<"event">;
+  rfl::Flatten<S2CEvent> payload;
+};
+
+using S2CMessage = rfl::TaggedUnion<"type", Response, Event>;
+
+const S2CMessage msg =
+    Event{.payload = S2CEvent(WaveformsLoaded{.source = "foo.vcd"})};
+
+const auto json_string = rfl::json::write(msg);
+// {"type":"event","event":"waveforms_loaded","source":"foo.vcd"}
+
+const auto parsed = rfl::json::read<S2CMessage, rfl::NoExtraFields>(json_string);
+```
+
+You can also flatten a `rfl::TaggedUnion` alongside sibling fields in a plain struct, nest to arbitrary depth (2-level, 3-level, etc.), or derive directly from `rfl::TaggedUnion`:
+
+```cpp
+struct DirectEvent
+    : rfl::TaggedUnion<"event", WaveformsLoaded, GotoDeclaration> {
+  using Tag = rfl::Literal<"event">;
+  using TaggedUnion::TaggedUnion;
+};
+
+using DirectS2CMessage = rfl::TaggedUnion<"type", Response, DirectEvent>;
+```
+
+Key guarantees:
+- **Single-pass reading and writing**: all levels serialize into and deserialize from a single flat object.
+- **`rfl::NoExtraFields` and `rfl::ExtraFields`**: outer and inner discriminators and fields are validated together, so outer fields do not trigger false extra-field errors in the inner union while truly unknown fields are rejected (or captured by `rfl::ExtraFields`).
+- **JSON Schema (`rfl::json::to_schema`)**: expands flattened tagged unions into `anyOf` branches containing the merged flat object schemas.
+- **Compile-time collision checking**: duplicate discriminators (e.g. an outer and inner `rfl::TaggedUnion` both using `"type"`) or duplicate field names across flattened levels fail at compile time with a `static_assert`.
+- **Constraints**:
+  - Use value semantics (`rfl::Flatten<MyTaggedUnion>`, not raw pointers `rfl::Flatten<MyTaggedUnion*>`).
+  - Flattened `rfl::TaggedUnion` is supported for schemaless formats (JSON, YAML, TOML, Generic, etc.), and is rejected at compile time for schemaful formats (Avro, Cap'n Proto, Parquet, SQLite) as well as `rfl::to_named_tuple`, `rfl::from_named_tuple`, and `rfl::cli::read`.
+
 ## `std::variant` or `rfl::Variant` (externally tagged)
 
 Another approach is to add external tags. 

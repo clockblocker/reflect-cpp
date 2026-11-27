@@ -20,6 +20,7 @@
 #include "../Tuple.hpp"
 #include "../internal/StringLiteral.hpp"
 #include "../internal/field_aliases.hpp"
+#include "../internal/has_flattened_tagged_union.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/has_reflector.hpp"
 #include "../internal/is_alias.hpp"
@@ -316,6 +317,10 @@ void add_option_for_field(Options* _options) {
 /// Adds the options of the top-level fields of T.
 template <class T, class ProcessorsType>
 void collect_options(Options* _options) {
+  static_assert(
+      !rfl::internal::has_flattened_tagged_union_v<T>,
+      "rfl::cli::read is not supported for structs containing "
+      "rfl::Flatten<rfl::TaggedUnion<...>>.");
   using NT = option_fields_t<T, ProcessorsType>;
   static_assert(
       rfl::internal::no_alias_collisions<typename NT::Fields>(),
