@@ -24,6 +24,7 @@
 #include "../internal/is_basic_type.hpp"
 #include "../internal/is_deprecated.hpp"
 #include "../internal/is_description.hpp"
+#include "../internal/is_extra_fields.hpp"
 #include "../internal/is_literal.hpp"
 #include "../internal/is_safe_default_constructible.hpp"
 #include "../internal/is_tagged_union.hpp"
@@ -541,6 +542,7 @@ struct Parser {
                   is_bytestring_v<T> || is_vectorstring_v<T> ||
                   is_string_map_v<T> || is_vector_like_v<T> ||
                   std::is_same_v<std::remove_cvref_t<T>, Generic> ||
+                  internal::is_extra_fields_v<T> ||
                   is_shared_ptr_v<T> || is_unique_ptr_v<T> || is_box_v<T> ||
                   is_ref_v<T> || is_variant_v<T> || is_rfl_variant_v<T> ||
                   is_tagged_union_v<T> || is_result_v<T> || is_expected_v<T> ||
