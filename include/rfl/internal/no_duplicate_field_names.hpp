@@ -1,39 +1,44 @@
 #ifndef RFL_INTERNAL_NO_DUPLICATE_FIELD_NAMES_HPP_
 #define RFL_INTERNAL_NO_DUPLICATE_FIELD_NAMES_HPP_
 
+#include <array>
+#include <cstddef>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+
 #include "../Tuple.hpp"
+#include "is_skip.hpp"
 
 namespace rfl {
 namespace internal {
 
 namespace no_duplicate_field_names_helpers {
 
-template <class Fields, int _i, int _j>
-constexpr inline void compare_two_fields() {
-  if constexpr (_j < _i) {
-    using FieldType1 = std::remove_cvref_t<tuple_element_t<_i, Fields>>;
-    using FieldType2 = std::remove_cvref_t<tuple_element_t<_j, Fields>>;
+struct FieldNameInfo {
+  std::string_view name;
+  bool is_serialized;
+  bool is_deserialized;
+};
 
-    constexpr auto field_name_i = FieldType1::name_;
-    constexpr auto field_name_j = FieldType2::name_;
-
-    constexpr bool no_duplicate = (field_name_i != field_name_j);
-
-    static_assert(no_duplicate,
-                  "Duplicate field names are not allowed in either named "
-                  "tuples or Literals.");
+template <class FieldType>
+constexpr bool field_is_serialized() {
+  if constexpr (requires { typename FieldType::Type; }) {
+    return !skip_serialization_v<typename FieldType::Type>;
+  } else {
+    return true;
   }
 }
 
-template <class Fields, int _i, int... _js>
-constexpr inline void iterate_over_j(std::integer_sequence<int, _js...>) {
-  (compare_two_fields<Fields, _i, _js>(), ...);
+template <class FieldType>
+constexpr bool field_is_deserialized() {
+  if constexpr (requires { typename FieldType::Type; }) {
+    return !skip_deserialization_v<typename FieldType::Type>;
+  } else {
+    return true;
+  }
 }
 
-template <class Fields, int... _is>
-constexpr inline void iterate_over_i(std::integer_sequence<int, _is...>) {
-  (iterate_over_j<Fields, _is>(std::make_integer_sequence<int, _is>()), ...);
-}
 }  // namespace no_duplicate_field_names_helpers
 
 template <class Fields>
@@ -43,8 +48,29 @@ constexpr inline bool no_duplicate_field_names() {
   if constexpr (num_fields <= 1) {
     return true;
   } else {
-    no_duplicate_field_names_helpers::iterate_over_i<Fields>(
-        std::make_integer_sequence<int, num_fields>());
+    constexpr auto infos = []<int... _is>(std::integer_sequence<int, _is...>) {
+      return std::array<no_duplicate_field_names_helpers::FieldNameInfo,
+                        num_fields>{
+          no_duplicate_field_names_helpers::FieldNameInfo{
+              std::remove_cvref_t<tuple_element_t<_is, Fields>>::name_
+                  .string_view(),
+              no_duplicate_field_names_helpers::field_is_serialized<
+                  std::remove_cvref_t<tuple_element_t<_is, Fields>>>(),
+              no_duplicate_field_names_helpers::field_is_deserialized<
+                  std::remove_cvref_t<tuple_element_t<_is, Fields>>>(),
+          }...};
+    }(std::make_integer_sequence<int, num_fields>());
+
+    for (size_t i = 1; i < num_fields; ++i) {
+      for (size_t j = 0; j < i; ++j) {
+        if (infos[i].name == infos[j].name) {
+          if ((infos[i].is_serialized && infos[j].is_serialized) ||
+              (infos[i].is_deserialized && infos[j].is_deserialized)) {
+            return false;
+          }
+        }
+      }
+    }
     return true;
   }
 }

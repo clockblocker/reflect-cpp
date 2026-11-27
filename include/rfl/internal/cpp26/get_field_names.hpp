@@ -26,8 +26,8 @@ consteval auto get_field_names();
 template <class T, class FieldName>
 consteval auto get_field_names_impl() {
   using Type = std::remove_cvref_t<std::remove_pointer_t<T>>;
-  if constexpr (is_rename_v<Type>) {
-    using Name = typename Type::Name;
+  if constexpr (has_rename_v<Type>) {
+    using Name = typename rename_traits<Type>::Name;
     return Name();
   } else if constexpr (is_flatten_field_v<Type>) {
     return get_field_names<std::remove_cvref_t<typename Type::Type>>();

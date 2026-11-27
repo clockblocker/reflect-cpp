@@ -9,8 +9,10 @@
 #include <utility>
 
 #include "../Tuple.hpp"
+#include "../internal/StringLiteral.hpp"
 #include "../internal/always_inline.hpp"
 #include "../internal/is_array.hpp"
+#include "../internal/is_skip.hpp"
 #include "../internal/no_extra_fields_v.hpp"
 #include "FieldErrors.hpp"
 #include "Parser_base.hpp"
@@ -102,6 +104,17 @@ class ViewReader {
     return std::string(_current_name);
   }
 
+  template <internal::StringLiteral _name>
+  static constexpr bool has_deserialized_field_with_name() {
+    using Fields = typename ViewType::Fields;
+    return []<int... _is>(std::integer_sequence<int, _is...>) {
+      return (false || ... ||
+              (tuple_element_t<_is, Fields>::name_ == _name &&
+               !internal::skip_deserialization_v<
+                   typename tuple_element_t<_is, Fields>::Type>));
+    }(std::make_integer_sequence<int, size_>());
+  }
+
   template <int i>
   static RFL_ALWAYS_INLINE void assign_if_field_matches(
       const R& _r, const auto _current_name_or_index, const auto& _var,
@@ -111,8 +124,13 @@ class ViewReader {
     using OriginalType = typename FieldType::Type;
     using T =
         std::remove_cvref_t<std::remove_pointer_t<typename FieldType::Type>>;
-    if (!(*_already_assigned) && !std::get<i>(*_found) &&
-        is_matching<i, FieldType>(_current_name_or_index)) {
+    if constexpr (!std::is_integral_v<std::remove_cvref_t<
+                      decltype(_current_name_or_index)>> &&
+                  internal::skip_deserialization_v<T> &&
+                  has_deserialized_field_with_name<FieldType::name_>()) {
+      return;
+    } else if (!(*_already_assigned) && !std::get<i>(*_found) &&
+               is_matching<i, FieldType>(_current_name_or_index)) {
       std::get<i>(*_found) = true;
       *_already_assigned = true;
       auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);

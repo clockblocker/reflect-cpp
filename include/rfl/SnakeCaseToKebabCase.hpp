@@ -20,7 +20,7 @@ struct SnakeCaseToKebabCase {
       // "xml_content" is a reserved name used by the XML Reader/Writer;
       // all case-transform processors must leave it unchanged.
       if constexpr (FieldType::name() != "xml_content" &&
-                    !internal::is_rename_v<typename FieldType::Type>) {
+                    !internal::has_rename_v<typename FieldType::Type>) {
         return handle_one_field(_f);
       } else {
         return _f;

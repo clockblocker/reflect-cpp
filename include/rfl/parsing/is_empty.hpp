@@ -27,8 +27,10 @@ static bool is_empty(const T& _var) {
   using Type = std::remove_cvref_t<T>;
   if constexpr (std::is_pointer_v<Type>) {
     return !_var || is_empty(*_var);
+  } else if constexpr (internal::skip_serialization_v<Type>) {
+    return true;
   } else if constexpr (internal::is_skip_v<Type>) {
-    return Type::skip_serialization_;
+    return false;
   } else if constexpr (internal::has_reflection_type_v<Type>) {
     if constexpr (internal::has_reflection_method_v<Type>) {
       return is_empty(_var.reflection());
