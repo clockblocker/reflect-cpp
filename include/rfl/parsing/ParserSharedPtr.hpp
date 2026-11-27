@@ -119,9 +119,16 @@ struct ParserSharedPtr {
           }
         }
       }
-      return Parser<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(_r,
-                                                                        _var)
-          .transform(to_shared);
+      try {
+        auto res = Parser<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(
+            _r, _var);
+        if (!res) {
+          return error(std::move(res).error());
+        }
+        return std::make_shared<T>(std::move(*res));
+      } catch (std::exception& e) {
+        return error(e.what());
+      }
     }
   }
 

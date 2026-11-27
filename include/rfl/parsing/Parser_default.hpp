@@ -3,6 +3,7 @@
 
 #include <exception>
 #include <map>
+#include <optional>
 #include <string>
 #include <type_traits>
 
@@ -460,7 +461,12 @@ struct Parser {
         const auto wrap_in_t = [](auto&& _named_tuple) -> Result<T> {
           try {
             using NT = decltype(_named_tuple);
-            return Reflector<T>::to(std::forward<NT>(_named_tuple));
+            auto res = Reflector<T>::to(std::forward<NT>(_named_tuple));
+            if constexpr (is_result_v<decltype(res)>) {
+              return res;
+            } else {
+              return make_result_safe<Result<T>>(std::move(res));
+            }
           } catch (std::exception& e) {
             return error(e.what());
           }
@@ -492,11 +498,17 @@ struct Parser {
           try {
             using NT = decltype(_named_tuple);
             if constexpr (internal::HasFromReflectionMethod<T>) {
-              return T::from_reflection(std::forward<NT>(_named_tuple));
+              auto res = T::from_reflection(std::forward<NT>(_named_tuple));
+              if constexpr (is_result_v<decltype(res)>) {
+                return res;
+              } else {
+                return make_result_safe<Result<T>>(std::move(res));
+              }
             } else if constexpr (internal::is_validator_v<T>) {
               return T::from_value(std::forward<NT>(_named_tuple));
             } else {
-              return T{std::forward<NT>(_named_tuple)};
+              return make_result_safe<Result<T>>(
+                  T{std::forward<NT>(_named_tuple)});
             }
           } catch (std::exception& e) {
             return error(e.what());
@@ -556,15 +568,33 @@ struct Parser {
                   (schemaful::IsSchemafulReader<R> &&
                    internal::is_literal_v<T>) ||
                   R::template has_custom_constructor<T> ||
-                  internal::has_reflection_type_v<T> ||
                   internal::has_flattened_tagged_union_v<T>) {
       return false;
+    } else if constexpr (internal::has_reflection_type_v<T>) {
+      if constexpr (internal::is_description_v<T> ||
+                    internal::is_deprecated_v<T> ||
+                    internal::is_attribute_v<T>) {
+        using RawInner = typename std::remove_cvref_t<T>::Type;
+        if constexpr (std::is_const_v<RawInner>) {
+          return false;
+        } else {
+          using Inner = std::remove_cvref_t<RawInner>;
+          return requires(const R& _r, const InputVarType& _var, Inner* _p) {
+            Parser<R, W, Inner, ProcessorsType>::read_into_in_place(_r, _var,
+                                                                    _p);
+          };
+        }
+      } else {
+        return false;
+      }
     } else if constexpr (is_optional_v<T>) {
       return !schemaful::IsSchemafulReader<R>;
     } else if constexpr (is_skip_v<T>) {
       using U = std::remove_cvref_t<T>;
       if constexpr (U::skip_deserialization_) {
         return true;
+      } else if constexpr (std::is_const_v<typename U::Type>) {
+        return false;
       } else {
         using Inner = std::remove_cvref_t<typename U::Type>;
         return requires(const R& _r, const InputVarType& _var, Inner* _p) {
@@ -575,10 +605,15 @@ struct Parser {
                          internal::is_alias<std::remove_cvref_t<T>>::value ||
                          is_default_val_v<T> || is_short_v<T> ||
                          is_positional_v<T> || is_commented_v<T>) {
-      using Inner = std::remove_cvref_t<typename std::remove_cvref_t<T>::Type>;
-      return requires(const R& _r, const InputVarType& _var, Inner* _p) {
-        Parser<R, W, Inner, ProcessorsType>::read_into_in_place(_r, _var, _p);
-      };
+      using RawInner = typename std::remove_cvref_t<T>::Type;
+      if constexpr (std::is_const_v<RawInner>) {
+        return false;
+      } else {
+        using Inner = std::remove_cvref_t<RawInner>;
+        return requires(const R& _r, const InputVarType& _var, Inner* _p) {
+          Parser<R, W, Inner, ProcessorsType>::read_into_in_place(_r, _var, _p);
+        };
+      }
     } else {
       return true;
     }
@@ -610,7 +645,10 @@ struct Parser {
     } else if constexpr (is_rename_v<T> ||
                          internal::is_alias<std::remove_cvref_t<T>>::value ||
                          is_default_val_v<T> || is_short_v<T> ||
-                         is_positional_v<T> || is_commented_v<T>) {
+                         is_positional_v<T> || is_commented_v<T> ||
+                         internal::is_description_v<T> ||
+                         internal::is_deprecated_v<T> ||
+                         internal::is_attribute_v<T>) {
       using Inner = std::remove_cvref_t<typename std::remove_cvref_t<T>::Type>;
       return Parser<R, W, Inner, ProcessorsType>::read_into_in_place(
           _r, _var, &_base->value());
