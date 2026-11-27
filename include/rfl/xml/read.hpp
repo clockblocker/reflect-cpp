@@ -33,6 +33,44 @@ auto read(const InputVarType& _var) {
   return Parser<T, ProcessorsType>::read(r, _var);
 }
 
+/// Parses an object from a pugixml node (subtree).
+/// If the node is a document node, its root element is parsed.
+/// @tparam T The type to parse into
+/// @tparam Ps Processors to apply during parsing (transforms the data)
+/// @param _node The pugixml node to parse from
+/// @return Result containing either the parsed object of type T or an error message
+template <class T, class... Ps>
+Result<T> read(const pugi::xml_node& _node) {
+  if (!_node) {
+    return error("XML node is empty.");
+  }
+  if (_node.type() == pugi::node_document) {
+    for (auto child = _node.first_child(); child;
+         child = child.next_sibling()) {
+      if (child.type() == pugi::node_element) {
+        return read<T, Ps...>(InputVarType(child));
+      }
+    }
+    return error("XML document has no root element.");
+  }
+  return read<T, Ps...>(InputVarType(_node));
+}
+
+/// Parses an object from a pugixml document.
+/// Parses the document's root element (skipping declarations, comments, etc.).
+/// @tparam T The type to parse into
+/// @tparam Ps Processors to apply during parsing (transforms the data)
+/// @param _doc The pugixml document to parse from
+/// @return Result containing either the parsed object of type T or an error message
+template <class T, class... Ps>
+Result<T> read(const pugi::xml_document& _doc) {
+  const auto root = _doc.document_element();
+  if (!root) {
+    return error("XML document has no root element.");
+  }
+  return read<T, Ps...>(InputVarType(root));
+}
+
 /// Parses an object from XML using reflection.
 /// This function reads an XML string and constructs a C++ object using compile-time reflection.
 /// @tparam T The type to parse into
@@ -47,8 +85,7 @@ Result<T> read(const std::string_view _xml_str) {
     return error("XML string could not be parsed: " +
                  std::string(result.description()));
   }
-  const auto var = InputVarType(doc.first_child());
-  return read<T, Ps...>(var);
+  return read<T, Ps...>(doc);
 }
 
 /// Parses an object from a stringstream containing XML.

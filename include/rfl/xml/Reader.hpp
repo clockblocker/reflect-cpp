@@ -2,6 +2,7 @@
 #define RFL_XML_READER_HPP_
 
 #include <charconv>
+#include <concepts>
 #include <exception>
 #include <optional>
 #include <pugixml.hpp>
@@ -51,9 +52,13 @@ struct Reader {
   using InputVarType = XMLInputVar;
 
   /// Compile-time flag indicating whether type T has a custom constructor from XML.
-  /// Currently not implemented for XML format (always false).
+  /// If true, the type provides a static from_xml_node(const pugi::xml_node&)
+  /// method returning T or rfl::Result<T> for custom deserialization.
   template <class T>
-  static constexpr bool has_custom_constructor = false;
+  static constexpr bool has_custom_constructor =
+      (requires(const pugi::xml_node& node) {
+        { T::from_xml_node(node) } -> std::convertible_to<rfl::Result<T>>;
+      });
 
   /// Retrieves an element from an XML array by index.
   /// In XML, arrays are represented as sibling elements with the same name.
@@ -64,12 +69,12 @@ struct Reader {
       const size_t _idx, const InputArrayType& _arr) const noexcept {
     const auto name = _arr.node_.name();
     size_t i = 0;
-    for (auto node = _arr.node_; node; node = node.next_sibling(name)) {
+    for (auto node = _arr.node_; node; node = node.next_sibling(name), ++i) {
       if (i == _idx) {
         return InputVarType(node);
       }
     }
-    return error("Index " + std::to_string(_idx) + " of of bounds.");
+    return error("Index " + std::to_string(_idx) + " out of bounds.");
   }
 
   /// Retrieves a field from an XML object by name.
@@ -218,15 +223,22 @@ struct Reader {
     return std::visit(cast_as_node, _var.node_or_attribute_).transform(wrap);
   }
 
-  /// Uses a type's custom constructor to deserialize from XML.
-  /// Currently not implemented for XML format.
-  /// @tparam T The type to construct
-  /// @param _var The XML value to deserialize from
-  /// @return Error indicating this feature is not yet implemented
+  /// Uses a type's custom constructor to deserialize from an XML node.
+  /// Calls the type's static from_xml_node(const pugi::xml_node&) method.
+  /// @tparam T The type to construct, must have a from_xml_node() static method
+  /// @param _var The XML value to deserialize from (must be a node, not an attribute)
+  /// @return Result containing the constructed object, or an error if construction fails
   template <class T>
   rfl::Result<T> use_custom_constructor(
       const InputVarType _var) const noexcept {
-    return error("TODO");
+    const auto call_ctor = [](const pugi::xml_node& _node) -> rfl::Result<T> {
+      try {
+        return T::from_xml_node(_node);
+      } catch (const std::exception& e) {
+        return error(e.what());
+      }
+    };
+    return cast_as_node(_var.node_or_attribute_).and_then(call_ctor);
   }
 
  private:
