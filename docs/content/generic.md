@@ -143,3 +143,17 @@ bart["age"] = 10;
 const auto person = rfl::from_generic<Person>(bart).value();
 ```
 
+## Overlaying with `rfl::from_generic_into`
+
+You can also overlay a partial `rfl::Generic` object onto an existing base struct using `rfl::from_generic_into` (or `rfl::generic::read_into`):
+
+```cpp
+auto patch = rfl::Generic::Object();
+patch["age"] = 11;
+
+const auto updated = rfl::from_generic_into(person, patch).value();
+// updated.first_name == "Bart", updated.last_name == "Simpson", updated.age == 11
+```
+
+Missing fields preserve their values from the base struct, nested structs are overlaid recursively, and processors can be passed as template arguments (`rfl::from_generic_into<rfl::NoExtraFields>(base, patch)`). Errors leave an lvalue base untouched.
+

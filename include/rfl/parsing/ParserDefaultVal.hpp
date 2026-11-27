@@ -44,6 +44,22 @@ struct ParserDefaultVal {
   }
 
   /**
+   * @brief Overlays a DefaultVal from the input onto an existing DefaultVal.
+   * @param _r The reader to use.
+   * @param _var The input variable to read from.
+   * @param _base The existing DefaultVal.
+   * @return A Result containing the overlaid DefaultVal or an error.
+   */
+  static Result<DefaultVal<T>> read_into(const R& _r, const InputVarType& _var,
+                                         DefaultVal<T> _base) noexcept {
+    return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
+               _r, _var, std::move(_base.value()))
+        .transform([](auto&& _t) {
+          return DefaultVal<T>(std::forward<decltype(_t)>(_t));
+        });
+  }
+
+  /**
    * @brief Writes a DefaultVal to the output.
    * @tparam P The type of the parent.
    * @param _w The writer to use.

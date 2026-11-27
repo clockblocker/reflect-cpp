@@ -66,6 +66,35 @@ struct ParserRef {
   }
 
   /**
+   * @brief Overlays a Ref from the input onto an existing Ref without mutating
+   *        the shared pointee in place.
+   *
+   * @param _r The reader to use.
+   * @param _var The input variable to read from.
+   * @param _base The existing Ref.
+   * @return A Result containing the overlaid Ref or an error.
+   */
+  static Result<Ref<T>> read_into(const R& _r, const InputVarType& _var,
+                                  Ref<T> _base) noexcept {
+    if constexpr (atomic::is_atomic_v<T>) {
+      return read(_r, _var);
+    } else {
+      const auto to_ref = [](auto&& _t) {
+        return Ref<T>::make(std::forward<decltype(_t)>(_t));
+      };
+      if constexpr (std::is_copy_constructible_v<std::remove_cvref_t<T>>) {
+        return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
+                   _r, _var, std::remove_cvref_t<T>(*_base))
+            .transform(to_ref);
+      } else {
+        return Parser<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(_r,
+                                                                          _var)
+            .transform(to_ref);
+      }
+    }
+  }
+
+  /**
    * @brief Writes a Ref to the output.
    *
    * @tparam P The type of the parent.

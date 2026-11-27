@@ -17,7 +17,8 @@
 
 namespace rfl::parsing {
 
-template <class R, class W, class _ViewType, class ProcessorsType>
+template <class R, class W, class _ViewType, class ProcessorsType,
+          bool _overlay = false>
 class ViewReaderWithDefaultAndStrippedFieldNames {
  public:
   using InputVarType = typename R::InputVarType;
@@ -86,15 +87,63 @@ class ViewReaderWithDefaultAndStrippedFieldNames {
         std::remove_cvref_t<std::remove_pointer_t<typename FieldType::Type>>;
     constexpr auto name = FieldType::name();
     if (_i == i) {
-      auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
-      if (!res) {
-        _errors->emplace_back(wrap_field_error(name, std::move(res).error()));
-        return;
-      }
-      if constexpr (std::is_pointer_v<OriginalType>) {
-        move_to(rfl::get<i>(*_view), &(*res));
+      if constexpr (_overlay) {
+        if constexpr (std::is_pointer_v<OriginalType>) {
+          using Target = std::remove_pointer_t<OriginalType>;
+          if constexpr (std::is_array_v<Target>) {
+            auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
+            if (!res) {
+              _errors->emplace_back(
+                  wrap_field_error(name, std::move(res).error()));
+              return;
+            }
+            move_to(rfl::get<i>(*_view), &(*res));
+          } else if constexpr (std::is_const_v<Target>) {
+            auto res = [&]() {
+              if constexpr (std::is_copy_constructible_v<T>) {
+                return read_into_or_read<R, W, T, ProcessorsType>(
+                    _r, _var, T(*rfl::get<i>(*_view)));
+              } else {
+                return Parser<R, W, T, ProcessorsType>::read(_r, _var);
+              }
+            }();
+            if (!res) {
+              _errors->emplace_back(
+                  wrap_field_error(name, std::move(res).error()));
+              return;
+            }
+            move_to(rfl::get<i>(*_view), &(*res));
+          } else {
+            auto res = read_into_or_read<R, W, T, ProcessorsType>(
+                _r, _var, std::move(*rfl::get<i>(*_view)));
+            if (!res) {
+              _errors->emplace_back(
+                  wrap_field_error(name, std::move(res).error()));
+              return;
+            }
+            move_to(rfl::get<i>(*_view), &(*res));
+          }
+        } else {
+          auto res = read_into_or_read<R, W, T, ProcessorsType>(
+              _r, _var, std::move(rfl::get<i>(*_view)));
+          if (!res) {
+            _errors->emplace_back(
+                wrap_field_error(name, std::move(res).error()));
+            return;
+          }
+          rfl::get<i>(*_view) = std::move(*res);
+        }
       } else {
-        rfl::get<i>(*_view) = std::move(*res);
+        auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
+        if (!res) {
+          _errors->emplace_back(wrap_field_error(name, std::move(res).error()));
+          return;
+        }
+        if constexpr (std::is_pointer_v<OriginalType>) {
+          move_to(rfl::get<i>(*_view), &(*res));
+        } else {
+          rfl::get<i>(*_view) = std::move(*res);
+        }
       }
     }
   }

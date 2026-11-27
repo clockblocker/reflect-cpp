@@ -78,6 +78,23 @@ Note that `std::cout` is also an ostream, so this works as well:
 rfl::json::write(person, std::cout) << std::endl;
 ```
 
+## Overlaying onto an existing struct (`read_into` / `load_into`)
+
+For layered configuration (e.g., workspace -> user -> local files), you can overlay partial JSON onto an existing base struct with `rfl::json::read_into` and `rfl::json::load_into`:
+
+```cpp
+const auto config =
+    rfl::json::load_into(Config{}, "workspace.json")
+        .and_then([](Config c) { return rfl::json::load_into(std::move(c), "user.json"); })
+        .and_then([](Config c) { return rfl::json::load_into(std::move(c), "local.json"); });
+```
+
+- Fields absent from the JSON preserve their values from the base struct.
+- Nested structs (including inside `std::optional<T>` when engaged) are overlaid recursively; an explicit `null` clears `std::optional<T>` to `std::nullopt`.
+- Leaf values and containers (`std::vector`, `std::map`, etc.) replace the base value when present.
+- Processors such as `rfl::NoExtraFields` and `rfl::SnakeCaseToCamelCase` are supported as template arguments (`rfl::json::read_into<rfl::NoExtraFields>(base, json_str)`).
+- Atomic on error: `_base` is taken by value and returned inside `rfl::Result<T>`, so an lvalue base is never mutated if parsing or validation fails.
+
 ## Custom constructors
 
 One of the great things about C++ is that it gives you control over

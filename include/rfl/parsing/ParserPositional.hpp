@@ -42,6 +42,24 @@ struct ParserPositional {
   }
 
   /**
+   * @brief Overlays a Positional value from the input onto an existing value.
+   *
+   * @param _r The reader to use.
+   * @param _var The input variable to read from.
+   * @param _base The existing Positional value.
+   * @return A Result containing the overlaid Positional value or an error.
+   */
+  static Result<Positional<T>> read_into(const R& _r, const InputVarType& _var,
+                                         Positional<T> _base) noexcept {
+    const auto to_positional = [](auto&& _t) {
+      return Positional<T>(std::forward<decltype(_t)>(_t));
+    };
+    return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
+               _r, _var, std::move(_base.value()))
+        .transform(to_positional);
+  }
+
+  /**
    * @brief Writes a Positional value to the output.
    *
    * @tparam P The type of the parent.

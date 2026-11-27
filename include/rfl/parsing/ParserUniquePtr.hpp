@@ -83,6 +83,37 @@ struct ParserUniquePtr {
   }
 
   /**
+   * @brief Overlays a unique_ptr from the input onto an existing unique_ptr.
+   *
+   * @param _r The reader to use.
+   * @param _var The input variable to read from.
+   * @param _base The existing unique_ptr.
+   * @return A Result containing the overlaid unique_ptr or an error.
+   */
+  static Result<std::unique_ptr<T>> read_into(
+      const R& _r, const InputVarType& _var,
+      std::unique_ptr<T> _base) noexcept {
+    if constexpr (atomic::is_atomic_v<T> || schemaful::IsSchemafulReader<R>) {
+      return read(_r, _var);
+    } else {
+      if (_r.is_empty(_var)) {
+        return std::unique_ptr<T>();
+      }
+      const auto to_unique = [](auto&& _t) {
+        return std::make_unique<T>(std::forward<decltype(_t)>(_t));
+      };
+      if (_base) {
+        return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
+                   _r, _var, std::move(*_base))
+            .transform(to_unique);
+      }
+      return Parser<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(_r,
+                                                                        _var)
+          .transform(to_unique);
+    }
+  }
+
+  /**
    * @brief Writes a unique_ptr to the output.
    *
    * @tparam P The type of the parent.
