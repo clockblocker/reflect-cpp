@@ -6,6 +6,7 @@
 #include <exception>
 #include <map>
 #include <memory>
+#include <new>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -810,7 +811,9 @@ struct FlattenedTaggedUnionParser {
         _target = std::forward<ValueT>(_val);
       }
     } else {
-      ::new (&_target) std::remove_const_t<TargetT>(std::forward<ValueT>(_val));
+      using NonConstT = std::remove_const_t<TargetT>;
+      ::new (const_cast<NonConstT*>(&_target))
+          NonConstT(std::forward<ValueT>(_val));
     }
   }
 
