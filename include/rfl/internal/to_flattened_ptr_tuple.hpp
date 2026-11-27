@@ -5,6 +5,7 @@
 #include "../tuple_cat.hpp"
 #include "has_flatten_fields.hpp"
 #include "is_flatten_field.hpp"
+#include "is_tagged_union.hpp"
 #include "to_ptr_tuple.hpp"
 
 namespace rfl::internal {
@@ -17,7 +18,13 @@ auto flatten_ptr_tuple(PtrTuple&& _t) {
     const auto get_one = [&]<int _i>(std::integral_constant<int, _i>) {
       using T = tuple_element_t<_i, std::remove_cvref_t<PtrTuple>>;
       if constexpr (is_flatten_field_v<T>) {
-        return flatten_ptr_tuple(to_ptr_tuple(rfl::get<_i>(_t)->get()));
+        using Inner =
+            remove_all_ptrs_t<typename std::remove_pointer_t<T>::Type>;
+        if constexpr (is_tagged_union_based<Inner>) {
+          return rfl::Tuple<>();
+        } else {
+          return flatten_ptr_tuple(to_ptr_tuple(rfl::get<_i>(_t)->get()));
+        }
       } else {
         return rfl::make_tuple(rfl::get<_i>(_t));
       }
