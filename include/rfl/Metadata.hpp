@@ -24,7 +24,7 @@ struct FieldMeta {
   std::string_view description = {};
 
   /// Optional deprecation message. When non-empty, marks the field deprecated
-  /// in generated schemas (alongside `description`, matching `rfl::Deprecated`).
+  /// in generated schemas (with `description`, matching `rfl::Deprecated`).
   std::string_view deprecation_message = {};
 };
 
@@ -48,9 +48,9 @@ struct FieldMeta {
 ///   on the enclosing struct's `rfl::Metadata<Outer>`.
 /// - For `rfl::TaggedUnion` alternatives wrapped in an internal tagged-union
 ///   wrapper, `rfl::Metadata<Alternative>` is consulted automatically.
-/// - For custom types with `ReflectionType` or `rfl::Reflector<T>`, struct-level
-///   `Metadata<T>::description` is honored; `Metadata<T>::fields` applies to
-///   reflected aggregate structs.
+/// - For custom types with `ReflectionType` or `rfl::Reflector<T>`,
+///   struct-level `Metadata<T>::description` is honored; `Metadata<T>::fields`
+///   applies to reflected aggregate structs.
 template <class T>
 struct Metadata {};
 

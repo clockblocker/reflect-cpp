@@ -441,6 +441,7 @@ TEST(json, test_metadata_tagged_union_alternatives) {
       rfl::json::read<rfl::Generic>(schema).value().to_object().value();
   const auto defs = root.get("$defs").value().to_object().value();
   bool found_circle = false;
+  bool found_square = false;
   for (const auto& [def_name, def_val] : defs) {
     if (def_name.find("CircleAlt") != std::string::npos) {
       found_circle = true;
@@ -448,12 +449,23 @@ TEST(json, test_metadata_tagged_union_alternatives) {
       EXPECT_EQ(def_obj.get("description").value().to_string().value(),
                 "A circle");
       const auto props = def_obj.get("properties").value().to_object().value();
-      EXPECT_EQ(props.get("radiusM").value().to_object().value()
-                    .get("description").value().to_string().value(),
+      EXPECT_EQ(props.get("radiusM")
+                    .value()
+                    .to_object()
+                    .value()
+                    .get("description")
+                    .value()
+                    .to_string()
+                    .value(),
                 "Radius in meters");
+    } else if (def_name.find("SquareAlt") != std::string::npos) {
+      found_square = true;
+      const auto def_obj = def_val.to_object().value();
+      EXPECT_FALSE(def_obj.get("description").has_value());
     }
   }
   EXPECT_TRUE(found_circle);
+  EXPECT_TRUE(found_square);
 }
 
 TEST(json, test_metadata_flatten_empty_no_field_names_and_concepts) {

@@ -523,7 +523,8 @@ struct NamedTupleParser {
    */
   template <typename View = void>
   static schema::Type to_schema(
-      std::map<std::string, schema::Type>* _definitions, View* _view = nullptr,
+      std::map<std::string, schema::Type>* _definitions,
+      View* _view = nullptr,
       const std::span<const FieldMeta> _field_meta = {},
       const std::span<const std::string_view> _raw_names = {}) noexcept {
     SchemaType schema;
