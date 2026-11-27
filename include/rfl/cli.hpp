@@ -4,6 +4,7 @@
 #include "../rfl.hpp"
 #include "cli/AllowAbbreviations.hpp"
 #include "cli/App.hpp"
+#include "cli/DynamicOptions.hpp"
 #include "cli/KeepEmptyItems.hpp"
 #include "cli/LastValueWins.hpp"
 #include "cli/ListDelimiter.hpp"

@@ -78,6 +78,9 @@ struct UsageOptions {
   /// wider than this place their description on the next line instead of
   /// widening every other row. Set to 0 for no cap.
   size_t max_option_width = 40;
+  /// Group names to omit from generated detailed help output (e.g. conditional
+  /// feature groups hidden at runtime).
+  std::vector<std::string> hidden_groups = {};
 };
 
 namespace internal {
@@ -1361,6 +1364,18 @@ rfl::Result<std::string> usage(const std::string& _program_name,
           } else {
             args = std::move(builtin_args);
             args.insert(args.end(), fields.begin(), fields.end());
+          }
+          if (!_opts.hidden_groups.empty()) {
+            args.erase(
+                std::remove_if(
+                    args.begin(), args.end(),
+                    [&](const internal::UsageArg& _a) {
+                      return !_a.group.empty() &&
+                             std::find(_opts.hidden_groups.begin(),
+                                       _opts.hidden_groups.end(),
+                                       _a.group) != _opts.hidden_groups.end();
+                    }),
+                args.end());
           }
           return internal::format_usage(
               _program_name, args, _opts, delimiter, options.options_first,

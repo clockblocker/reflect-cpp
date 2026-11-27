@@ -157,9 +157,9 @@ class ViewReader {
       if constexpr (std::is_pointer_v<OriginalType>) {
         if constexpr (Peel::peeled) {
           auto wrapped = Peel::wrap(std::move(*res));
-          move_to(rfl::get<i>(*_view), &wrapped);
+          placement_move_field(rfl::get<i>(*_view), &wrapped);
         } else {
-          move_to(rfl::get<i>(*_view), &(*res));
+          placement_move_field(rfl::get<i>(*_view), &(*res));
         }
       } else {
         rfl::get<i>(*_view) = Peel::wrap(std::move(*res));
@@ -223,26 +223,6 @@ class ViewReader {
         _errors->emplace_back(make_nested_error(
             to_path_segment(_current_name_or_index), stream.str(),
             _key_loc ? _key_loc : get_source_location(_r, _var)));
-      }
-    }
-  }
-
-  template <class Target, class Source>
-  static void move_to(Target* _t, Source* _s) {
-    if constexpr (std::is_const_v<Target>) {
-      return move_to(const_cast<std::remove_const_t<Target>*>(_t), _s);
-    } else if constexpr (!rfl::internal::is_array_v<Source> &&
-                         !std::is_array_v<Target>) {
-      ::new (_t) Target(std::move(*_s));
-    } else if constexpr (rfl::internal::is_array_v<Source>) {
-      static_assert(std::is_array_v<Target>,
-                    "Expected target to be a c-array.");
-      for (size_t i = 0; i < _s->arr_.size(); ++i) {
-        move_to(&((*_t)[i]), &(_s->arr_[i]));
-      }
-    } else {
-      for (size_t i = 0; i < _s->size(); ++i) {
-        move_to(&((*_t)[i]), &((*_s)[i]));
       }
     }
   }

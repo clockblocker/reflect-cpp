@@ -172,14 +172,22 @@ class ViewReaderWithDefault {
     if (!res) [[unlikely]] {
       return;
     }
-    // Parser::check_deferred_defaults relies on the field being replaced as
-    // a whole.
+    // Parser::check_deferred_defaults relies on DefaultVal fields being
+    // replaced as a whole. For pure non-DefaultVal transparent wrappers on
+    // mutable fields, assign directly to the inner CoreType without
+    // instantiating per-wrapper move helpers.
     if constexpr (std::is_pointer_v<OriginalType>) {
-      if constexpr (Peel::peeled) {
+      using TargetType = std::remove_pointer_t<OriginalType>;
+      if constexpr (Peel::peeled && !Peel::has_default_val &&
+                    !std::is_const_v<TargetType> &&
+                    !std::is_array_v<TargetType> &&
+                    !rfl::internal::is_array_v<typename Peel::CoreType>) {
+        Peel::unwrap_ref(*rfl::get<_i>(*_view)) = std::move(*res);
+      } else if constexpr (Peel::peeled) {
         auto wrapped = Peel::wrap(std::move(*res));
-        move_to(rfl::get<_i>(*_view), &wrapped);
+        move_assign_field(rfl::get<_i>(*_view), &wrapped);
       } else {
-        move_to(rfl::get<_i>(*_view), &(*res));
+        move_assign_field(rfl::get<_i>(*_view), &(*res));
       }
     } else {
       rfl::get<_i>(*_view) = Peel::wrap(std::move(*res));
@@ -216,35 +224,6 @@ class ViewReaderWithDefault {
         _errors->emplace_back(make_nested_error(
             std::string(_current_name), stream.str(),
             _key_loc ? _key_loc : get_source_location(_r, _var)));
-      }
-    }
-  }
-
-  template <class Target, class Source>
-  static void move_to(Target* _t, Source* _s) {
-    if constexpr (!rfl::internal::is_array_v<Source> &&
-                  !std::is_array_v<Target>) {
-      if constexpr (std::is_const_v<Target>) {
-        // The struct was default-constructed, so *_t is a live const object
-        // and must not be assigned to. Re-create it in place instead. If the
-        // constructor throws, we are inside a noexcept function, so it cannot
-        // be destroyed twice.
-        using NonConstTarget = std::remove_const_t<Target>;
-        auto* const ptr = const_cast<NonConstTarget*>(_t);
-        std::destroy_at(ptr);
-        ::new (ptr) NonConstTarget(std::move(*_s));
-      } else {
-        *_t = Target(std::move(*_s));
-      }
-    } else if constexpr (rfl::internal::is_array_v<Source>) {
-      static_assert(std::is_array_v<Target>,
-                    "Expected target to be a c-array.");
-      for (size_t i = 0; i < _s->arr_.size(); ++i) {
-        move_to(&((*_t)[i]), &(_s->arr_[i]));
-      }
-    } else {
-      for (size_t i = 0; i < _s->size(); ++i) {
-        move_to(&((*_t)[i]), &((*_s)[i]));
       }
     }
   }
