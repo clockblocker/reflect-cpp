@@ -65,11 +65,7 @@ struct EdgeDefaultsConfig {
 };
 
 struct NamePriorityConfig {
-  // Under SnakeCaseToCamelCase, `foo_bar` -> wire `"fooBar"`.
-  // `fooBar` stays `"fooBar"`? Avoid duplicate wire names; instead test
-  // Rename swapping a raw name into another field's wire name:
-  rfl::Rename<"alpha", int> first_field = 1;
-  rfl::Rename<"first_field", int> second_field = 2;
+  int foo_bar = 1;
 };
 
 struct InlineDescPlusOobDeprecated {
@@ -179,8 +175,9 @@ struct rfl::Metadata<test_metadata::OuterMeta> {
 template <>
 struct rfl::Metadata<test_metadata::NamePriorityConfig> {
   static constexpr std::array<rfl::FieldMeta, 2> fields = {{
-      {"first_field", "Matches second_field wire name"},
-      {"alpha", "Matches first_field wire name"},
+      // Raw name listed BEFORE wire name; exact wire-name match must win:
+      {"foo_bar", "Raw fallback description"},
+      {"fooBar", "Wire name wins"},
   }};
 };
 
@@ -267,15 +264,13 @@ TEST(json, test_to_default_generic_edge_values) {
 
 TEST(json, test_metadata_wire_name_precedence_and_inline_desc_preservation) {
   const auto prio_schema =
-      rfl::json::to_schema<NamePriorityConfig, rfl::DefaultIfMissing>();
+      rfl::json::to_schema<NamePriorityConfig, rfl::SnakeCaseToCamelCase,
+                           rfl::DefaultIfMissing>();
   EXPECT_NE(
       prio_schema.find(
-          "\"alpha\":{\"type\":\"integer\",\"description\":\"Matches first_field wire name\""),
+          "\"fooBar\":{\"type\":\"integer\",\"description\":\"Wire name wins\""),
       std::string::npos);
-  EXPECT_NE(
-      prio_schema.find(
-          "\"first_field\":{\"type\":\"integer\",\"description\":\"Matches second_field wire name\""),
-      std::string::npos);
+  EXPECT_EQ(prio_schema.find("Raw fallback description"), std::string::npos);
 
   const auto dep_schema =
       rfl::json::to_schema<InlineDescPlusOobDeprecated,
@@ -324,7 +319,8 @@ TEST(json, test_num_fields_binary_search_edge_cases) {
   static_assert(rfl::num_fields<OneByte> == 1);
   static_assert(rfl::num_fields<FourBytes> == 4);
   static_assert(rfl::num_fields<MixedAggregate> == 4);
-#ifdef REFLECT_CPP_C_ARRAYS_OR_INHERITANCE
+#if defined(REFLECT_CPP_C_ARRAYS_OR_INHERITANCE) || \
+    defined(REFLECTCPP_C_ARRAYS_OR_INHERITANCE)
   static_assert(rfl::num_fields<WithCArray> == 2);
 #else
   // Without REFLECT_CPP_C_ARRAYS_OR_INHERITANCE, brace elision counts
