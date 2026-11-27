@@ -66,6 +66,206 @@ enum class ErrorKind : std::uint8_t {
   constraint_violation,
 };
 
+/// Internal compact tags for built-in validator rule codes so leaf validator
+/// errors carry a machine-readable code inline in Error without increasing
+/// sizeof(Error) or allocating OptionalDetails.
+enum class BuiltinErrorCode : std::uint8_t {
+  none = 0,
+  equal_to,
+  not_equal_to,
+  minimum,
+  exclusive_minimum,
+  maximum,
+  exclusive_maximum,
+  pattern,
+  any_of,
+  one_of,
+  size,
+  size_equal_to,
+  size_not_equal_to,
+  size_minimum,
+  size_exclusive_minimum,
+  size_maximum,
+  size_exclusive_maximum,
+  size_any_of,
+  size_one_of,
+  code_points,
+  code_points_equal_to,
+  code_points_not_equal_to,
+  code_points_minimum,
+  code_points_exclusive_minimum,
+  code_points_maximum,
+  code_points_exclusive_maximum,
+  code_points_any_of,
+  code_points_one_of,
+};
+
+/// Returns the canonical wire string for a BuiltinErrorCode, or empty if none.
+constexpr std::string_view builtin_error_code_str(
+    const BuiltinErrorCode _code) noexcept {
+  switch (_code) {
+    case BuiltinErrorCode::none:
+      return {};
+    case BuiltinErrorCode::equal_to:
+      return "equal_to";
+    case BuiltinErrorCode::not_equal_to:
+      return "not_equal_to";
+    case BuiltinErrorCode::minimum:
+      return "minimum";
+    case BuiltinErrorCode::exclusive_minimum:
+      return "exclusive_minimum";
+    case BuiltinErrorCode::maximum:
+      return "maximum";
+    case BuiltinErrorCode::exclusive_maximum:
+      return "exclusive_maximum";
+    case BuiltinErrorCode::pattern:
+      return "pattern";
+    case BuiltinErrorCode::any_of:
+      return "any_of";
+    case BuiltinErrorCode::one_of:
+      return "one_of";
+    case BuiltinErrorCode::size:
+      return "size";
+    case BuiltinErrorCode::size_equal_to:
+      return "size.equal_to";
+    case BuiltinErrorCode::size_not_equal_to:
+      return "size.not_equal_to";
+    case BuiltinErrorCode::size_minimum:
+      return "size.minimum";
+    case BuiltinErrorCode::size_exclusive_minimum:
+      return "size.exclusive_minimum";
+    case BuiltinErrorCode::size_maximum:
+      return "size.maximum";
+    case BuiltinErrorCode::size_exclusive_maximum:
+      return "size.exclusive_maximum";
+    case BuiltinErrorCode::size_any_of:
+      return "size.any_of";
+    case BuiltinErrorCode::size_one_of:
+      return "size.one_of";
+    case BuiltinErrorCode::code_points:
+      return "code_points";
+    case BuiltinErrorCode::code_points_equal_to:
+      return "code_points.equal_to";
+    case BuiltinErrorCode::code_points_not_equal_to:
+      return "code_points.not_equal_to";
+    case BuiltinErrorCode::code_points_minimum:
+      return "code_points.minimum";
+    case BuiltinErrorCode::code_points_exclusive_minimum:
+      return "code_points.exclusive_minimum";
+    case BuiltinErrorCode::code_points_maximum:
+      return "code_points.maximum";
+    case BuiltinErrorCode::code_points_exclusive_maximum:
+      return "code_points.exclusive_maximum";
+    case BuiltinErrorCode::code_points_any_of:
+      return "code_points.any_of";
+    case BuiltinErrorCode::code_points_one_of:
+      return "code_points.one_of";
+  }
+  return {};
+}
+
+/// Maps a canonical wire string back to its compact BuiltinErrorCode if it is
+/// one of the built-in validator codes, or BuiltinErrorCode::none otherwise.
+constexpr BuiltinErrorCode parse_builtin_error_code(
+    const std::string_view _code) noexcept {
+  if (_code.empty()) {
+    return BuiltinErrorCode::none;
+  }
+  if (_code == "equal_to") return BuiltinErrorCode::equal_to;
+  if (_code == "not_equal_to") return BuiltinErrorCode::not_equal_to;
+  if (_code == "minimum") return BuiltinErrorCode::minimum;
+  if (_code == "exclusive_minimum") return BuiltinErrorCode::exclusive_minimum;
+  if (_code == "maximum") return BuiltinErrorCode::maximum;
+  if (_code == "exclusive_maximum") return BuiltinErrorCode::exclusive_maximum;
+  if (_code == "pattern") return BuiltinErrorCode::pattern;
+  if (_code == "any_of") return BuiltinErrorCode::any_of;
+  if (_code == "one_of") return BuiltinErrorCode::one_of;
+  if (_code == "size") return BuiltinErrorCode::size;
+  if (_code == "size.equal_to") return BuiltinErrorCode::size_equal_to;
+  if (_code == "size.not_equal_to") return BuiltinErrorCode::size_not_equal_to;
+  if (_code == "size.minimum") return BuiltinErrorCode::size_minimum;
+  if (_code == "size.exclusive_minimum")
+    return BuiltinErrorCode::size_exclusive_minimum;
+  if (_code == "size.maximum") return BuiltinErrorCode::size_maximum;
+  if (_code == "size.exclusive_maximum")
+    return BuiltinErrorCode::size_exclusive_maximum;
+  if (_code == "size.any_of") return BuiltinErrorCode::size_any_of;
+  if (_code == "size.one_of") return BuiltinErrorCode::size_one_of;
+  if (_code == "code_points") return BuiltinErrorCode::code_points;
+  if (_code == "code_points.equal_to")
+    return BuiltinErrorCode::code_points_equal_to;
+  if (_code == "code_points.not_equal_to")
+    return BuiltinErrorCode::code_points_not_equal_to;
+  if (_code == "code_points.minimum")
+    return BuiltinErrorCode::code_points_minimum;
+  if (_code == "code_points.exclusive_minimum")
+    return BuiltinErrorCode::code_points_exclusive_minimum;
+  if (_code == "code_points.maximum")
+    return BuiltinErrorCode::code_points_maximum;
+  if (_code == "code_points.exclusive_maximum")
+    return BuiltinErrorCode::code_points_exclusive_maximum;
+  if (_code == "code_points.any_of")
+    return BuiltinErrorCode::code_points_any_of;
+  if (_code == "code_points.one_of")
+    return BuiltinErrorCode::code_points_one_of;
+  return BuiltinErrorCode::none;
+}
+
+/// Composes a BuiltinErrorCode under the `size.*` namespace when possible.
+constexpr BuiltinErrorCode compose_size_code(
+    const BuiltinErrorCode _inner) noexcept {
+  switch (_inner) {
+    case BuiltinErrorCode::none:
+      return BuiltinErrorCode::size;
+    case BuiltinErrorCode::equal_to:
+      return BuiltinErrorCode::size_equal_to;
+    case BuiltinErrorCode::not_equal_to:
+      return BuiltinErrorCode::size_not_equal_to;
+    case BuiltinErrorCode::minimum:
+      return BuiltinErrorCode::size_minimum;
+    case BuiltinErrorCode::exclusive_minimum:
+      return BuiltinErrorCode::size_exclusive_minimum;
+    case BuiltinErrorCode::maximum:
+      return BuiltinErrorCode::size_maximum;
+    case BuiltinErrorCode::exclusive_maximum:
+      return BuiltinErrorCode::size_exclusive_maximum;
+    case BuiltinErrorCode::any_of:
+      return BuiltinErrorCode::size_any_of;
+    case BuiltinErrorCode::one_of:
+      return BuiltinErrorCode::size_one_of;
+    default:
+      return BuiltinErrorCode::none;
+  }
+}
+
+/// Composes a BuiltinErrorCode under the `code_points.*` namespace when
+/// possible.
+constexpr BuiltinErrorCode compose_code_points_code(
+    const BuiltinErrorCode _inner) noexcept {
+  switch (_inner) {
+    case BuiltinErrorCode::none:
+      return BuiltinErrorCode::code_points;
+    case BuiltinErrorCode::equal_to:
+      return BuiltinErrorCode::code_points_equal_to;
+    case BuiltinErrorCode::not_equal_to:
+      return BuiltinErrorCode::code_points_not_equal_to;
+    case BuiltinErrorCode::minimum:
+      return BuiltinErrorCode::code_points_minimum;
+    case BuiltinErrorCode::exclusive_minimum:
+      return BuiltinErrorCode::code_points_exclusive_minimum;
+    case BuiltinErrorCode::maximum:
+      return BuiltinErrorCode::code_points_maximum;
+    case BuiltinErrorCode::exclusive_maximum:
+      return BuiltinErrorCode::code_points_exclusive_maximum;
+    case BuiltinErrorCode::any_of:
+      return BuiltinErrorCode::code_points_any_of;
+    case BuiltinErrorCode::one_of:
+      return BuiltinErrorCode::code_points_one_of;
+    default:
+      return BuiltinErrorCode::none;
+  }
+}
+
 /// Describes a single failure contained in an Error: where it occurred and
 /// what went wrong.
 struct ErrorDetail {
@@ -84,6 +284,11 @@ struct ErrorDetail {
 
   /// The coarse category of this failure.
   ErrorKind kind = ErrorKind::other;
+
+  /// Optional machine-readable rule or error code (for example, `"minimum"`,
+  /// `"size.minimum"`, `"pattern"`, or a custom validator code). Empty when
+  /// no finer-grained code applies.
+  std::string code = {};
 
   bool operator==(const ErrorDetail&) const = default;
 };
@@ -116,6 +321,35 @@ class Error {
   /// @param _kind Coarse classification of the failure
   Error(std::string&& _what, const ErrorKind _kind)
       : what_(std::move(_what)), kind_(_kind) {}
+
+  /// Constructs a classified leaf error with a built-in rule code, without
+  /// allocating an explicit detail vector.
+  Error(std::string _what, const ErrorKind _kind,
+        const BuiltinErrorCode _builtin_code)
+      : what_(std::move(_what)), kind_(_kind), builtin_code_(_builtin_code) {}
+
+  /// Constructs a classified error with a machine-readable code.
+  /// Built-in codes are stored inline without allocating details; custom codes
+  /// are stored in details_.
+  Error(std::string _what, const ErrorKind _kind, const std::string_view _code)
+      : what_(std::move(_what)), kind_(_kind) {
+    if (_code.empty()) {
+      return;
+    }
+    const auto builtin = parse_builtin_error_code(_code);
+    if (builtin != BuiltinErrorCode::none) {
+      builtin_code_ = builtin;
+      return;
+    }
+    std::vector<ErrorDetail> details;
+    details.push_back(ErrorDetail{
+        .path = {},
+        .message = what_,
+        .kind = _kind,
+        .code = std::string(_code),
+    });
+    details_ = OptionalDetails(std::move(details));
+  }
 
   /// Constructs an error with a message and the individual failures it
   /// summarizes.
@@ -163,12 +397,26 @@ class Error {
                : kind_;
   }
 
+  /// Returns the machine-readable error code of this error, or an empty view
+  /// when none is set. For multi-error results, returns the code of the first
+  /// detail.
+  std::string_view code() const noexcept {
+    if (details_.has_value() && !(*details_).empty()) {
+      return (*details_).front().code;
+    }
+    return builtin_error_code_str(builtin_code_);
+  }
+
   /// Returns the individual failures summarized by what(), each with the
   /// location at which it occurred. An error that was constructed from a
   /// message only is reported as a single failure at the root.
   std::vector<ErrorDetail> details() const& {
     if (!details_.has_value()) {
-      return {ErrorDetail{.path = {}, .message = what_, .kind = kind_}};
+      return {ErrorDetail{
+          .path = {},
+          .message = what_,
+          .kind = kind_,
+          .code = std::string(builtin_error_code_str(builtin_code_))}};
     }
     return *details_;
   }
@@ -177,8 +425,11 @@ class Error {
   /// moved from state.
   std::vector<ErrorDetail> details() && {
     if (!details_.has_value()) {
-      return {
-          ErrorDetail{.path = {}, .message = std::move(what_), .kind = kind_}};
+      return {ErrorDetail{
+          .path = {},
+          .message = std::move(what_),
+          .kind = kind_,
+          .code = std::string(builtin_error_code_str(builtin_code_))}};
     }
     return std::move(*details_);
   }
@@ -186,6 +437,11 @@ class Error {
  private:
   friend bool has_allocated_details(const Error& _err) noexcept {
     return _err.details_.has_value();
+  }
+
+  friend BuiltinErrorCode builtin_error_code_of(const Error& _err) noexcept {
+    return _err.details_.has_value() ? BuiltinErrorCode::none
+                                     : _err.builtin_code_;
   }
 
   friend void set_error_kind_if_other(Error& _err,
@@ -206,6 +462,36 @@ class Error {
     }
   }
 
+  friend void set_error_code_if_empty(Error& _err,
+                                      const std::string_view _code) {
+    if (_code.empty()) {
+      return;
+    }
+    if (!_err.details_.has_value()) {
+      if (_err.builtin_code_ != BuiltinErrorCode::none) {
+        return;
+      }
+      const auto builtin = parse_builtin_error_code(_code);
+      if (builtin != BuiltinErrorCode::none) {
+        _err.builtin_code_ = builtin;
+        return;
+      }
+      std::vector<ErrorDetail> details;
+      details.push_back(ErrorDetail{
+          .path = {},
+          .message = _err.what_,
+          .kind = _err.kind_,
+          .code = std::string(_code),
+      });
+      _err.details_ = OptionalDetails(std::move(details));
+      return;
+    }
+    for (auto& detail : *_err.details_) {
+      if (detail.code.empty()) {
+        detail.code = std::string(_code);
+      }
+    }
+  }
   /// Either nothing or a heap-allocated vector of details, deep-copied along
   /// with the Error. Holding nothing is the common case: it means that the
   /// Error is just its message, and it does not allocate.
@@ -269,14 +555,25 @@ class Error {
 
   /// Coarse category for a leaf error when details_ holds nothing.
   ErrorKind kind_ = ErrorKind::other;
+
+  /// Compact built-in rule code for a leaf error when details_ holds nothing.
+  /// Packed into ErrorKind's tail padding so sizeof(Error) does not grow.
+  BuiltinErrorCode builtin_code_ = BuiltinErrorCode::none;
 };
 
 /// Returns whether _err has a heap-allocated detail vector.
 bool has_allocated_details(const Error& _err) noexcept;
 
+/// Returns the inline BuiltinErrorCode for a leaf error (none if detailed).
+BuiltinErrorCode builtin_error_code_of(const Error& _err) noexcept;
+
 /// Replaces ErrorKind::other with _kind in place without copying what_ or
 /// allocating details on leaf errors.
 void set_error_kind_if_other(Error& _err, ErrorKind _kind) noexcept;
+
+/// Attaches _code to _err (or to each uncoded detail) when no code is already
+/// present. Preserves zero-allocation for built-in codes on leaf errors.
+void set_error_code_if_empty(Error& _err, std::string_view _code);
 
 }  // namespace rfl::internal
 

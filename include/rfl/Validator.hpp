@@ -10,6 +10,7 @@
 #include "AllOf.hpp"
 #include "Result.hpp"
 #include "internal/HasValidation.hpp"
+#include "internal/validator_code.hpp"
 
 namespace rfl {
 
@@ -35,7 +36,8 @@ struct Validator {
     try {
       return wrap_validated(ValidationType::validate(_value));
     } catch (std::exception& e) {
-      return error(e.what(), ErrorKind::constraint_violation);
+      return error(e.what(), ErrorKind::constraint_violation,
+                   internal::validator_code<ValidationType>());
     }
   }
 
@@ -47,7 +49,8 @@ struct Validator {
     try {
       return wrap_validated(ValidationType::validate(std::move(_value)));
     } catch (std::exception& e) {
-      return error(e.what(), ErrorKind::constraint_violation);
+      return error(e.what(), ErrorKind::constraint_violation,
+                   internal::validator_code<ValidationType>());
     }
   }
 
@@ -202,6 +205,8 @@ struct Validator {
     if (!_res) {
       Error err = std::move(_res).error();
       internal::set_error_kind_if_other(err, ErrorKind::constraint_violation);
+      internal::set_error_code_if_empty(
+          err, internal::validator_code<ValidationType>());
       return error(std::move(err));
     }
     return Validator(AlreadyValidated{}, std::move(*_res));
