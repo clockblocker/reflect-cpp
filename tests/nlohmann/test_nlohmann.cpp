@@ -1,10 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <map>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <variant>
 #include <vector>
@@ -39,6 +39,16 @@ struct BigInts { uint64_t u64; int64_t i64; uint8_t u8; int8_t i8; };
 struct OptInUser { std::string name; int id; };
 struct NonOptInUser { std::string name; };
 
+struct StrictOptInUser {
+  const std::string name;
+  rfl::Validator<int, rfl::Minimum<0>> age;
+};
+
+struct BinaryFields {
+  rfl::Bytestring bytes;
+  rfl::Vectorstring vec;
+};
+
 struct WithDynamicFields {
   std::string title;
   nlohmann::json payload;
@@ -49,6 +59,10 @@ struct WithDynamicFields {
 
 template <>
 struct rfl::nlohmann::enable_adl_serializer<test_nlohmann::OptInUser>
+    : std::true_type {};
+
+template <>
+struct rfl::nlohmann::enable_adl_serializer<test_nlohmann::StrictOptInUser>
     : std::true_type {};
 
 namespace test_nlohmann {
@@ -145,8 +159,41 @@ TEST(nlohmann, bridge1_integer_bounds_and_no_exceptions) {
   EXPECT_NO_THROW(check_errors());
 }
 
+TEST(nlohmann, bridge1_bytestring_vectorstring_and_binary_t) {
+  const BinaryFields src{
+      .bytes = {std::byte{0x00}, std::byte{0x41}, std::byte{0xFF}},
+      .vec = {'h', 'i', '\0', static_cast<char>(0xFE)},
+  };
+  const nlohmann::json j = rfl::nlohmann::write(src);
+  ASSERT_TRUE(j["bytes"].is_string());
+  ASSERT_TRUE(j["vec"].is_string());
+
+  const auto back = rfl::nlohmann::read<BinaryFields>(j);
+  ASSERT_TRUE(back.has_value()) << back.error().what();
+  EXPECT_EQ(back->bytes, src.bytes);
+  EXPECT_EQ(back->vec, src.vec);
+
+  // Direct nlohmann::json::binary_t -> Bytestring & Vectorstring on read.
+  nlohmann::json raw_bin = {
+      {"bytes", nlohmann::json::binary({0xDE, 0xAD, 0xBE, 0xEF})},
+      {"vec", nlohmann::json::binary({'a', 'b', 'c'})},
+  };
+  const auto from_bin = rfl::nlohmann::read<BinaryFields>(raw_bin);
+  ASSERT_TRUE(from_bin.has_value()) << from_bin.error().what();
+  EXPECT_EQ(from_bin->bytes,
+            (rfl::Bytestring{std::byte{0xDE}, std::byte{0xAD},
+                             std::byte{0xBE}, std::byte{0xEF}}));
+  EXPECT_EQ(from_bin->vec, (rfl::Vectorstring{'a', 'b', 'c'}));
+
+  // Invalid type for Vectorstring returns error without throwing.
+  nlohmann::json bad_vec = {{"bytes", "AA=="}, {"vec", 12345}};
+  EXPECT_NO_THROW(
+      EXPECT_FALSE(rfl::nlohmann::read<BinaryFields>(bad_vec).has_value()));
+}
+
 TEST(nlohmann, bridge1_opt_in_adl_serializer) {
   static_assert(rfl::nlohmann::enable_adl_serializer_v<OptInUser>);
+  static_assert(rfl::nlohmann::enable_adl_serializer_v<StrictOptInUser>);
   static_assert(!rfl::nlohmann::enable_adl_serializer_v<NonOptInUser>);
   static_assert(
       !::nlohmann::detail::is_getable<nlohmann::json, NonOptInUser>::value);
@@ -154,45 +201,173 @@ TEST(nlohmann, bridge1_opt_in_adl_serializer) {
   const nlohmann::json j = OptInUser{.name = "Grace", .id = 42};
   EXPECT_EQ(j.get<OptInUser>().name, "Grace");
   EXPECT_EQ(j.get<OptInUser>().id, 42);
-  OptInUser target{};
-  j.get_to(target);
-  EXPECT_EQ(target.id, 42);
   EXPECT_THROW((void)nlohmann::json({{"name", 999}}).get<OptInUser>(),
-               std::runtime_error);
+               nlohmann::json::exception);
+  EXPECT_THROW((void)nlohmann::json({{"name", 999}}).get<OptInUser>(),
+               nlohmann::json::other_error);
+
+  // Struct with const field + rfl::Validator (non-default-constructible &
+  // non-assignable) works via returning 1-arg from_json.
+  const nlohmann::json sj = StrictOptInUser{.name = "Linus", .age = 30};
+  const auto parsed = sj.get<StrictOptInUser>();
+  EXPECT_EQ(parsed.name, "Linus");
+  EXPECT_EQ(parsed.age.value(), 30);
+  EXPECT_THROW(
+      (void)nlohmann::json({{"name", "Linus"}, {"age", -1}})
+          .get<StrictOptInUser>(),
+      nlohmann::json::exception);
+
   const nlohmann::json stl_j = std::vector<int>{1, 2, 3};
   EXPECT_EQ((stl_j.get<std::vector<int>>()), (std::vector<int>{1, 2, 3}));
 }
 
-TEST(nlohmann, bridge2_dynamic_fields_nlohmann_and_generic) {
+TEST(nlohmann, bridge2_cross_basic_json_and_binary_t) {
   constexpr uint64_t kHugeU64 = std::numeric_limits<uint64_t>::max();
   nlohmann::ordered_json ordered = nlohmann::ordered_json::object();
-  ordered["z"] = 1;
+  ordered["z"] = 1ULL;
+  ordered["big"] = kHugeU64;
   ordered["a"] = "two";
+  ordered["bin"] = nlohmann::ordered_json::binary({0x01, 0x02, 0x03}, 42);
   ordered["m"] = nlohmann::ordered_json::array({true, nullptr, -7, 3.5});
 
   const WithDynamicFields src{
-      "doc", {{"big", kHugeU64}, {"arr", {1, 2, "x"}}, {"nil", nullptr}},
+      "doc",
+      {{"big", kHugeU64},
+       {"small_u", 7ULL},
+       {"bin", nlohmann::json::binary({0xAB, 0xCD}, 9)},
+       {"arr", {1, 2, "x"}},
+       {"nil", nullptr}},
       ordered};
-  const auto from_nj =
-      rfl::nlohmann::read<WithDynamicFields>(rfl::nlohmann::write(src));
-  ASSERT_TRUE(from_nj.has_value());
+
+  // Cross-BasicJson: nlohmann::ordered_json field written to & read from
+  // nlohmann::json preserves exact unsignedness and binary_t (with subtype).
+  const nlohmann::json as_json = rfl::nlohmann::write(src);
+  ASSERT_TRUE(as_json["ordered_payload"]["z"].is_number_unsigned());
+  ASSERT_TRUE(as_json["ordered_payload"]["big"].is_number_unsigned());
+  ASSERT_TRUE(as_json["ordered_payload"]["bin"].is_binary());
+  EXPECT_EQ(as_json["ordered_payload"]["bin"].get_binary().subtype(), 42U);
+
+  const auto from_nj = rfl::nlohmann::read<WithDynamicFields>(as_json);
+  ASSERT_TRUE(from_nj.has_value()) << from_nj.error().what();
   EXPECT_EQ(from_nj->payload, src.payload);
+  EXPECT_TRUE(from_nj->payload["big"].is_number_unsigned());
   EXPECT_EQ(from_nj->payload["big"].get<uint64_t>(), kHugeU64);
+  EXPECT_TRUE(from_nj->ordered_payload["z"].is_number_unsigned());
+  EXPECT_TRUE(from_nj->ordered_payload["big"].is_number_unsigned());
+  EXPECT_EQ(from_nj->ordered_payload["big"].get<uint64_t>(), kHugeU64);
+  ASSERT_TRUE(from_nj->ordered_payload["bin"].is_binary());
+  EXPECT_EQ(from_nj->ordered_payload["bin"].get_binary(),
+            ordered["bin"].get_binary());
+  EXPECT_EQ(from_nj->ordered_payload["bin"].get_binary().subtype(), 42U);
 
-  const auto from_noj = rfl::nlohmann::read<WithDynamicFields>(
-      rfl::nlohmann::write<nlohmann::ordered_json>(src));
-  ASSERT_TRUE(from_noj.has_value());
+  // Cross-BasicJson in reverse: nlohmann::json field written to & read from
+  // nlohmann::ordered_json preserves key order, unsignedness, and binary_t.
+  const auto as_ordered = rfl::nlohmann::write<nlohmann::ordered_json>(src);
+  ASSERT_TRUE(as_ordered["payload"]["small_u"].is_number_unsigned());
+  ASSERT_TRUE(as_ordered["payload"]["bin"].is_binary());
+  EXPECT_EQ(as_ordered["payload"]["bin"].get_binary().subtype(), 9U);
+
+  const auto from_noj = rfl::nlohmann::read<WithDynamicFields>(as_ordered);
+  ASSERT_TRUE(from_noj.has_value()) << from_noj.error().what();
   EXPECT_EQ(object_keys(from_noj->ordered_payload),
-            (std::vector<std::string>{"z", "a", "m"}));
+            (std::vector<std::string>{"z", "big", "a", "bin", "m"}));
+  EXPECT_TRUE(from_noj->payload["small_u"].is_number_unsigned());
+  ASSERT_TRUE(from_noj->payload["bin"].is_binary());
+  EXPECT_EQ(from_noj->payload["bin"].get_binary().subtype(), 9U);
 
+  // Generic writer encodes binary_t as Base64 string instead of null.
   const WithDynamicFields gen_src{
-      "gen", {{"flag", true}, {"num", -42}, {"dbl", 1.5}, {"nil", nullptr}},
+      "gen",
+      {{"flag", true},
+       {"num", -42},
+       {"dbl", 1.5},
+       {"nil", nullptr},
+       {"bin", nlohmann::json::binary({'A', 'B', 'C'})}},
       nlohmann::ordered_json::array({10, "hi"})};
   const auto from_g =
       rfl::generic::read<WithDynamicFields>(rfl::generic::write(gen_src));
-  ASSERT_TRUE(from_g.has_value());
-  EXPECT_EQ(from_g->payload, gen_src.payload);
+  ASSERT_TRUE(from_g.has_value()) << from_g.error().what();
+  EXPECT_EQ(from_g->payload["flag"], true);
+  EXPECT_EQ(from_g->payload["num"], -42);
+  EXPECT_DOUBLE_EQ(from_g->payload["dbl"].get<double>(), 1.5);
+  EXPECT_TRUE(from_g->payload["nil"].is_null());
+  ASSERT_TRUE(from_g->payload["bin"].is_string());
+  EXPECT_EQ(from_g->payload["bin"], "QUJD");
   EXPECT_EQ(from_g->ordered_payload, gen_src.ordered_payload);
+}
+
+struct MockYamlNode {
+  std::string tag_;
+  std::string raw_;
+  const std::string& Tag() const { return tag_; }
+};
+
+struct MockYamlVar {
+  MockYamlNode node_;
+};
+
+struct MockYamlReader {
+  using InputArrayType = int;
+  using InputObjectType = int;
+  using InputVarType = MockYamlVar;
+  bool is_empty(const InputVarType&) const { return false; }
+  rfl::Result<InputObjectType> to_object(const InputVarType&) const {
+    return rfl::error("not object");
+  }
+  rfl::Result<InputArrayType> to_array(const InputVarType&) const {
+    return rfl::error("not array");
+  }
+  template <class ArrayReader>
+  std::optional<rfl::Error> read_array(const ArrayReader&,
+                                       const InputArrayType&) const {
+    return std::nullopt;
+  }
+  template <class ObjectReader>
+  std::optional<rfl::Error> read_object(const ObjectReader&,
+                                        const InputObjectType&) const {
+    return std::nullopt;
+  }
+  template <class T>
+  rfl::Result<T> to_basic_type(const InputVarType& _v) const {
+    if constexpr (std::is_same_v<T, std::string>) {
+      return _v.node_.raw_;
+    } else if constexpr (std::is_same_v<T, bool>) {
+      if (_v.node_.raw_ == "true") return true;
+      return rfl::error("not bool");
+    } else if constexpr (std::is_integral_v<T>) {
+      if (_v.node_.raw_ == "42") return static_cast<T>(42);
+      return rfl::error("not int");
+    } else {
+      return rfl::error("unsupported");
+    }
+  }
+};
+
+TEST(nlohmann, bridge2_yaml_quoted_tag_not_coerced) {
+  // Minimal mock matching yaml-cpp InputVarType's node_.Tag() == "!" contract
+  // to verify read_from_generic_reader does not coerce explicitly quoted
+  // YAML strings like "true" or "42" into bools/ints.
+  const MockYamlReader r;
+  const auto quoted_bool =
+      rfl::nlohmann::internal::read_from_generic_reader<nlohmann::json>(
+          r, MockYamlVar{MockYamlNode{"!", "true"}});
+  ASSERT_TRUE(quoted_bool.has_value());
+  EXPECT_TRUE(quoted_bool->is_string());
+  EXPECT_EQ(*quoted_bool, "true");
+
+  const auto quoted_int =
+      rfl::nlohmann::internal::read_from_generic_reader<nlohmann::json>(
+          r, MockYamlVar{MockYamlNode{"!", "42"}});
+  ASSERT_TRUE(quoted_int.has_value());
+  EXPECT_TRUE(quoted_int->is_string());
+  EXPECT_EQ(*quoted_int, "42");
+
+  const auto unquoted_bool =
+      rfl::nlohmann::internal::read_from_generic_reader<nlohmann::json>(
+          r, MockYamlVar{MockYamlNode{"?", "true"}});
+  ASSERT_TRUE(unquoted_bool.has_value());
+  EXPECT_TRUE(unquoted_bool->is_boolean());
+  EXPECT_EQ(*unquoted_bool, true);
 }
 
 #ifdef REFLECTCPP_HAS_JSON
@@ -204,14 +379,18 @@ TEST(nlohmann, bridge2_dynamic_fields_rfl_json_and_schema) {
   ordered["m"] = nlohmann::ordered_json::array({true, nullptr, 2.25, "str"});
 
   const WithDynamicFields src{
-      "yyjson-fast-path", {{"u64", kHugeU64}, {"nested", {{"k", "v"}}}},
+      "yyjson-fast-path",
+      {{"u64", kHugeU64},
+       {"nested", {{"k", "v"}}},
+       {"bin", nlohmann::json::binary({'A', 'B', 'C'})}},
       ordered};
   const auto parsed =
       rfl::json::read<WithDynamicFields>(rfl::json::write(src));
   ASSERT_TRUE(parsed.has_value()) << parsed.error().what();
-  EXPECT_EQ(parsed->payload, src.payload);
   EXPECT_TRUE(parsed->payload["u64"].is_number_unsigned());
   EXPECT_EQ(parsed->payload["u64"].get<uint64_t>(), kHugeU64);
+  EXPECT_EQ(parsed->payload["nested"], src.payload["nested"]);
+  EXPECT_EQ(parsed->payload["bin"], "QUJD");
   EXPECT_EQ(parsed->ordered_payload, src.ordered_payload);
   EXPECT_EQ(object_keys(parsed->ordered_payload),
             (std::vector<std::string>{"z", "a", "m"}));

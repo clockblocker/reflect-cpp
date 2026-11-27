@@ -12,8 +12,19 @@
 
 #include "../Bytestring.hpp"
 #include "../Result.hpp"
+#include "../Vectorstring.hpp"
 #include "../always_false.hpp"
 #include "../internal/base64.hpp"
+
+static_assert(
+    (NLOHMANN_JSON_VERSION_MAJOR > 3) ||
+        (NLOHMANN_JSON_VERSION_MAJOR == 3 &&
+         NLOHMANN_JSON_VERSION_MINOR > 11) ||
+        (NLOHMANN_JSON_VERSION_MAJOR == 3 &&
+         NLOHMANN_JSON_VERSION_MINOR == 11 &&
+         NLOHMANN_JSON_VERSION_PATCH >= 3),
+    "reflect-cpp requires nlohmann/json >= 3.11.3 (11-parameter "
+    "nlohmann::basic_json template with CustomBaseClass).");
 
 namespace rfl::nlohmann {
 
@@ -40,6 +51,8 @@ inline constexpr bool is_basic_json_v =
 /// Guards every type check via get_ptr/predicates so it never throws.
 template <class BasicJson = ::nlohmann::json>
 struct Reader {
+  using BasicJsonType = BasicJson;
+
   struct InputArray { const BasicJson* val_ = nullptr; };
   struct InputObject { const BasicJson* val_ = nullptr; };
   struct InputVar { const BasicJson* val_ = nullptr; };
@@ -64,7 +77,7 @@ struct Reader {
     if (!_obj.val_ || !_obj.val_->is_object()) {
       return error("Could not cast to object.");
     }
-    const auto it = _obj.val_->find(_name);
+    const auto it = _obj.val_->find(typename BasicJson::string_t(_name));
     if (it == _obj.val_->end()) {
       return error("Object contains no field named '" + _name + "'.");
     }
@@ -119,9 +132,42 @@ struct Reader {
       return p ? rfl::Result<T>(std::string(*p))
                : error("Could not cast to string.");
     } else if constexpr (std::is_same_v<U, Bytestring>) {
+      if (_var.val_->is_binary()) {
+        const auto& bin = _var.val_->get_binary();
+        Bytestring out;
+        out.reserve(bin.size());
+        for (const auto b : bin) {
+          out.push_back(static_cast<std::byte>(b));
+        }
+        return out;
+      }
       const auto* p = _var.val_->template get_ptr<const StrT*>();
-      return p ? internal::decode_base64(std::string_view(*p))
+      return p ? ::rfl::internal::decode_base64(std::string_view(*p))
                : error("Could not cast to a Base64 string.");
+    } else if constexpr (std::is_same_v<U, Vectorstring>) {
+      if (_var.val_->is_binary()) {
+        const auto& bin = _var.val_->get_binary();
+        Vectorstring out;
+        out.reserve(bin.size());
+        for (const auto b : bin) {
+          out.push_back(static_cast<char>(b));
+        }
+        return out;
+      }
+      const auto* p = _var.val_->template get_ptr<const StrT*>();
+      if (!p) {
+        return error("Could not cast to a Base64 string.");
+      }
+      return ::rfl::internal::decode_base64(std::string_view(*p))
+          .transform([](const Bytestring& _bytes) {
+            Vectorstring out;
+            out.reserve(_bytes.size());
+            for (const auto b : _bytes) {
+              out.push_back(
+                  static_cast<char>(std::to_integer<unsigned char>(b)));
+            }
+            return out;
+          });
     } else if constexpr (std::is_same_v<U, bool>) {
       const auto* p = _var.val_->template get_ptr<const BoolT*>();
       return p ? rfl::Result<T>(static_cast<bool>(*p))
@@ -186,6 +232,16 @@ struct Reader {
     return error("Custom constructors are not supported for nlohmann::json.");
   }
 };
+
+template <class T>
+struct is_nlohmann_reader : std::false_type {};
+
+template <class BasicJson>
+struct is_nlohmann_reader<Reader<BasicJson>> : std::true_type {};
+
+template <class T>
+inline constexpr bool is_nlohmann_reader_v =
+    is_nlohmann_reader<std::remove_cvref_t<T>>::value;
 
 }  // namespace rfl::nlohmann
 

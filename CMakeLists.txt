@@ -16,7 +16,7 @@ option(REFLECTCPP_CEREAL "Enable Cereal support" ${REFLECTCPP_ALL_FORMATS})
 option(REFLECTCPP_CSV "Enable CSV support" ${REFLECTCPP_ALL_FORMATS})
 option(REFLECTCPP_FLEXBUFFERS "Enable flexbuffers support" ${REFLECTCPP_ALL_FORMATS})
 option(REFLECTCPP_MSGPACK "Enable msgpack support" ${REFLECTCPP_ALL_FORMATS})
-option(REFLECTCPP_NLOHMANN "Enable nlohmann/json support" OFF)
+option(REFLECTCPP_NLOHMANN "Enable nlohmann/json support" ${REFLECTCPP_ALL_FORMATS})
 option(REFLECTCPP_PARQUET "Enable parquet support" ${REFLECTCPP_ALL_FORMATS})
 option(REFLECTCPP_XML "Enable XML support" ${REFLECTCPP_ALL_FORMATS})
 option(REFLECTCPP_TOML "Enable TOML support" ${REFLECTCPP_ALL_FORMATS})
@@ -83,6 +83,7 @@ if (
     REFLECTCPP_CSV OR
     REFLECTCPP_FLEXBUFFERS OR
     REFLECTCPP_MSGPACK OR
+    REFLECTCPP_NLOHMANN OR
     REFLECTCPP_PARQUET OR
     REFLECTCPP_XML OR
     REFLECTCPP_TOML OR
@@ -157,6 +158,10 @@ if (REFLECTCPP_USE_VCPKG)
 
     if (REFLECTCPP_MSGPACK OR REFLECTCPP_CHECK_HEADERS)
         list(APPEND VCPKG_MANIFEST_FEATURES "msgpack")
+    endif()
+
+    if (REFLECTCPP_NLOHMANN OR REFLECTCPP_CHECK_HEADERS)
+        list(APPEND VCPKG_MANIFEST_FEATURES "nlohmann")
     endif()
 
     if (REFLECTCPP_PARQUET OR REFLECTCPP_CHECK_HEADERS)
@@ -406,7 +411,7 @@ endif ()
 
 if (REFLECTCPP_NLOHMANN OR REFLECTCPP_CHECK_HEADERS)
     if (NOT TARGET nlohmann_json::nlohmann_json)
-        find_package(nlohmann_json CONFIG REQUIRED)
+        find_package(nlohmann_json 3.11.3 CONFIG REQUIRED)
     endif ()
     target_link_libraries(reflectcpp PUBLIC nlohmann_json::nlohmann_json)
 endif ()

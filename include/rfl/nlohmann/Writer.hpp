@@ -6,8 +6,10 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 #include "../Bytestring.hpp"
+#include "../Vectorstring.hpp"
 #include "../always_false.hpp"
 #include "../internal/base64.hpp"
 
@@ -17,6 +19,8 @@ namespace rfl::nlohmann {
 /// Preserves insertion order for nlohmann::ordered_json.
 template <class BasicJson = ::nlohmann::json>
 struct Writer {
+  using BasicJsonType = BasicJson;
+
   struct OutputArray { BasicJson* val_ = nullptr; };
   struct OutputObject { BasicJson* val_ = nullptr; };
   struct OutputVar {
@@ -37,8 +41,9 @@ struct Writer {
     return OutputArrayType{&root_};
   }
 
-  OutputObjectType object_as_root(const size_t) const {
+  OutputObjectType object_as_root(const size_t _size) const {
     root_ = BasicJson::object();
+    reserve_object(root_, _size);
     return OutputObjectType{&root_};
   }
 
@@ -64,23 +69,26 @@ struct Writer {
   OutputArrayType add_array_to_object(const std::string_view& _name,
                                       const size_t _size,
                                       OutputObjectType* _parent) const {
-    auto& child = (*_parent->val_)[typename BasicJson::string_t(_name)] =
-        BasicJson::array();
+    auto& child = emplace_in_object(
+        *_parent->val_, _name, [] { return BasicJson::array(); });
     reserve_array(child, _size);
     return OutputArrayType{&child};
   }
 
-  OutputObjectType add_object_to_array(const size_t,
+  OutputObjectType add_object_to_array(const size_t _size,
                                        OutputArrayType* _parent) const {
     _parent->val_->push_back(BasicJson::object());
-    return OutputObjectType{&_parent->val_->back()};
+    auto& child = _parent->val_->back();
+    reserve_object(child, _size);
+    return OutputObjectType{&child};
   }
 
   OutputObjectType add_object_to_object(const std::string_view& _name,
-                                        const size_t,
+                                        const size_t _size,
                                         OutputObjectType* _parent) const {
-    auto& child = (*_parent->val_)[typename BasicJson::string_t(_name)] =
-        BasicJson::object();
+    auto& child = emplace_in_object(
+        *_parent->val_, _name, [] { return BasicJson::object(); });
+    reserve_object(child, _size);
     return OutputObjectType{&child};
   }
 
@@ -95,8 +103,8 @@ struct Writer {
   OutputVarType add_value_to_object(const std::string_view& _name,
                                     const T& _var,
                                     OutputObjectType* _parent) const {
-    auto& slot = (*_parent->val_)[typename BasicJson::string_t(_name)] =
-        to_basic_json(_var);
+    auto& slot = emplace_in_object(
+        *_parent->val_, _name, [&_var] { return to_basic_json(_var); });
     return OutputVarType(&slot);
   }
 
@@ -107,7 +115,8 @@ struct Writer {
 
   OutputVarType add_null_to_object(const std::string_view& _name,
                                    OutputObjectType* _parent) const {
-    auto& slot = (*_parent->val_)[typename BasicJson::string_t(_name)] = nullptr;
+    auto& slot =
+        emplace_in_object(*_parent->val_, _name, [] { return BasicJson(nullptr); });
     return OutputVarType(&slot);
   }
 
@@ -125,7 +134,8 @@ struct Writer {
   OutputVarType add_raw_to_object(const std::string_view& _name,
                                   const BasicJson& _val,
                                   OutputObjectType* _parent) const {
-    auto& slot = (*_parent->val_)[typename BasicJson::string_t(_name)] = _val;
+    auto& slot = emplace_in_object(
+        *_parent->val_, _name, [&_val] { return BasicJson(_val); });
     return OutputVarType(&slot);
   }
 
@@ -135,6 +145,24 @@ struct Writer {
   const BasicJson& root() const noexcept { return root_; }
 
  private:
+  template <class MakeValue>
+  static BasicJson& emplace_in_object(BasicJson& _obj,
+                                      const std::string_view _name,
+                                      MakeValue&& _make_value) {
+    if constexpr (requires(BasicJson& j, typename BasicJson::string_t k) {
+                    j.emplace(std::move(k), _make_value());
+                  }) {
+      auto [it, inserted] =
+          _obj.emplace(typename BasicJson::string_t(_name), _make_value());
+      if (!inserted) {
+        it.value() = _make_value();
+      }
+      return it.value();
+    } else {
+      return _obj[typename BasicJson::string_t(_name)] = _make_value();
+    }
+  }
+
   static void reserve_array(BasicJson& _arr, const size_t _size) {
     if (_size == 0) return;
     if constexpr (requires(typename BasicJson::array_t& a, size_t n) {
@@ -145,6 +173,16 @@ struct Writer {
     }
   }
 
+  static void reserve_object(BasicJson& _obj, const size_t _size) {
+    if (_size == 0) return;
+    if constexpr (requires(typename BasicJson::object_t& o, size_t n) {
+                    o.reserve(n);
+                  }) {
+      if (auto* map = _obj.template get_ptr<typename BasicJson::object_t*>())
+        map->reserve(_size);
+    }
+  }
+
   template <class T>
   static BasicJson to_basic_json(const T& _var) {
     using U = std::remove_cvref_t<T>;
@@ -152,7 +190,15 @@ struct Writer {
       return BasicJson(typename BasicJson::string_t(_var));
     } else if constexpr (std::is_same_v<U, Bytestring>) {
       return BasicJson(
-          typename BasicJson::string_t(internal::encode_base64(_var)));
+          typename BasicJson::string_t(::rfl::internal::encode_base64(_var)));
+    } else if constexpr (std::is_same_v<U, Vectorstring>) {
+      Bytestring bytes;
+      bytes.reserve(_var.size());
+      for (const char c : _var) {
+        bytes.push_back(static_cast<std::byte>(static_cast<unsigned char>(c)));
+      }
+      return BasicJson(
+          typename BasicJson::string_t(::rfl::internal::encode_base64(bytes)));
     } else if constexpr (std::is_same_v<U, bool>) {
       return BasicJson(static_cast<typename BasicJson::boolean_t>(_var));
     } else if constexpr (std::is_floating_point_v<U>) {
@@ -169,6 +215,16 @@ struct Writer {
 
   mutable BasicJson root_;
 };
+
+template <class T>
+struct is_nlohmann_writer : std::false_type {};
+
+template <class BasicJson>
+struct is_nlohmann_writer<Writer<BasicJson>> : std::true_type {};
+
+template <class T>
+inline constexpr bool is_nlohmann_writer_v =
+    is_nlohmann_writer<std::remove_cvref_t<T>>::value;
 
 }  // namespace rfl::nlohmann
 

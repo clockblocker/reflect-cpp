@@ -142,6 +142,15 @@
         }
       ]
     },
+    "nlohmann": {
+      "description": "Enable nlohmann/json support",
+      "dependencies": [
+        {
+          "name": "nlohmann-json",
+          "version>=": "3.11.3"
+        }
+      ]
+    },
     "parquet": {
       "description": "Enable parquet support",
       "dependencies": [

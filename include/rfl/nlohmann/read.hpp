@@ -12,7 +12,7 @@ namespace rfl::nlohmann {
 /// Parses a C++ object from a nlohmann::basic_json value using reflection.
 template <class T, class... Ps, class BasicJson>
   requires is_basic_json_v<BasicJson>
-Result<internal::wrap_in_rfl_array_t<T>> read(const BasicJson& _j) {
+Result<::rfl::internal::wrap_in_rfl_array_t<T>> read(const BasicJson& _j) {
   const auto r = Reader<BasicJson>();
   return Parser<T, Processors<Ps...>, BasicJson>::read(
       r, typename Reader<BasicJson>::InputVarType(&_j));
