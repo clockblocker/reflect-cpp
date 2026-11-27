@@ -223,7 +223,8 @@ struct NamedTupleParser {
       build_object(_w, _tup, &arr, std::make_integer_sequence<int, size_>());
       _w.end_array(&arr);
     } else {
-      auto obj = ParentType::add_object(_w, _tup.num_fields(), _parent);
+      auto obj =
+          ParentType::add_object(_w, num_serialized_fields(_tup), _parent);
       build_object(_w, _tup, &obj, std::make_integer_sequence<int, size_>());
       _w.end_object(&obj);
     }
@@ -246,6 +247,19 @@ struct NamedTupleParser {
   }
 
  private:
+  static constexpr size_t num_skipped_serialization_fields() noexcept {
+    return (size_t{0} + ... +
+            (internal::skip_serialization_v<
+                 std::remove_cvref_t<typename FieldTypes::Type>>
+                 ? size_t{1}
+                 : size_t{0}));
+  }
+
+  static size_t num_serialized_fields(
+      const NamedTuple<FieldTypes...>& _tup) noexcept {
+    return _tup.num_fields() - num_skipped_serialization_fields();
+  }
+
   template <int _i>
   static void add_field_to_object(const W& _w,
                                   const NamedTuple<FieldTypes...>& _tup,

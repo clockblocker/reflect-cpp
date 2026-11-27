@@ -11,8 +11,11 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 #include "../Result.hpp"
+#include "../Tuple.hpp"
+#include "../internal/is_skip.hpp"
 
 #if defined(__APPLE__)
 #include <crt_externs.h>
@@ -230,14 +233,27 @@ struct Reader {
 
     if constexpr (has_view_type) {
       using ViewType = typename std::remove_cvref_t<ObjectReader>::ViewType;
-      using NamesType = typename ViewType::Names;
-      const auto names = NamesType::names();
-      for (const auto& name : names) {
-        const auto child_path = _obj.prefix.empty() ? name : _obj.prefix + name;
-        const auto var = InputVarType{.path = child_path};
-        if (!is_empty(var)) {
-          _object_reader.read(std::string_view(name), var);
-        }
+      using FieldsType = typename ViewType::Fields;
+      constexpr size_t num_fields = rfl::tuple_size_v<FieldsType>;
+      if constexpr (num_fields > 0) {
+        const auto read_one = [&]<int _i>(std::integral_constant<int, _i>) {
+          using FieldType =
+              std::remove_cvref_t<rfl::tuple_element_t<_i, FieldsType>>;
+          if constexpr (!internal::skip_deserialization_v<
+                            typename FieldType::Type>) {
+            const auto name = FieldType::name();
+            const auto child_path = _obj.prefix.empty()
+                                        ? std::string(name)
+                                        : _obj.prefix + std::string(name);
+            const auto var = InputVarType{.path = child_path};
+            if (!is_empty(var)) {
+              _object_reader.read(name, var);
+            }
+          }
+        };
+        [&]<int... _is>(std::integer_sequence<int, _is...>) {
+          (read_one(std::integral_constant<int, _is>{}), ...);
+        }(std::make_integer_sequence<int, num_fields>());
       }
 
     } else {
