@@ -271,11 +271,11 @@ struct Parser {
       } else if constexpr (internal::default_if_missing_v<ProcessorsType> ||
                            internal::has_unwrapped_default_val_v<T> ||
                            (internal::has_default_val_v<T> &&
-                            requires { T{}; })) {
+                            internal::is_safe_default_constructible_v<T>)) {
         // A DefaultVal inside rfl::Short, rfl::Positional, rfl::Description
-        // or rfl::Deprecated is filled in only if T{} exists. Otherwise T is
-        // read like a struct without DefaultVal fields, and those fields are
-        // required.
+        // or rfl::Deprecated is filled in only if T can be safely
+        // default-constructed. Otherwise T is read like a struct without
+        // DefaultVal fields, and those fields are required.
         return read_struct_with_default(_r, _var);
 
       } else {
@@ -684,9 +684,9 @@ struct Parser {
                         "default-constructible, because the default values "
                         "come from a default-constructed instance.");
         }
-        if constexpr ((internal::has_default_val_v<U> &&
-                       requires { DefaultsType{}; }) ||
-                      (internal::default_if_missing_v<ProcessorsType> &&
+        if constexpr (internal::has_unwrapped_default_val_v<U> ||
+                      ((internal::has_default_val_v<U> ||
+                        internal::default_if_missing_v<ProcessorsType>) &&
                        internal::is_safe_default_constructible_v<
                            DefaultsType>)) {
           try {

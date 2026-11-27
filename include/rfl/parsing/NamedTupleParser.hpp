@@ -54,8 +54,6 @@
 #include "../internal/is_attribute.hpp"
 #include "../internal/is_basic_type.hpp"
 #include "../internal/is_default_val_v.hpp"
-#include "../internal/is_deprecated.hpp"
-#include "../internal/is_description.hpp"
 #include "../internal/is_extra_fields.hpp"
 #include "../internal/is_skip.hpp"
 #include "../internal/no_extra_fields_v.hpp"
@@ -658,20 +656,20 @@ struct NamedTupleParser {
           } else if constexpr (internal::default_if_missing_v<ProcessorsType> &&
                                internal::CanWriteGeneric<U>) {
             const auto& field_val = *rfl::get<_i>(*_view);
-            bool skip_default = false;
-            if constexpr (std::is_pointer_v<U>) {
-              skip_default = (field_val == nullptr);
-            } else if constexpr (!is_required<U, false>()) {
-              skip_default = is_empty(field_val);
-            }
-            if (!skip_default) {
-              try {
+            try {
+              bool skip_default = false;
+              if constexpr (std::is_pointer_v<U>) {
+                skip_default = (field_val == nullptr);
+              } else if constexpr (!is_required<U, false>()) {
+                skip_default = is_empty(field_val);
+              }
+              if (!skip_default) {
                 auto default_val = rfl::to_generic<ProcessorsType>(field_val);
                 s = schema::Type{schema::Type::DefaultVal{
                     .type_ = Ref<schema::Type>::make(std::move(s)),
                     .default_value_ = std::move(default_val)}};
-              } catch (...) {
               }
+            } catch (...) {
             }
           }
         }

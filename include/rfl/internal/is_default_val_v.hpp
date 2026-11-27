@@ -27,22 +27,25 @@ class is_default_val<DefaultVal<T>> : public std::true_type {};
 // inside them, in any order, still provides the field's default value.
 
 template <internal::StringLiteral _new_name, class T>
-class is_default_val<Rename<_new_name, T>> : public is_default_val<T> {};
+class is_default_val<Rename<_new_name, T>>
+    : public is_default_val<std::remove_cvref_t<T>> {};
 
 template <internal::StringLiteral _short_name, class T>
-class is_default_val<Short<_short_name, T>> : public is_default_val<T> {};
+class is_default_val<Short<_short_name, T>>
+    : public is_default_val<std::remove_cvref_t<T>> {};
 
 template <class T>
-class is_default_val<Positional<T>> : public is_default_val<T> {};
+class is_default_val<Positional<T>>
+    : public is_default_val<std::remove_cvref_t<T>> {};
 
 template <internal::StringLiteral _description, class T>
-class is_default_val<Description<_description, T>> : public is_default_val<T> {
-};
+class is_default_val<Description<_description, T>>
+    : public is_default_val<std::remove_cvref_t<T>> {};
 
 template <internal::StringLiteral _deprecation_message,
           internal::StringLiteral _description, class T>
 class is_default_val<Deprecated<_deprecation_message, _description, T>>
-    : public is_default_val<T> {};
+    : public is_default_val<std::remove_cvref_t<T>> {};
 
 template <class T>
 constexpr bool is_default_val_v =
@@ -57,8 +60,8 @@ template <class T>
 class is_unwrapped_default_val<DefaultVal<T>> : public std::true_type {};
 
 template <internal::StringLiteral _new_name, class T>
-class is_unwrapped_default_val<Rename<_new_name, DefaultVal<T>>>
-    : public std::true_type {};
+class is_unwrapped_default_val<Rename<_new_name, T>>
+    : public is_unwrapped_default_val<std::remove_cvref_t<T>> {};
 
 template <class T>
 constexpr bool is_unwrapped_default_val_v = is_unwrapped_default_val<

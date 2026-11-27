@@ -638,4 +638,96 @@ TEST(json, test_schema_default_if_missing_aggregate_dmi_and_references) {
   EXPECT_NE(schema.find(R"("default":42)"), std::string::npos) << schema;
 }
 
+struct WrappedDefaultWithBoxNoDefault {
+  rfl::Description<"Worker threads", rfl::DefaultVal<int>> jobs = 4;
+  rfl::Box<NoDefaultCtor> boxed;
+};
+
+struct WrappedDefaultWithRefNoDefault {
+  rfl::Description<"Worker threads", rfl::DefaultVal<int>> jobs = 4;
+  rfl::Ref<NoDefaultCtor> ref;
+};
+
+struct WrappedDefaultWithCycle {
+  rfl::Description<"Worker threads", rfl::DefaultVal<int>> jobs = 4;
+  rfl::Box<WrappedDefaultWithCycle> next;
+};
+
+struct ThrowingOptionalReflection {
+  using ReflectionType = std::optional<int>;
+  ThrowingOptionalReflection() = default;
+  explicit ThrowingOptionalReflection(std::optional<int>) {}
+  std::optional<int> reflection() const {
+    throw std::runtime_error("reflection threw");
+  }
+};
+
+struct WithThrowingOptionalReflection {
+  int port = 8080;
+  ThrowingOptionalReflection opt;
+};
+
+TEST(json, test_wrapped_default_unsafe_construct_and_throwing_is_empty) {
+  static_assert(rfl::internal::is_unwrapped_default_val_v<
+                rfl::Rename<"a", rfl::Rename<"b", rfl::DefaultVal<int>>>>);
+  static_assert(
+      rfl::internal::is_default_val_v<
+          rfl::Description<"d", const rfl::DefaultVal<int>>>);
+
+  // Wrapped DefaultVal paired with Box<NoDefaultCtor> or Ref<NoDefaultCtor>
+  // must compile cleanly (falling back to non-default read and omitting
+  // defaults in schema) rather than instantiating Box()/Ref().
+  const auto box_ok = rfl::json::read<WrappedDefaultWithBoxNoDefault>(
+      R"({"jobs":8,"boxed":5})");
+  ASSERT_TRUE(box_ok.has_value()) << box_ok.error().what();
+  EXPECT_EQ(box_ok->jobs().value(), 8);
+  EXPECT_EQ(box_ok->boxed->v, 5);
+  EXPECT_FALSE(
+      rfl::json::read<WrappedDefaultWithBoxNoDefault>(R"({"boxed":5})")
+          .has_value());
+
+  const auto box_schema = rfl::json::to_schema<WrappedDefaultWithBoxNoDefault>();
+  EXPECT_EQ(box_schema.find("\"default\""), std::string::npos) << box_schema;
+  const auto box_schema_dim =
+      rfl::json::to_schema<WrappedDefaultWithBoxNoDefault,
+                           rfl::DefaultIfMissing>();
+  EXPECT_EQ(box_schema_dim.find("\"default\""), std::string::npos)
+      << box_schema_dim;
+
+  const auto ref_ok = rfl::json::read<WrappedDefaultWithRefNoDefault>(
+      R"({"jobs":8,"ref":5})");
+  ASSERT_TRUE(ref_ok.has_value()) << ref_ok.error().what();
+  EXPECT_EQ(ref_ok->jobs().value(), 8);
+  EXPECT_EQ(ref_ok->ref->v, 5);
+  const auto ref_schema = rfl::json::to_schema<WrappedDefaultWithRefNoDefault>();
+  EXPECT_EQ(ref_schema.find("\"default\""), std::string::npos) << ref_schema;
+  const auto ref_schema_dim =
+      rfl::json::to_schema<WrappedDefaultWithRefNoDefault,
+                           rfl::DefaultIfMissing>();
+  EXPECT_EQ(ref_schema_dim.find("\"default\""), std::string::npos)
+      << ref_schema_dim;
+
+  // Cyclic Box<Self> with wrapped DefaultVal must not stack-overflow.
+  const auto cyc_schema = rfl::json::to_schema<WrappedDefaultWithCycle>();
+  EXPECT_EQ(cyc_schema.find("\"default\""), std::string::npos) << cyc_schema;
+  const auto cyc_schema_dim =
+      rfl::json::to_schema<WrappedDefaultWithCycle, rfl::DefaultIfMissing>();
+  EXPECT_EQ(cyc_schema_dim.find("\"default\""), std::string::npos)
+      << cyc_schema_dim;
+
+  // Throwing .reflection() on a nullable ReflectionType field must be caught
+  // inside noexcept add_field_to_schema instead of calling std::terminate().
+  const auto opt_schema =
+      rfl::json::to_schema<WithThrowingOptionalReflection,
+                           rfl::DefaultIfMissing>();
+  EXPECT_NE(opt_schema.find(R"("port":{"type":"integer","default":8080})"),
+            std::string::npos)
+      << opt_schema;
+  EXPECT_NE(
+      opt_schema.find(
+          R"("opt":{"$ref":"#/$defs/test_json_schema_default_if_missing__ThrowingOptionalReflection"})"),
+      std::string::npos)
+      << opt_schema;
+}
+
 }  // namespace test_json_schema_default_if_missing
