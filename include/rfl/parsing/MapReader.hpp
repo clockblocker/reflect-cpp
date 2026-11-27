@@ -105,14 +105,18 @@ class MapReader {
                   "Expected an rvalue");
     const auto to_pair =
         [&](auto&& _key) -> Result<std::pair<KeyType, ValueType>> {
-      try {
-        using K = decltype(_key);
-        return std::make_pair(KeyType(std::forward<K>(_key)),
-                              std::move(_pair.second));
-      } catch (std::exception& e) {
-        if constexpr (internal::is_validator_v<KeyType>) {
-          return error(e.what(), ErrorKind::constraint_violation);
-        } else {
+      using K = decltype(_key);
+      if constexpr (internal::is_validator_v<KeyType>) {
+        return KeyType::from_value(std::forward<K>(_key))
+            .transform([&](KeyType&& _validated) {
+              return std::make_pair(std::move(_validated),
+                                    std::move(_pair.second));
+            });
+      } else {
+        try {
+          return std::make_pair(KeyType(std::forward<K>(_key)),
+                                std::move(_pair.second));
+        } catch (std::exception& e) {
           return error(e.what(), ErrorKind::invalid_value);
         }
       }

@@ -94,8 +94,14 @@ struct ObsLikeRequest {
 };
 
 TEST(json, test_error_code_builtin_validators_zero_alloc) {
-  // sizeof(Error) must not grow beyond std::string + ptr + small metadata.
-  static_assert(sizeof(rfl::Error) <= sizeof(std::string) + sizeof(void*) + 8);
+  // sizeof(Error) must match the pre-code layout exactly (builtin_code_ packs
+  // into ErrorKind's existing tail padding).
+  struct PreCodeErrorLayout {
+    std::string what_;
+    void* details_ptr_;
+    rfl::ErrorKind kind_;
+  };
+  static_assert(sizeof(rfl::Error) == sizeof(PreCodeErrorLayout));
 
   {
     const auto res = rfl::json::read<rfl::Validator<int, rfl::Minimum<5>>>("4");
@@ -330,6 +336,50 @@ TEST(json, test_error_code_nested_struct_obs_mapping_and_helpers) {
       rfl::json::read<std::vector<rfl::ErrorDetail>>(json_str);
   ASSERT_TRUE(roundtrip) << roundtrip.error().what();
   EXPECT_EQ(*roundtrip, details);
+
+  // Runtime null const char* and std::string_view 4-arg helper safety.
+  const char* null_code = nullptr;
+  const auto null_err =
+      rfl::error("bad", rfl::ErrorKind::constraint_violation, null_code);
+  EXPECT_EQ(null_err.error().code(), "");
+  EXPECT_FALSE(rfl::internal::has_allocated_details(null_err.error()));
+
+  const std::string_view sv_code = "sv_rule";
+  const auto sv_nested = rfl::error(
+      "bad", rfl::ErrorKind::constraint_violation, {"a"}, sv_code);
+  EXPECT_EQ(sv_nested.error().code(), "sv_rule");
+  EXPECT_EQ(sv_nested.error().details()[0].path, (Path{"a"}));
+
+  // Propagation through wrap_error (prefix-only zero-alloc), in_field, at, and
+  // attach_source_location.
+  auto leaf = rfl::Error("too small", rfl::ErrorKind::constraint_violation,
+                         "minimum");
+  EXPECT_FALSE(rfl::internal::has_allocated_details(leaf));
+  auto prefixed = rfl::parsing::wrap_error("ctx: ", std::move(leaf));
+  EXPECT_EQ(prefixed.code(), "minimum");
+  EXPECT_EQ(prefixed.kind(), rfl::ErrorKind::constraint_violation);
+  EXPECT_FALSE(rfl::internal::has_allocated_details(prefixed));
+
+  auto chained = std::move(prefixed).in_field("port").at(size_t{0});
+  ASSERT_EQ(chained.details().size(), 1u);
+  EXPECT_EQ(chained.details()[0].path, (Path{size_t{0}, "port"}));
+  EXPECT_EQ(chained.details()[0].code, "minimum");
+
+  auto located = rfl::parsing::attach_source_location(
+      rfl::SourceLocation{.line = 4, .column = 9, .exact = true},
+      std::move(chained));
+  ASSERT_EQ(located.details().size(), 1u);
+  EXPECT_EQ(located.details()[0].code, "minimum");
+  ASSERT_TRUE(located.details()[0].location.has_value());
+  EXPECT_EQ(located.details()[0].location->line, 4u);
+
+  // Validated map keys preserve ErrorDetail::code via MapReader.
+  using ValidKey = rfl::Validator<std::string, rfl::Size<rfl::Minimum<3>>>;
+  const auto bad_map_key =
+      rfl::json::read<std::map<ValidKey, int>>(R"({"ab": 1})");
+  ASSERT_FALSE(bad_map_key);
+  EXPECT_EQ(bad_map_key.error().kind(), rfl::ErrorKind::constraint_violation);
+  EXPECT_EQ(bad_map_key.error().code(), "size.minimum");
 }
 
 }  // namespace test_json_error_code
