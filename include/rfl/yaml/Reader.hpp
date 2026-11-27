@@ -23,6 +23,7 @@ namespace rfl {
 namespace yaml {
 
 struct Reader {
+  using UnsizedObjectReader = void;
   struct YAMLInputArray {
     /// @brief Constructs a YAMLInputArray from a YAML::Node.
     /// @param _node The YAML node representing a sequence.

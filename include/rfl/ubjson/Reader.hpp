@@ -32,6 +32,7 @@ namespace rfl::ubjson {
 
 class Reader {
  public:
+  using UnsizedObjectReader = void;
   struct UBJSONInputArray {
     jsoncons::json* val_;
   };

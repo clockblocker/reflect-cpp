@@ -20,6 +20,7 @@ namespace rfl {
 namespace flexbuf {
 
 struct Reader {
+  using UnsizedObjectReader = void;
   using InputArrayType = flexbuffers::Vector;
   using InputObjectType = flexbuffers::Map;
   using InputVarType = flexbuffers::Reference;

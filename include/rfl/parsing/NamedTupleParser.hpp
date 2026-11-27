@@ -365,6 +365,9 @@ struct NamedTupleParser {
   using SchemaType = std::conditional_t<_no_field_names, schema::Type::Tuple,
                                         schema::Type::Object>;
 
+  static constexpr bool ignore_empty_containers_ = _ignore_empty_containers;
+  static constexpr bool all_required_ = _all_required;
+  static constexpr bool no_field_names_ = _no_field_names;
   static constexpr size_t size_ = NamedTupleType::size();
 
   static_assert(NamedTupleType::pos_extra_fields() == -1 || !_no_field_names,

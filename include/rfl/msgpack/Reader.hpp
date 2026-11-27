@@ -18,6 +18,7 @@ namespace rfl {
 namespace msgpack {
 
 struct Reader {
+  using UnsizedObjectReader = void;
   using InputArrayType = msgpack_object_array;
   using InputObjectType = msgpack_object_map;
   using InputVarType = msgpack_object;

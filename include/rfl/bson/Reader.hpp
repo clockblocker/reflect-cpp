@@ -19,6 +19,7 @@ namespace bson {
 
 /// Please refer to https://mongoc.org/libbson/current/api.html
 struct Reader {
+  using UnsizedObjectReader = void;
   struct BSONInputArray {
     const bson_value_t* val_;
   };
