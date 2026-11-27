@@ -35,6 +35,12 @@ TEST(json_c_arrays_and_inheritance, test_direct_struct_c_arrays) {
   EXPECT_EQ(def_res->words[0], "a");
   EXPECT_EQ(def_res->words[1], "b");
   EXPECT_EQ(def_res->tail, 77);
+
+  // Partial-construction failure after non-trivial std::string[2] was populated
+  // exercises destroy_field_erased<std::string[2]> cleanup.
+  const auto bad_res = rfl::json::read<DirectCArrays>(
+      R"({"nums":[1,2,3],"words":["constructed","strings"],"tail":"not_an_int"})");
+  EXPECT_FALSE(bad_res.has_value());
 }
 
 }  // namespace test_direct_struct_c_arrays

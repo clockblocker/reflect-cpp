@@ -142,8 +142,6 @@ struct reader_needs_static_view_size<rfl::generic::Reader> : std::false_type {};
 template <>
 struct reader_needs_static_view_size<rfl::xml::Reader> : std::false_type {};
 template <>
-struct reader_needs_static_view_size<rfl::env::Reader> : std::false_type {};
-template <>
 struct reader_needs_static_view_size<rfl::yaml::Reader> : std::false_type {};
 template <>
 struct reader_needs_static_view_size<rfl::toml::Reader> : std::false_type {};
@@ -331,10 +329,22 @@ struct DirectDestroyGuard {
 
 }  // namespace detail
 
-template <class T, class ProcessorsType>
+template <class R>
+struct reader_supports_direct_struct : std::true_type {};
+
+/// `rfl::env::Reader::read_object` probes `ObjectReader::ViewType::Names` for
+/// struct-field environment lookups (public `rfl::env::read` always appends
+/// `ToAllCaps` anyway, so excluding `env::Reader` also keeps direct
+/// `rfl::env::Parser<T, Processors<>>` invocations safe).
+template <>
+struct reader_supports_direct_struct<rfl::env::Reader> : std::false_type {};
+
+template <class T, class ProcessorsType, class R = void>
 inline constexpr bool can_use_direct_struct_parser_v = [] {
   using Type = std::remove_cvref_t<T>;
-  if constexpr (!std::is_class_v<Type> || !std::is_aggregate_v<Type> ||
+  if constexpr (!reader_supports_direct_struct<
+                    std::remove_cvref_t<R>>::value ||
+                !std::is_class_v<Type> || !std::is_aggregate_v<Type> ||
                 num_fields<Type> == 0 ||
                 !detail::is_direct_identity_processor_pack<
                     ProcessorsType>::value) {

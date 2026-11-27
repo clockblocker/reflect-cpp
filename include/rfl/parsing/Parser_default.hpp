@@ -449,7 +449,7 @@ struct Parser {
         Parser<R, W, ReflectionType, ProcessorsType>::write(_w, r, _parent);
       }
 
-    } else if constexpr (can_use_direct_struct_parser_v<T, ProcessorsType>) {
+    } else if constexpr (can_use_direct_struct_parser_v<T, ProcessorsType, R>) {
       DirectStructParser<R, W, std::remove_cvref_t<T>, ProcessorsType>::write(
           _w, _var, _parent);
 
@@ -678,7 +678,8 @@ struct Parser {
         (*_definitions)[name] = Parser<R, W, typename Reflector<U>::ReflType,
                                        ProcessorsType>::to_schema(_definitions);
 
-      } else if constexpr (can_use_direct_struct_parser_v<U, ProcessorsType>) {
+      } else if constexpr (can_use_direct_struct_parser_v<U, ProcessorsType,
+                                                          R>) {
         const auto field_meta = [&]() -> std::span<const FieldMeta> {
           if constexpr (internal::has_field_metadata_v<MetaType>) {
             return internal::get_field_metadata<MetaType>();
@@ -796,7 +797,7 @@ struct Parser {
   /// might not be default-constructible.
   static RFL_ALWAYS_INLINE Result<T> read_struct(const R& _r,
                                                  const InputVarType& _var) {
-    if constexpr (can_use_direct_struct_parser_v<T, ProcessorsType>) {
+    if constexpr (can_use_direct_struct_parser_v<T, ProcessorsType, R>) {
       return DirectStructParser<R, W, std::remove_cvref_t<T>,
                                 ProcessorsType>::read(_r, _var);
     } else {
@@ -832,7 +833,7 @@ struct Parser {
       // satisfy its validator. The outer handler is for this line only.
       auto t = T{};
       try {
-        if constexpr (can_use_direct_struct_parser_v<T, ProcessorsType>) {
+        if constexpr (can_use_direct_struct_parser_v<T, ProcessorsType, R>) {
           auto err = DirectStructParser<R, W, std::remove_cvref_t<T>,
                                         ProcessorsType>::read_with_default(_r,
                                                                            _var,
