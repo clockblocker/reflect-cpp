@@ -18,6 +18,7 @@ Human-readable formats for configuration, data exchange, and legacy integration.
 
 {{< cards >}}
   {{< card link="json" title="JSON" icon="book-open" subtitle="Out-of-the-box support via yyjson. Standard for web APIs and data interchange." >}}
+  {{< card link="nlohmann" title="nlohmann/json" icon="book-open" subtitle="Header-only direct DOM interop with nlohmann::json and nlohmann::ordered_json." >}}
   {{< card link="yaml" title="YAML" icon="book-open" subtitle="Textual format with an emphasis on readability. Widely used in Docker, Kubernetes, and CI/CD configuration." >}}
   {{< card link="toml" title="TOML" icon="book-open" subtitle="Textual format with an emphasis on readability. Popular for application configuration in the Rust ecosystem." >}}
   {{< card link="csv" title="CSV" icon="book-open" subtitle="Tabular textual format. The universal interchange format for spreadsheets, databases, and ETL pipelines." >}}

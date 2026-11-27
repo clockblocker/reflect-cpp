@@ -45,6 +45,7 @@ class ReflectCppConan(ConanFile):
         "with_csv": [True, False],
         "with_flatbuffers": [True, False],
         "with_msgpack": [True, False],
+        "with_nlohmann": [True, False],
         "with_parquet": [True, False],
         "with_toml": [True, False],
         "with_ubjson": [True, False],
@@ -62,6 +63,7 @@ class ReflectCppConan(ConanFile):
         "with_csv": False,
         "with_flatbuffers": False,
         "with_msgpack": False,
+        "with_nlohmann": False,
         "with_parquet": False,
         "with_toml": False,
         "with_ubjson": False,
@@ -96,6 +98,8 @@ class ReflectCppConan(ConanFile):
             self.requires("flatbuffers/24.3.25", transitive_headers=True)
         if self.options.with_msgpack:
             self.requires("msgpack-c/6.0.0", transitive_headers=True)
+        if self.options.with_nlohmann:
+            self.requires("nlohmann_json/3.11.3", transitive_headers=True)
         if self.options.with_toml:
             self.requires("tomlplusplus/3.4.0", transitive_headers=True)
         if self.options.with_xml:
@@ -136,6 +140,7 @@ class ReflectCppConan(ConanFile):
         tc.cache_variables["REFLECTCPP_CSV"] = self.options.with_csv
         tc.cache_variables["REFLECTCPP_FLEXBUFFERS"] = self.options.with_flatbuffers
         tc.cache_variables["REFLECTCPP_MSGPACK"] = self.options.with_msgpack
+        tc.cache_variables["REFLECTCPP_NLOHMANN"] = self.options.with_nlohmann
         tc.cache_variables["REFLECTCPP_PARQUET"] = self.options.with_parquet
         tc.cache_variables["REFLECTCPP_TOML"] = self.options.with_toml
         tc.cache_variables["REFLECTCPP_XML"] = self.options.with_xml
