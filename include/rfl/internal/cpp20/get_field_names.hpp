@@ -14,6 +14,7 @@
 #include "../concat_literals.hpp"
 #include "../is_flatten_field.hpp"
 #include "../is_rename.hpp"
+#include "../is_tagged_union.hpp"
 #include "get_ith_field_from_fake_object.hpp"
 #include "num_fields.hpp"
 
@@ -92,7 +93,12 @@ consteval auto get_field_name() {
     using Name = typename Type::Name;
     return Name();
   } else if constexpr (is_flatten_field_v<Type>) {
-    return get_field_names<std::remove_cvref_t<typename Type::Type>>();
+    using Inner = remove_all_ptrs_t<typename Type::Type>;
+    if constexpr (is_tagged_union_based<Inner>) {
+      return rfl::Literal<>();
+    } else {
+      return get_field_names<std::remove_cvref_t<typename Type::Type>>();
+    }
   } else {
     return rfl::Literal<get_field_name_str_lit<T, ptr>()>();
   }
