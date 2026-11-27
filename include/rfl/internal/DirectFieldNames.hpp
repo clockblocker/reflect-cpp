@@ -17,9 +17,9 @@
 
 namespace rfl::internal {
 
-/// Non-templated runtime view over a struct's field names and lookup table.
-/// Allows readers and parsers to be instantiated once per `(R, W, Processors)`
-/// instead of once per struct `T`.
+/// Non-templated runtime view over a struct's field names and optional sorted
+/// lookup table (`lookup == nullptr` when `size <= 8`, where linear scan over
+/// `names` avoids emitting a separate sorted table in `.rodata`).
 struct DirectFieldNamesDesc {
   const std::string_view* names;
   const parsing::detail::FieldNameEntry* lookup;
@@ -28,8 +28,8 @@ struct DirectFieldNamesDesc {
   constexpr int find(const std::string_view _name) const noexcept {
     if (size <= 8) {
       for (std::size_t i = 0; i < size; ++i) {
-        if (lookup[i].name == _name) {
-          return lookup[i].field_idx;
+        if (names[i] == _name) {
+          return static_cast<int>(i);
         }
       }
       return -1;
@@ -65,9 +65,13 @@ struct DirectFieldNamesDesc {
 /// null-terminated.
 template <class T>
 struct DirectFieldNames {
-  static constexpr std::size_t size_ = num_fields<T>;
+  using Type = std::remove_cvref_t<T>;
+  static constexpr std::size_t size_ = num_fields<Type>;
 
  private:
+  // Intentionally invoked inside consteval helpers rather than stored as a
+  // `static constexpr` data member of raw `std::string_view`s so compiler
+  // `__PRETTY_FUNCTION__` strings are never retained in `.rodata`.
 #if __GNUC__
 #ifndef __clang__
   [[gnu::no_sanitize_undefined]]
@@ -79,15 +83,16 @@ struct DirectFieldNames {
 #ifdef __clang__
       return std::array<std::string_view, sizeof...(Is)>{
           cpp20::get_direct_field_name<
-              T, cpp20::wrap(cpp20::get_ith_field_from_fake_object<T, Is>())>()...};
+              Type, cpp20::wrap(
+                        cpp20::get_ith_field_from_fake_object<Type, Is>())>()...};
 #else
       return std::array<std::string_view, sizeof...(Is)>{
           cpp20::get_direct_field_name<
-              T, cpp20::get_ith_field_from_fake_object<T, Is>()>()...};
+              Type, cpp20::get_ith_field_from_fake_object<Type, Is>()>()...};
 #endif
 #else
       return std::array<std::string_view, sizeof...(Is)>{
-          cpp26::get_direct_field_name<T, Is>()...};
+          cpp26::get_direct_field_name<Type, Is>()...};
 #endif
     }(std::make_index_sequence<size_>{});
   }
@@ -136,15 +141,17 @@ struct DirectFieldNames {
     return names;
   }
 
-  static consteval auto make_lookup() {
-    std::array<parsing::detail::FieldNameEntry, size_> table{};
-    for (std::size_t i = 0; i < size_; ++i) {
-      table[i] = {names_[i], static_cast<int>(i)};
-    }
-    if constexpr (size_ > 8) {
+  static consteval auto make_sorted_lookup() {
+    if constexpr (size_ <= 8) {
+      return std::array<parsing::detail::FieldNameEntry, 0>{};
+    } else {
+      std::array<parsing::detail::FieldNameEntry, size_> table{};
+      for (std::size_t i = 0; i < size_; ++i) {
+        table[i] = {names_[i], static_cast<int>(i)};
+      }
       parsing::detail::sort_field_name_table(table);
+      return table;
     }
-    return table;
   }
 
   static consteval bool has_unique_names() {
@@ -169,11 +176,11 @@ struct DirectFieldNames {
 
  public:
   static constexpr auto names_ = make_names();
-  static constexpr auto lookup_ = make_lookup();
+  static constexpr auto lookup_ = make_sorted_lookup();
   static_assert(has_unique_names(), "Duplicate field names are not allowed.");
 
-  static constexpr DirectFieldNamesDesc desc_{names_.data(), lookup_.data(),
-                                              size_};
+  static constexpr DirectFieldNamesDesc desc_{
+      names_.data(), size_ <= 8 ? nullptr : lookup_.data(), size_};
 
   static constexpr int find(const std::string_view _name) noexcept {
     return desc_.find(_name);

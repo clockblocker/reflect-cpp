@@ -8,10 +8,10 @@
 
 namespace rfl::parsing {
 
-template <class R, class W, class ProcessorsType>
+template <class R, class W, class ProcessorsType, bool _with_default>
 class DirectStructViewReader;
 
-template <class R, class W, class ProcessorsType, std::size_t _size>
+template <class Base, std::size_t _size>
 class SizedDirectStructViewReader;
 
 /**
@@ -30,12 +30,12 @@ class is_view_reader<ViewReader<R, W, NamedTupleType, ProcessorsType>>
     : public std::true_type {};
 
 template <class R, class W, class ProcessorsType>
-class is_view_reader<DirectStructViewReader<R, W, ProcessorsType>>
+class is_view_reader<DirectStructViewReader<R, W, ProcessorsType, false>>
     : public std::true_type {};
 
-template <class R, class W, class ProcessorsType, std::size_t _size>
-class is_view_reader<SizedDirectStructViewReader<R, W, ProcessorsType, _size>>
-    : public std::true_type {};
+template <class Base, std::size_t _size>
+class is_view_reader<SizedDirectStructViewReader<Base, _size>>
+    : public is_view_reader<Base> {};
 
 template <class T>
 constexpr bool is_view_reader_v =

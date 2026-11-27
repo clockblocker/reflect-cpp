@@ -4386,7 +4386,8 @@ decltype(auto) apply_to_fields_impl(T& _t, F&& _f) {
 
 template <class T>
 decltype(auto) apply_to_fields(T& _t, auto&& _f) {
-  return apply_to_fields_impl<T, num_fields<T>>(_t, std::forward<decltype(_f)>(_f));
+  return apply_to_fields_impl<T, num_fields<std::remove_cv_t<T>>>(
+      _t, std::forward<decltype(_f)>(_f));
 }
 
 template <class T>

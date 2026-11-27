@@ -42,7 +42,7 @@ constexpr bool has_default_val_type_v() {
 }
 
 template <class T>
-  requires(std::is_class_v<T> && std::is_aggregate_v<T> && !std::is_union_v<T>)
+  requires(std::is_class_v<T> && std::is_aggregate_v<T>)
 struct HasDefaultVal<T> {
  private:
   static consteval bool compute() {

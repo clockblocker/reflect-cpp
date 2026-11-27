@@ -240,18 +240,6 @@ struct Reader {
         }
       }
 
-    } else if constexpr (requires { _object_reader.field_names(); }) {
-      for (const auto name : _object_reader.field_names()) {
-        std::string child_path;
-        child_path.reserve(_obj.prefix.size() + name.size());
-        child_path.append(_obj.prefix);
-        child_path.append(name);
-        const auto var = InputVarType{.path = std::move(child_path)};
-        if (!is_empty(var)) {
-          _object_reader.read(name, var);
-        }
-      }
-
     } else {
       for (char** env = get_environ(); *env != nullptr; ++env) {
         const std::string env_entry(*env);

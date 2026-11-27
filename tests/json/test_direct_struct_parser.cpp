@@ -385,4 +385,95 @@ TEST(json, test_direct_struct_exception_safety_guard_and_default_catch) {
   EXPECT_EQ(LiveCounter::constructed.load(), LiveCounter::destroyed.load());
 }
 
+struct DefaultValAndRequired {
+  int req_a;
+  rfl::DefaultVal<std::string> opt_b = "def_b";
+  int req_c;
+};
+
+static_assert(rfl::parsing::can_use_direct_struct_parser_v<
+              DefaultValAndRequired, rfl::Processors<>>);
+
+TEST(json, test_direct_struct_duplicate_keys_no_optionals_and_default_edges) {
+  // 1. Duplicate keys: first-wins by default, rejected under NoExtraFields
+  //    on BOTH uninitialized read() and DefaultIfMissing read_with_default().
+  const std::string dup_json = R"({"a":10,"b":"first","a":20})";
+  {
+    const auto r_uninit = rfl::json::read<PlainStruct>(dup_json);
+    ASSERT_TRUE(r_uninit.has_value()) << r_uninit.error().what();
+    EXPECT_EQ(r_uninit->a, 10);
+
+    const auto r_def =
+        rfl::json::read<PlainStruct, rfl::DefaultIfMissing>(dup_json);
+    ASSERT_TRUE(r_def.has_value()) << r_def.error().what();
+    EXPECT_EQ(r_def->a, 10);
+
+    const auto r_uninit_strict =
+        rfl::json::read<PlainStruct, rfl::NoExtraFields>(dup_json);
+    ASSERT_FALSE(r_uninit_strict.has_value());
+    EXPECT_NE(r_uninit_strict.error().what().find("Value named 'a' not used."),
+              std::string::npos);
+
+    const auto r_def_strict =
+        rfl::json::read<PlainStruct, rfl::DefaultIfMissing, rfl::NoExtraFields>(
+            dup_json);
+    ASSERT_FALSE(r_def_strict.has_value());
+    EXPECT_NE(r_def_strict.error().what().find("Value named 'a' not used."),
+              std::string::npos);
+  }
+
+  // 2. NoOptionals rejects missing std::optional field on direct path.
+  {
+    const auto missing_opt =
+        rfl::json::read<PlainStruct, rfl::NoOptionals>(R"({"a":1,"b":"hi"})");
+    ASSERT_FALSE(missing_opt.has_value());
+    EXPECT_NE(missing_opt.error().what().find("Field named 'c' not found."),
+              std::string::npos);
+
+    const auto present_null = rfl::json::read<PlainStruct, rfl::NoOptionals>(
+        R"({"a":1,"b":"hi","c":null})");
+    ASSERT_TRUE(present_null.has_value()) << present_null.error().what();
+    EXPECT_FALSE(present_null->c.has_value());
+  }
+
+  // 3. DefaultIfMissing + NoExtraFields + FailFast reports first unknown key.
+  {
+    const auto res =
+        rfl::json::read<PlainStruct, rfl::DefaultIfMissing, rfl::NoExtraFields,
+                        rfl::FailFast>(R"({"u1":1,"u2":2,"a":5})");
+    ASSERT_FALSE(res.has_value());
+    EXPECT_NE(res.error().what().find("Value named 'u1' not used."),
+              std::string::npos);
+    EXPECT_EQ(res.error().what().find("u2"), std::string::npos);
+  }
+
+  // 4. DefaultVal + NoFieldNames: omitted trailing required fails, excess fails,
+  //    and full array succeeds; also DefaultVal schema emits default value.
+  {
+    const auto ok = rfl::json::read<DefaultValAndRequired, rfl::NoFieldNames>(
+        R"([1,"custom",3])");
+    ASSERT_TRUE(ok.has_value()) << ok.error().what();
+    EXPECT_EQ(ok->req_a, 1);
+    EXPECT_EQ(ok->opt_b.value(), "custom");
+    EXPECT_EQ(ok->req_c, 3);
+
+    const auto missing_req =
+        rfl::json::read<DefaultValAndRequired, rfl::NoFieldNames>(R"([1])");
+    ASSERT_FALSE(missing_req.has_value());
+    EXPECT_NE(missing_req.error().what().find("Field named 'req_c' not found."),
+              std::string::npos);
+
+    const auto excess =
+        rfl::json::read<DefaultValAndRequired, rfl::NoFieldNames>(
+            R"([1,"x",3,99])");
+    ASSERT_FALSE(excess.has_value());
+    EXPECT_NE(excess.error().what().find(
+                  "Expected a maximum of 3 fields, but got at least one more."),
+              std::string::npos);
+
+    const auto schema = rfl::json::to_schema<DefaultValAndRequired>();
+    EXPECT_NE(schema.find(R"("default":"def_b")"), std::string::npos);
+  }
+}
+
 }  // namespace test_direct_struct_parser

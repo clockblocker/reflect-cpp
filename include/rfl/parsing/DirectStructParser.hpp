@@ -7,26 +7,15 @@
 #include <memory>
 #include <optional>
 #include <span>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 
-#include "../AddTagsToVariants.hpp"
-#include "../AllowRawPtrs.hpp"
-#include "../DefaultIfMissing.hpp"
-#include "../DurationsAsCount.hpp"
-#include "../EnumNamesOnly.hpp"
-#include "../FailFast.hpp"
 #include "../Metadata.hpp"
 #include "../NamedTuple.hpp"
-#include "../NoExtraFields.hpp"
-#include "../NoFieldNames.hpp"
-#include "../NoOptionals.hpp"
 #include "../Processors.hpp"
 #include "../Result.hpp"
-#include "../UnderlyingEnums.hpp"
 #include "../internal/DirectFieldNames.hpp"
 #include "../internal/always_inline.hpp"
 #include "../internal/bind_to_tuple.hpp"
@@ -51,6 +40,22 @@
 #include "wrap_error.hpp"
 
 namespace rfl {
+// Forward-declare flag-only identity processors so DirectStructParser.hpp
+// avoids pulling in 10 processor headers unconditionally.
+struct AddNamespacedTagsToVariants;
+struct AddTagsToVariants;
+struct AllowRawPtrs;
+struct DefaultIfMissing;
+struct DurationsAsCount;
+struct EnumNamesOnly;
+struct FailFast;
+struct NoExtraFields;
+struct NoFieldNames;
+struct NoOptionals;
+struct UnderlyingEnums;
+
+// Forward-declare known named-field readers that never query
+// `ObjectReader::size()` as a `static constexpr` expression.
 namespace json {
 struct Reader;
 }
@@ -124,9 +129,9 @@ struct is_direct_identity_processor_pack<Processors<Ps...>>
 
 /// Known named-field readers that never query `ObjectReader::size()` as a
 /// `static constexpr` expression. For these readers we pass the non-`T`,
-/// non-`N` `DirectStructViewReader<R, W, ProcessorsType>`, so
+/// non-`N` `DirectStructViewReader<R, W, ProcessorsType, _with_default>`, so
 /// `R::read_object` is instantiated once per `(R, W, ProcessorsType)` per TU.
-/// Unknown/positional readers default to `SizedDirectStructViewReader<..., N>`.
+/// Unknown/positional readers default to `SizedDirectStructViewReader<Base, N>`.
 template <class R>
 struct reader_needs_static_view_size : std::true_type {};
 
@@ -159,19 +164,6 @@ template <class R>
 inline constexpr bool reader_needs_static_view_size_v =
     reader_needs_static_view_size<std::remove_cvref_t<R>>::value;
 
-template <class T>
-consteval bool direct_fields_are_supported() {
-  using Result = decltype(internal::apply_to_fields(
-      std::declval<T&>(), []<class... Fields>(Fields&...) {
-        return std::bool_constant<
-            ((!internal::is_field_v<Fields> &&
-              !internal::is_flatten_field_v<Fields> &&
-              !internal::is_extra_fields_v<Fields>) &&
-             ...)>{};
-      }));
-  return Result::value;
-}
-
 template <class... Fields>
 struct DirectFieldTypeList {};
 
@@ -181,20 +173,62 @@ using direct_field_type_list_t = decltype(internal::apply_to_fields(
       return DirectFieldTypeList<Fields...>{};
     }));
 
+template <class... Fields>
+consteval bool direct_field_list_is_supported(DirectFieldTypeList<Fields...>) {
+  return ((!internal::is_field_v<Fields> &&
+           !internal::is_flatten_field_v<Fields> &&
+           !internal::is_extra_fields_v<Fields>) &&
+          ...);
+}
+
+/// Non-template field-address collector wrappers. Unlike a generic variadic
+/// lambda `[](auto&... _refs)`, `FieldAddrCollector<Addr, IndexSeq>::operator()`
+/// is a non-template function keyed solely by field count `N` (shared across
+/// all `N`-field structs with zero `Fields...` pack mangling or DWARF bloat).
+struct MutableFieldAddr {
+  void* ptr;
+
+  template <class U>
+  RFL_ALWAYS_INLINE MutableFieldAddr(U& _u) noexcept
+      : ptr(const_cast<void*>(static_cast<const void*>(std::addressof(_u)))) {}
+};
+
+struct ConstFieldAddr {
+  const void* ptr;
+
+  template <class U>
+  RFL_ALWAYS_INLINE ConstFieldAddr(const U& _u) noexcept
+      : ptr(static_cast<const void*>(std::addressof(_u))) {}
+};
+
+template <class Addr, std::size_t>
+using FieldAddrAt = Addr;
+
+template <class Addr, class PtrT, class IndexSeq>
+struct FieldAddrCollector;
+
+template <class Addr, class PtrT, std::size_t... Is>
+struct FieldAddrCollector<Addr, PtrT, std::index_sequence<Is...>> {
+  RFL_ALWAYS_INLINE std::array<PtrT, sizeof...(Is)> operator()(
+      FieldAddrAt<Addr, Is>... _addrs) const noexcept {
+    return {_addrs.ptr...};
+  }
+};
+
 template <class T>
-inline auto collect_mutable_field_ptrs(T& _t) noexcept {
-  return internal::apply_to_fields(_t, [](auto&... _refs) noexcept {
-    return std::array<void*, sizeof...(_refs)>{const_cast<void*>(
-        static_cast<const void*>(std::addressof(_refs)))...};
-  });
+RFL_ALWAYS_INLINE auto collect_mutable_field_ptrs(T& _t) noexcept {
+  constexpr std::size_t n = num_fields<std::remove_cv_t<T>>;
+  return internal::apply_to_fields(
+      _t, FieldAddrCollector<MutableFieldAddr, void*,
+                             std::make_index_sequence<n>>{});
 }
 
 template <class T>
-inline auto collect_const_field_ptrs(const T& _t) noexcept {
-  return internal::apply_to_fields(_t, [](const auto&... _refs) noexcept {
-    return std::array<const void*, sizeof...(_refs)>{
-        static_cast<const void*>(std::addressof(_refs))...};
-  });
+RFL_ALWAYS_INLINE auto collect_const_field_ptrs(const T& _t) noexcept {
+  constexpr std::size_t n = num_fields<std::remove_cv_t<T>>;
+  return internal::apply_to_fields(
+      _t, FieldAddrCollector<ConstFieldAddr, const void*,
+                             std::make_index_sequence<n>>{});
 }
 
 /// Type-erased per-field thunks parameterized ONLY by individual field type
@@ -216,7 +250,9 @@ template <class R, class W, class FieldT, class ProcessorsType>
 void read_default_field_erased(const R& _r,
                                const typename R::InputVarType& _var,
                                const std::string_view _name, void* _field_ptr,
-                               FieldErrors<ProcessorsType>* _errors) {
+                               bool& /*_unused_set*/,
+                               FieldErrors<ProcessorsType>* _errors,
+                               const size_t /*_unused_reserve*/) {
   auto* ptr = static_cast<FieldT*>(_field_ptr);
   detail::assign_default_view_field<R, W, FieldT*, ProcessorsType>(
       _r, _var, _name, ptr, _errors);
@@ -270,15 +306,28 @@ void build_schema_field_erased(
 
 using DirectDestroyFn = void (*)(void*) noexcept;
 
+/// Destroys constructed fields in reverse member order.
 inline void destroy_direct_fields(const bool* _set, void* const* _field_ptrs,
                                   const DirectDestroyFn* _destroy_fns,
                                   const size_t _size) noexcept {
-  for (size_t i = 0; i < _size; ++i) {
-    if (_set[i] && _destroy_fns[i] != nullptr) {
-      _destroy_fns[i](_field_ptrs[i]);
+  for (size_t i = _size; i > 0; --i) {
+    const size_t idx = i - 1;
+    if (_set[idx] && _destroy_fns[idx] != nullptr) {
+      _destroy_fns[idx](_field_ptrs[idx]);
     }
   }
 }
+
+struct DirectDestroyGuard {
+  const bool* set;
+  void* const* field_ptrs;
+  const DirectDestroyFn* destroy_fns;
+  size_t size;
+
+  ~DirectDestroyGuard() noexcept {
+    destroy_direct_fields(set, field_ptrs, destroy_fns, size);
+  }
+};
 
 }  // namespace detail
 
@@ -286,32 +335,33 @@ template <class T, class ProcessorsType>
 inline constexpr bool can_use_direct_struct_parser_v = [] {
   using Type = std::remove_cvref_t<T>;
   if constexpr (!std::is_class_v<Type> || !std::is_aggregate_v<Type> ||
-                std::is_union_v<Type> || num_fields<Type> == 0 ||
+                num_fields<Type> == 0 ||
                 !detail::is_direct_identity_processor_pack<
                     ProcessorsType>::value) {
     return false;
   } else {
-    return detail::direct_fields_are_supported<Type>();
+    return detail::direct_field_list_is_supported(
+        detail::direct_field_type_list_t<Type>{});
   }
 }();
 
-/// Non-`T`, non-`N` direct view reader for uninitialized aggregate storage.
-/// Parameterized only by `(R, W, ProcessorsType)` so `R::read_object` is
-/// instantiated once per `(R, W, ProcessorsType)` across all structs in a TU.
-template <class R, class W, class ProcessorsType>
+/// Non-`T`, non-`N` direct view reader for both uninitialized (`_with_default =
+/// false`) and default-constructed (`_with_default = true`) aggregate storage.
+/// Parameterized only by `(R, W, ProcessorsType, _with_default)` so
+/// `R::read_object` is instantiated once per combination across all structs.
+template <class R, class W, class ProcessorsType, bool _with_default>
 class DirectStructViewReader {
  public:
   using InputVarType = typename R::InputVarType;
 
-  using ReadUninitFn = void (*)(const R&, const InputVarType&, std::string_view,
-                                void*, bool&, FieldErrors<ProcessorsType>*,
-                                size_t);
+  using ReadFieldFn = void (*)(const R&, const InputVarType&, std::string_view,
+                               void*, bool&, FieldErrors<ProcessorsType>*,
+                               size_t);
 
   DirectStructViewReader(const R* _r,
                          const internal::DirectFieldNamesDesc* _names,
-                         void* const* _field_ptrs,
-                         const ReadUninitFn* _read_fns, bool* _found,
-                         bool* _set,
+                         void* const* _field_ptrs, const ReadFieldFn* _read_fns,
+                         bool* _found, bool* _set, size_t* _found_count,
                          FieldErrors<ProcessorsType>* _errors) noexcept
       : r_(_r),
         names_(_names),
@@ -319,14 +369,11 @@ class DirectStructViewReader {
         read_fns_(_read_fns),
         found_(_found),
         set_(_set),
+        found_count_(_found_count),
         errors_(_errors) {}
 
   ~DirectStructViewReader() = default;
 
-  std::span<const std::string_view> field_names() const noexcept {
-    return names_->span();
-  }
-
   void read(const std::string_view& _name, const InputVarType& _var) const {
     if (should_stop_on_field_error<ProcessorsType>(*errors_)) return;
     bool already_assigned = false;
@@ -334,9 +381,12 @@ class DirectStructViewReader {
       const auto u = static_cast<size_t>(idx);
       if (!found_[u]) {
         found_[u] = true;
+        ++(*found_count_);
         already_assigned = true;
-        read_fns_[u](*r_, _var, names_->names[u], field_ptrs_[u], set_[u],
-                     errors_, names_->size);
+        bool dummy_set = false;
+        read_fns_[u](*r_, _var, names_->names[u], field_ptrs_[u],
+                     set_ != nullptr ? set_[u] : dummy_set, errors_,
+                     names_->size);
       }
     }
     if constexpr (internal::no_extra_fields_v<ProcessorsType>) {
@@ -345,10 +395,11 @@ class DirectStructViewReader {
           "Passing rfl::NoExtraFields to a schemaful format does not make "
           "sense, because schemaful formats cannot have extra fields.");
       if (!already_assigned) {
-        std::stringstream stream;
-        stream << "Value named '" << _name << "' not used.";
+        std::string msg = "Value named '";
+        msg.append(_name);
+        msg.append("' not used.");
         errors_->emplace_back(
-            make_nested_error(std::string(_name), stream.str()));
+            make_nested_error(std::string(_name), std::move(msg)));
       }
     }
   }
@@ -360,9 +411,12 @@ class DirectStructViewReader {
       const auto u = static_cast<size_t>(_index);
       if (!found_[u]) {
         found_[u] = true;
+        ++(*found_count_);
         already_assigned = true;
-        read_fns_[u](*r_, _var, names_->names[u], field_ptrs_[u], set_[u],
-                     errors_, names_->size);
+        bool dummy_set = false;
+        read_fns_[u](*r_, _var, names_->names[u], field_ptrs_[u],
+                     set_ != nullptr ? set_[u] : dummy_set, errors_,
+                     names_->size);
       }
     }
     if constexpr (internal::no_extra_fields_v<ProcessorsType>) {
@@ -371,10 +425,11 @@ class DirectStructViewReader {
           "Passing rfl::NoExtraFields to a schemaful format does not make "
           "sense, because schemaful formats cannot have extra fields.");
       if (!already_assigned) {
-        std::stringstream stream;
-        stream << "Value named '" << _index << "' not used.";
+        std::string msg = "Value named '";
+        msg.append(std::to_string(_index));
+        msg.append("' not used.");
         errors_->emplace_back(
-            make_nested_error(static_cast<size_t>(_index), stream.str()));
+            make_nested_error(static_cast<size_t>(_index), std::move(msg)));
       }
     }
   }
@@ -388,133 +443,29 @@ class DirectStructViewReader {
   const R* r_;
   const internal::DirectFieldNamesDesc* names_;
   void* const* field_ptrs_;
-  const ReadUninitFn* read_fns_;
+  const ReadFieldFn* read_fns_;
   bool* found_;
   bool* set_;
+  size_t* found_count_;
   FieldErrors<ProcessorsType>* errors_;
 };
 
-/// Thin static-size wrapper for positional/external readers requiring
-/// `static constexpr size_t ObjectReader::size()`.
-template <class R, class W, class ProcessorsType, std::size_t _size>
-class SizedDirectStructViewReader
-    : public DirectStructViewReader<R, W, ProcessorsType> {
- public:
-  using Base = DirectStructViewReader<R, W, ProcessorsType>;
-  using Base::Base;
-  static constexpr std::size_t size() noexcept { return _size; }
-};
-
-/// Non-`T`, non-`N` direct view reader for default-constructed storage.
-template <class R, class W, class ProcessorsType>
-class DirectStructViewReaderWithDefault {
- public:
-  using InputVarType = typename R::InputVarType;
-
-  using ReadDefaultFn = void (*)(const R&, const InputVarType&,
-                                 std::string_view, void*,
-                                 FieldErrors<ProcessorsType>*);
-
-  DirectStructViewReaderWithDefault(
-      const R* _r, const internal::DirectFieldNamesDesc* _names,
-      void* const* _field_ptrs, const ReadDefaultFn* _read_fns, bool* _found,
-      FieldErrors<ProcessorsType>* _errors) noexcept
-      : r_(_r),
-        names_(_names),
-        field_ptrs_(_field_ptrs),
-        read_fns_(_read_fns),
-        found_(_found),
-        errors_(_errors) {}
-
-  ~DirectStructViewReaderWithDefault() = default;
-
-  std::span<const std::string_view> field_names() const noexcept {
-    return names_->span();
-  }
-
-  void read(const std::string_view& _name, const InputVarType& _var) const {
-    if (should_stop_on_field_error<ProcessorsType>(*errors_)) return;
-    bool already_assigned = false;
-    if (const int idx = names_->find(_name); idx >= 0) {
-      const auto u = static_cast<size_t>(idx);
-      if (!found_[u]) {
-        found_[u] = true;
-        already_assigned = true;
-        read_fns_[u](*r_, _var, names_->names[u], field_ptrs_[u], errors_);
-      }
-    }
-    if constexpr (internal::no_extra_fields_v<ProcessorsType>) {
-      if (!already_assigned) {
-        std::stringstream stream;
-        stream << "Value named '" << std::string(_name)
-               << "' not used. Remove the rfl::NoExtraFields processor or add "
-                  "rfl::ExtraFields to avoid this error message.";
-        errors_->emplace_back(
-            make_nested_error(std::string(_name), stream.str()));
-      }
-    }
-  }
-
-  void read(const int _index, const InputVarType& _var) const {
-    if (should_stop_on_field_error<ProcessorsType>(*errors_)) return;
-    bool already_assigned = false;
-    if (_index >= 0 && static_cast<size_t>(_index) < names_->size) {
-      const auto u = static_cast<size_t>(_index);
-      if (!found_[u]) {
-        found_[u] = true;
-        already_assigned = true;
-        read_fns_[u](*r_, _var, names_->names[u], field_ptrs_[u], errors_);
-      }
-    }
-    if constexpr (internal::no_extra_fields_v<ProcessorsType>) {
-      if (!already_assigned) {
-        std::stringstream stream;
-        stream << "Value named '" << _index << "' not used.";
-        errors_->emplace_back(
-            make_nested_error(static_cast<size_t>(_index), stream.str()));
-      }
-    }
-  }
-
-  template <int i>
-  void read(std::integral_constant<int, i>, const InputVarType& _var) const {
-    read(i, _var);
-  }
-
- private:
-  const R* r_;
-  const internal::DirectFieldNamesDesc* names_;
-  void* const* field_ptrs_;
-  const ReadDefaultFn* read_fns_;
-  bool* found_;
-  FieldErrors<ProcessorsType>* errors_;
-};
-
-template <class R, class W, class ProcessorsType, std::size_t _size>
-class SizedDirectStructViewReaderWithDefault
-    : public DirectStructViewReaderWithDefault<R, W, ProcessorsType> {
- public:
-  using Base = DirectStructViewReaderWithDefault<R, W, ProcessorsType>;
-  using Base::Base;
-  static constexpr std::size_t size() noexcept { return _size; }
-};
-
-/// Non-`T`, non-`N` stripped-field-names array reader for uninitialized storage.
-template <class R, class W, class ProcessorsType>
+/// Non-`T`, non-`N` stripped-field-names array reader for both uninitialized
+/// and default-constructed aggregate storage.
+template <class R, class W, class ProcessorsType, bool _with_default>
 class DirectStructViewReaderStripped {
  public:
   using InputVarType = typename R::InputVarType;
 
-  using ReadUninitFn = void (*)(const R&, const InputVarType&, std::string_view,
-                                void*, bool&, FieldErrors<ProcessorsType>*,
-                                size_t);
+  using ReadFieldFn = void (*)(const R&, const InputVarType&, std::string_view,
+                               void*, bool&, FieldErrors<ProcessorsType>*,
+                               size_t);
 
-  DirectStructViewReaderStripped(const R* _r,
-                                 const internal::DirectFieldNamesDesc* _names,
-                                 void* const* _field_ptrs,
-                                 const ReadUninitFn* _read_fns, bool* _found,
-                                 bool* _set,
-                                 FieldErrors<ProcessorsType>* _errors) noexcept
+  DirectStructViewReaderStripped(
+      const R* _r, const internal::DirectFieldNamesDesc* _names,
+      void* const* _field_ptrs, const ReadFieldFn* _read_fns, bool* _found,
+      bool* _set, size_t* _found_count,
+      FieldErrors<ProcessorsType>* _errors) noexcept
       : i_(0),
         r_(_r),
         names_(_names),
@@ -522,6 +473,7 @@ class DirectStructViewReaderStripped {
         read_fns_(_read_fns),
         found_(_found),
         set_(_set),
+        found_count_(_found_count),
         errors_(_errors) {}
 
   ~DirectStructViewReaderStripped() = default;
@@ -531,14 +483,15 @@ class DirectStructViewReaderStripped {
       return std::nullopt;
     }
     if (i_ == names_->size) {
-      std::stringstream stream;
-      stream << "Expected a maximum of " << std::to_string(names_->size)
-             << " fields, but got at least one more.";
-      return Error(stream.str());
+      return Error("Expected a maximum of " + std::to_string(names_->size) +
+                   " fields, but got at least one more.");
     }
     found_[i_] = true;
-    read_fns_[i_](*r_, _var, names_->names[i_], field_ptrs_[i_], set_[i_],
-                  errors_, names_->size);
+    ++(*found_count_);
+    bool dummy_set = false;
+    read_fns_[i_](*r_, _var, names_->names[i_], field_ptrs_[i_],
+                  set_ != nullptr ? set_[i_] : dummy_set, errors_,
+                  names_->size);
     ++i_;
     return std::nullopt;
   }
@@ -548,76 +501,18 @@ class DirectStructViewReaderStripped {
   const R* r_;
   const internal::DirectFieldNamesDesc* names_;
   void* const* field_ptrs_;
-  const ReadUninitFn* read_fns_;
+  const ReadFieldFn* read_fns_;
   bool* found_;
   bool* set_;
+  size_t* found_count_;
   FieldErrors<ProcessorsType>* errors_;
 };
 
-template <class R, class W, class ProcessorsType, std::size_t _size>
-class SizedDirectStructViewReaderStripped
-    : public DirectStructViewReaderStripped<R, W, ProcessorsType> {
+/// Single static-size wrapper for positional/external readers requiring
+/// `static constexpr size_t ObjectReader::size()`.
+template <class Base, std::size_t _size>
+class SizedDirectStructViewReader : public Base {
  public:
-  using Base = DirectStructViewReaderStripped<R, W, ProcessorsType>;
-  using Base::Base;
-  static constexpr std::size_t size() noexcept { return _size; }
-};
-
-/// Non-`T`, non-`N` stripped-field-names array reader for default storage.
-template <class R, class W, class ProcessorsType>
-class DirectStructViewReaderWithDefaultStripped {
- public:
-  using InputVarType = typename R::InputVarType;
-
-  using ReadDefaultFn = void (*)(const R&, const InputVarType&,
-                                 std::string_view, void*,
-                                 FieldErrors<ProcessorsType>*);
-
-  DirectStructViewReaderWithDefaultStripped(
-      const R* _r, const internal::DirectFieldNamesDesc* _names,
-      void* const* _field_ptrs, const ReadDefaultFn* _read_fns, bool* _found,
-      FieldErrors<ProcessorsType>* _errors) noexcept
-      : i_(0),
-        r_(_r),
-        names_(_names),
-        field_ptrs_(_field_ptrs),
-        read_fns_(_read_fns),
-        found_(_found),
-        errors_(_errors) {}
-
-  ~DirectStructViewReaderWithDefaultStripped() = default;
-
-  std::optional<Error> read(const InputVarType& _var) const {
-    if (should_stop_on_field_error<ProcessorsType>(*errors_)) {
-      return std::nullopt;
-    }
-    if (i_ == names_->size) {
-      std::stringstream stream;
-      stream << "Expected a maximum of " << std::to_string(names_->size)
-             << " fields, but got at least one more.";
-      return Error(stream.str());
-    }
-    found_[i_] = true;
-    read_fns_[i_](*r_, _var, names_->names[i_], field_ptrs_[i_], errors_);
-    ++i_;
-    return std::nullopt;
-  }
-
- private:
-  mutable size_t i_;
-  const R* r_;
-  const internal::DirectFieldNamesDesc* names_;
-  void* const* field_ptrs_;
-  const ReadDefaultFn* read_fns_;
-  bool* found_;
-  FieldErrors<ProcessorsType>* errors_;
-};
-
-template <class R, class W, class ProcessorsType, std::size_t _size>
-class SizedDirectStructViewReaderWithDefaultStripped
-    : public DirectStructViewReaderWithDefaultStripped<R, W, ProcessorsType> {
- public:
-  using Base = DirectStructViewReaderWithDefaultStripped<R, W, ProcessorsType>;
   using Base::Base;
   static constexpr std::size_t size() noexcept { return _size; }
 };
@@ -625,23 +520,24 @@ class SizedDirectStructViewReaderWithDefaultStripped
 namespace detail {
 
 /// Non-`T`, non-`N` free runtime drivers — instantiated once per
-/// `(R, W, _no_field_names, ProcessorsType)` across all structs in a TU.
-
+/// `(R, W, _no_field_names, ProcessorsType, ReaderType)` across all structs.
 template <class R, class W, bool _no_field_names, class ProcessorsType,
-          class ReaderType, class ReadUninitFn, class MissingFn>
-std::optional<Error> run_direct_read_uninit(
+          class ReaderType, class ReadFieldFn, class MissingFn>
+std::optional<Error> run_direct_read(
     const R& _r, const typename R::InputVarType& _var,
     const internal::DirectFieldNamesDesc* _names, void* const* _field_ptrs,
-    const ReadUninitFn* _read_fns, const MissingFn* _missing_fns, bool* _found,
+    const ReadFieldFn* _read_fns, const MissingFn* _missing_fns, bool* _found,
     bool* _set) {
   FieldErrors<ProcessorsType> errors;
+  size_t found_count = 0;
+
   if constexpr (_no_field_names) {
     auto arr = _r.to_array(_var);
     if (!arr) [[unlikely]] {
       return arr.error();
     }
     const ReaderType reader(&_r, _names, _field_ptrs, _read_fns, _found, _set,
-                            &errors);
+                            &found_count, &errors);
     auto err = _r.read_array(reader, *arr);
     if (err) [[unlikely]] {
       return err;
@@ -652,67 +548,23 @@ std::optional<Error> run_direct_read_uninit(
       return obj.error();
     }
     const ReaderType reader(&_r, _names, _field_ptrs, _read_fns, _found, _set,
-                            &errors);
+                            &found_count, &errors);
     auto err = _r.read_object(reader, *obj);
     if (err) [[unlikely]] {
       return err;
     }
   }
 
-  if (!should_stop_on_field_error<ProcessorsType>(errors)) {
-    for (size_t i = 0; i < _names->size; ++i) {
-      _missing_fns[i](_names->names[i], _found[i], _field_ptrs[i], &_set[i],
-                      &errors, /*_value_initialize_default_vals=*/false);
-    }
-  }
-
-  if constexpr (internal::fail_fast_v<ProcessorsType>) {
-    return std::move(errors).error();
-  } else {
-    if (errors.size() != 0) [[unlikely]] {
-      return to_single_error(std::move(errors));
-    }
-    return std::nullopt;
-  }
-}
-
-template <class R, class W, bool _no_field_names, class ProcessorsType,
-          class ReaderType, class ReadDefaultFn, class MissingFn>
-std::optional<Error> run_direct_read_default(
-    const R& _r, const typename R::InputVarType& _var,
-    const internal::DirectFieldNamesDesc* _names, void* const* _field_ptrs,
-    const ReadDefaultFn* _read_fns, const MissingFn* _missing_fns,
-    bool* _found) {
-  FieldErrors<ProcessorsType> errors;
-  if constexpr (_no_field_names) {
-    auto arr = _r.to_array(_var);
-    if (!arr) [[unlikely]] {
-      return arr.error();
-    }
-    const ReaderType reader(&_r, _names, _field_ptrs, _read_fns, _found,
-                            &errors);
-    auto err = _r.read_array(reader, *arr);
-    if (err) [[unlikely]] {
-      return err;
-    }
-  } else {
-    auto obj = _r.to_object(_var);
-    if (!obj) [[unlikely]] {
-      return obj.error();
-    }
-    const ReaderType reader(&_r, _names, _field_ptrs, _read_fns, _found,
-                            &errors);
-    auto err = _r.read_object(reader, *obj);
-    if (err) [[unlikely]] {
-      return err;
-    }
-  }
-
-  if (_missing_fns != nullptr &&
+  // Happy-path fast exit: when every field was present in input, no missing
+  // field handler needs to run (eliminating N indirect calls per read).
+  if (_missing_fns != nullptr && found_count < _names->size &&
       !should_stop_on_field_error<ProcessorsType>(errors)) {
     for (size_t i = 0; i < _names->size; ++i) {
-      _missing_fns[i](_names->names[i], _found[i], _field_ptrs[i], nullptr,
-                      &errors, /*_value_initialize_default_vals=*/false);
+      if (!_found[i]) [[unlikely]] {
+        _missing_fns[i](_names->names[i], false, _field_ptrs[i],
+                        _set != nullptr ? &_set[i] : nullptr, &errors,
+                        /*_value_initialize_default_vals=*/false);
+      }
     }
   }
 
@@ -767,17 +619,6 @@ schema::Type run_direct_to_schema(
   return schema::Type{schema};
 }
 
-struct DirectDestroyGuard {
-  const bool* set;
-  void* const* field_ptrs;
-  const DirectDestroyFn* destroy_fns;
-  size_t size;
-
-  ~DirectDestroyGuard() noexcept {
-    destroy_direct_fields(set, field_ptrs, destroy_fns, size);
-  }
-};
-
 }  // namespace detail
 
 /// Direct aggregate parser that bypasses `rfl::NamedTuple` and `rfl::Tuple`
@@ -801,12 +642,9 @@ struct DirectStructParser {
   using SchemaType = std::conditional_t<no_field_names_, schema::Type::Tuple,
                                         schema::Type::Object>;
 
-  using ReadUninitFn = void (*)(const R&, const InputVarType&, std::string_view,
-                                void*, bool&, FieldErrors<ProcessorsType>*,
-                                size_t);
-  using ReadDefaultFn = void (*)(const R&, const InputVarType&,
-                                 std::string_view, void*,
-                                 FieldErrors<ProcessorsType>*);
+  using ReadFieldFn = void (*)(const R&, const InputVarType&, std::string_view,
+                               void*, bool&, FieldErrors<ProcessorsType>*,
+                               size_t);
   using MissingFn = void (*)(std::string_view, bool, void*, bool*,
                              FieldErrors<ProcessorsType>*, bool) noexcept;
   using WriteFn = void (*)(const W&, std::string_view, const void*,
@@ -819,40 +657,29 @@ struct DirectStructParser {
   static constexpr bool needs_static_size_ =
       detail::reader_needs_static_view_size_v<R>;
 
-  using UninitReaderType = std::conditional_t<
+  template <bool _with_default>
+  using BaseReaderType = std::conditional_t<
       no_field_names_,
-      std::conditional_t<
-          needs_static_size_,
-          SizedDirectStructViewReaderStripped<R, W, ProcessorsType, size_>,
-          DirectStructViewReaderStripped<R, W, ProcessorsType>>,
-      std::conditional_t<
-          needs_static_size_,
-          SizedDirectStructViewReader<R, W, ProcessorsType, size_>,
-          DirectStructViewReader<R, W, ProcessorsType>>>;
+      DirectStructViewReaderStripped<R, W, ProcessorsType, _with_default>,
+      DirectStructViewReader<R, W, ProcessorsType, _with_default>>;
 
-  using DefaultReaderType = std::conditional_t<
-      no_field_names_,
-      std::conditional_t<
-          needs_static_size_,
-          SizedDirectStructViewReaderWithDefaultStripped<R, W, ProcessorsType,
-                                                         size_>,
-          DirectStructViewReaderWithDefaultStripped<R, W, ProcessorsType>>,
-      std::conditional_t<
-          needs_static_size_,
-          SizedDirectStructViewReaderWithDefault<R, W, ProcessorsType, size_>,
-          DirectStructViewReaderWithDefault<R, W, ProcessorsType>>>;
+  template <bool _with_default>
+  using ReaderType = std::conditional_t<
+      needs_static_size_,
+      SizedDirectStructViewReader<BaseReaderType<_with_default>, size_>,
+      BaseReaderType<_with_default>>;
 
   template <class... Fields>
   static consteval auto make_read_uninit_table(
       detail::DirectFieldTypeList<Fields...>) noexcept {
-    return std::array<ReadUninitFn, sizeof...(Fields)>{
+    return std::array<ReadFieldFn, sizeof...(Fields)>{
         &detail::read_uninit_field_erased<R, W, Fields, ProcessorsType>...};
   }
 
   template <class... Fields>
   static consteval auto make_read_default_table(
       detail::DirectFieldTypeList<Fields...>) noexcept {
-    return std::array<ReadDefaultFn, sizeof...(Fields)>{
+    return std::array<ReadFieldFn, sizeof...(Fields)>{
         &detail::read_default_field_erased<R, W, Fields, ProcessorsType>...};
   }
 
@@ -908,31 +735,45 @@ struct DirectStructParser {
         make_read_uninit_table(detail::direct_field_type_list_t<T>{});
     static constexpr auto missing_fns =
         make_missing_table<false>(detail::direct_field_type_list_t<T>{});
-    static constexpr auto destroy_fns =
-        make_destroy_table(detail::direct_field_type_list_t<T>{});
 
     alignas(T) unsigned char buf[sizeof(T)]{};
     auto* ptr = internal::ptr_cast<T*>(&buf);
     const auto field_ptrs = detail::collect_mutable_field_ptrs(*ptr);
     std::array<bool, size_> found{};
     std::array<bool, size_> set{};
-    const detail::DirectDestroyGuard guard{set.data(), field_ptrs.data(),
-                                           destroy_fns.data(), size_};
 
-    auto err = detail::run_direct_read_uninit<R, W, no_field_names_,
-                                              ProcessorsType, UninitReaderType>(
-        _r, _var, &Names::desc_, field_ptrs.data(), read_fns.data(),
-        missing_fns.data(), found.data(), set.data());
-
-    if (err) [[unlikely]] {
-      return error(std::move(*err));
+    if constexpr (!std::is_trivially_destructible_v<T>) {
+      static constexpr auto destroy_fns =
+          make_destroy_table(detail::direct_field_type_list_t<T>{});
+      const detail::DirectDestroyGuard guard{set.data(), field_ptrs.data(),
+                                             destroy_fns.data(), size_};
+      auto err = detail::run_direct_read<R, W, no_field_names_, ProcessorsType,
+                                         ReaderType<false>>(
+          _r, _var, &Names::desc_, field_ptrs.data(), read_fns.data(),
+          missing_fns.data(), found.data(), set.data());
+      if (err) [[unlikely]] {
+        return error(std::move(*err));
+      }
+      return Result<T>(std::move(*ptr));
+    } else {
+      auto err = detail::run_direct_read<R, W, no_field_names_, ProcessorsType,
+                                         ReaderType<false>>(
+          _r, _var, &Names::desc_, field_ptrs.data(), read_fns.data(),
+          missing_fns.data(), found.data(), set.data());
+      if (err) [[unlikely]] {
+        return error(std::move(*err));
+      }
+      return Result<T>(std::move(*ptr));
     }
-    return Result<T>(std::move(*ptr));
   }
 
+  /// Marked `noexcept` to match `NamedTupleParser::read_view_with_default`,
+  /// preserving the invariant in `detail::move_assign_field` that updating a
+  /// live `const` field via destroy + placement-new cannot unwind and
+  /// double-destroy the member.
   static std::optional<Error> read_with_default(const R& _r,
                                                 const InputVarType& _var,
-                                                T* _target) {
+                                                T* _target) noexcept {
     static constexpr auto read_fns =
         make_read_default_table(detail::direct_field_type_list_t<T>{});
     const auto field_ptrs = detail::collect_mutable_field_ptrs(*_target);
@@ -946,10 +787,10 @@ struct DirectStructParser {
       missing_ptr = missing_fns.data();
     }
 
-    return detail::run_direct_read_default<R, W, no_field_names_,
-                                           ProcessorsType, DefaultReaderType>(
+    return detail::run_direct_read<R, W, no_field_names_, ProcessorsType,
+                                   ReaderType<true>>(
         _r, _var, &Names::desc_, field_ptrs.data(), read_fns.data(),
-        missing_ptr, found.data());
+        missing_ptr, found.data(), nullptr);
   }
 
   template <class P>
