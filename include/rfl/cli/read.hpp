@@ -16,6 +16,7 @@
 #include "ListDelimiter.hpp"
 #include "Parser.hpp"
 #include "Reader.hpp"
+#include "Settings.hpp"
 #include "options.hpp"
 #include "parse_argv.hpp"
 #include "resolve_args.hpp"
@@ -79,6 +80,7 @@ rfl::Result<bool> overlay_field_nested(FT& _field, const Reader& _r,
   if constexpr (rfl::internal::is_transparent_wrapper_v<RawFT>
                 || rfl::internal::is_short_v<RawFT>
                 || rfl::internal::is_positional_v<RawFT>
+                || rfl::internal::is_alias_v<RawFT>
                 || parsing::is_rename_v<RawFT>
                 || parsing::is_default_val_v<RawFT>) {
     return overlay_field_nested<typename RawFT::Type, ProcessorsType>(
@@ -382,6 +384,127 @@ rfl::Result<T> parse_and_read(const ParseFn& _parse) {
       });
 }
 
+template <class T, class... Ps, class ParseFn>
+rfl::Result<ReadIntoResult> parse_and_read_into_with_settings(
+    T& _target, const Settings& _settings, const ParseFn& _parse) {
+  using ProcessorsType = internal::cli_processors_t<Ps...>;
+  static_assert(!internal::has_app_v<ProcessorsType>,
+                "rfl::cli::App turns on --help and --version, which "
+                "rfl::cli::read_into cannot report. Call rfl::cli::read_app "
+                "instead.");
+  const auto valid = validate_settings(_settings);
+  if (!valid) {
+    return error(valid.error().what());
+  }
+  const auto options = apply_settings(
+      cached_options<T, ProcessorsType, /*_all_paths=*/true>(), _settings);
+  return check_short_names(options)
+      .and_then([&](bool) { return _parse(options); })
+      .and_then([&](ParsedArgs _parsed) {
+        return resolve_args(std::move(_parsed), options);
+      })
+      .and_then([&](ResolvedArgs _args) -> rfl::Result<ReadIntoResult> {
+        std::vector<std::string> provided;
+        provided.reserve(_args.values.size());
+        for (const auto& [key, _] : _args.values) {
+          provided.push_back(key);
+        }
+        const auto r = Reader(_settings.list_delimiter,
+                              _settings.keep_empty_items,
+                              std::move(_args.verbatim_list));
+        return overlay_into_struct<T, ProcessorsType>(_target, r, _args, "")
+            .transform([&](bool) {
+              return ReadIntoResult{std::move(provided),
+                                    std::move(_args.occurrences),
+                                    std::move(_args.detailed_occurrences)};
+            });
+      });
+}
+
+template <class T, class ProcessorsType>
+rfl::Result<ReadResult<T>> read_parsed_detailed_with_reader(
+    ParsedArgs _parsed, const Options& _options,
+    const std::optional<char> _delimiter, const bool _keep_empty_items) {
+  return resolve_args(std::move(_parsed), _options)
+      .and_then([&](auto _args) -> rfl::Result<ReadResult<T>> {
+        std::vector<std::string> provided;
+        provided.reserve(_args.values.size());
+        for (const auto& [key, _] : _args.values) {
+          provided.push_back(key);
+        }
+        const auto r = Reader(_delimiter, _keep_empty_items,
+                              std::move(_args.verbatim_list));
+        const auto var = CliVarType{&_args.values, "", std::nullopt,
+                                    &_args.later_occurrences};
+        return Parser<T, ProcessorsType>::read(r, var).transform(
+            [&](T&& _val) {
+              return ReadResult<T>{std::move(_val), std::move(provided),
+                                   std::move(_args.occurrences)};
+            });
+      });
+}
+
+template <class T, class ProcessorsType>
+rfl::Result<T> read_parsed_with_reader(ParsedArgs _parsed,
+                                       const Options& _options,
+                                       const std::optional<char> _delimiter,
+                                       const bool _keep_empty_items) {
+  return resolve_args(std::move(_parsed), _options)
+      .and_then([&](auto _args) -> rfl::Result<T> {
+        const auto r = Reader(_delimiter, _keep_empty_items,
+                              std::move(_args.verbatim_list));
+        const auto var = CliVarType{&_args.values, "", std::nullopt,
+                                    &_args.later_occurrences};
+        return Parser<T, ProcessorsType>::read(r, var);
+      });
+}
+
+template <class T, class... Ps, class ParseFn>
+rfl::Result<ReadResult<T>> parse_and_read_detailed_with_settings(
+    const Settings& _settings, const ParseFn& _parse) {
+  using ProcessorsType = internal::cli_processors_t<Ps...>;
+  static_assert(!internal::has_app_v<ProcessorsType>,
+                "rfl::cli::App turns on --help and --version, which "
+                "rfl::cli::read_detailed cannot report. Call rfl::cli::read_app "
+                "instead.");
+  const auto valid = validate_settings(_settings);
+  if (!valid) {
+    return error(valid.error().what());
+  }
+  const auto options = apply_settings(
+      cached_options<T, ProcessorsType, /*_all_paths=*/true>(), _settings);
+  return check_short_names(options)
+      .and_then([&](bool) { return _parse(options); })
+      .and_then([&](ParsedArgs _parsed) {
+        return read_parsed_detailed_with_reader<T, ProcessorsType>(
+            std::move(_parsed), options, _settings.list_delimiter,
+            _settings.keep_empty_items);
+      });
+}
+
+template <class T, class... Ps, class ParseFn>
+rfl::Result<T> parse_and_read_with_settings(const Settings& _settings,
+                                            const ParseFn& _parse) {
+  using ProcessorsType = internal::cli_processors_t<Ps...>;
+  static_assert(!internal::has_app_v<ProcessorsType>,
+                "rfl::cli::App turns on --help and --version, which "
+                "rfl::cli::read cannot report. Call rfl::cli::read_app "
+                "instead.");
+  const auto valid = validate_settings(_settings);
+  if (!valid) {
+    return error(valid.error().what());
+  }
+  const auto options = apply_settings(
+      cached_options<T, ProcessorsType, /*_all_paths=*/true>(), _settings);
+  return check_short_names(options)
+      .and_then([&](bool) { return _parse(options); })
+      .and_then([&](ParsedArgs _parsed) {
+        return read_parsed_with_reader<T, ProcessorsType>(
+            std::move(_parsed), options, _settings.list_delimiter,
+            _settings.keep_empty_items);
+      });
+}
+
 }  // namespace internal
 
 /// Parses a sequence of command-line arguments into a struct using reflection.
@@ -550,6 +673,141 @@ template <class... Ps, class T>
 rfl::Result<ReadIntoResult> read_into(T& _target, int argc, wchar_t* argv[]) {
   return read_into<Ps...>(_target, argc,
                           static_cast<const wchar_t* const*>(argv));
+}
+
+// --- Consolidated runtime `rfl::cli::Settings` overloads ---
+
+template <class T, class... Ps,
+          class R = std::initializer_list<std::string_view>>
+  requires internal::StringRange<R> || internal::WideStringRange<R>
+rfl::Result<T> read(R&& _args, const Settings& _settings) {
+  return internal::parse_and_read_with_settings<T, Ps...>(
+      _settings, [&](const auto& _options) {
+        return internal::parse_argv(std::forward<R>(_args), _options);
+      });
+}
+
+template <class T, class... Ps>
+rfl::Result<T> read(int argc, const char* const argv[],
+                    const Settings& _settings) {
+  return internal::parse_and_read_with_settings<T, Ps...>(
+      _settings, [&](const auto& _options) {
+        return internal::parse_argv(argc, argv, _options);
+      });
+}
+
+template <class T, class... Ps>
+rfl::Result<T> read(int argc, char* argv[], const Settings& _settings) {
+  return internal::parse_and_read_with_settings<T, Ps...>(
+      _settings, [&](const auto& _options) {
+        return internal::parse_argv(argc, argv, _options);
+      });
+}
+
+template <class T, class... Ps>
+rfl::Result<T> read(int argc, const wchar_t* const argv[],
+                    const Settings& _settings) {
+  return internal::parse_and_read_with_settings<T, Ps...>(
+      _settings, [&](const auto& _options) {
+        return internal::parse_argv(argc, argv, _options);
+      });
+}
+
+template <class T, class... Ps>
+rfl::Result<T> read(int argc, wchar_t* argv[], const Settings& _settings) {
+  return read<T, Ps...>(argc, static_cast<const wchar_t* const*>(argv),
+                        _settings);
+}
+
+template <class T, class... Ps,
+          class R = std::initializer_list<std::string_view>>
+  requires internal::StringRange<R> || internal::WideStringRange<R>
+rfl::Result<ReadResult<T>> read_detailed(R&& _args, const Settings& _settings) {
+  return internal::parse_and_read_detailed_with_settings<T, Ps...>(
+      _settings, [&](const auto& _options) {
+        return internal::parse_argv(std::forward<R>(_args), _options);
+      });
+}
+
+template <class T, class... Ps>
+rfl::Result<ReadResult<T>> read_detailed(int argc, const char* const argv[],
+                                         const Settings& _settings) {
+  return internal::parse_and_read_detailed_with_settings<T, Ps...>(
+      _settings, [&](const auto& _options) {
+        return internal::parse_argv(argc, argv, _options);
+      });
+}
+
+template <class T, class... Ps>
+rfl::Result<ReadResult<T>> read_detailed(int argc, char* argv[],
+                                         const Settings& _settings) {
+  return internal::parse_and_read_detailed_with_settings<T, Ps...>(
+      _settings, [&](const auto& _options) {
+        return internal::parse_argv(argc, argv, _options);
+      });
+}
+
+template <class T, class... Ps>
+rfl::Result<ReadResult<T>> read_detailed(int argc, const wchar_t* const argv[],
+                                         const Settings& _settings) {
+  return internal::parse_and_read_detailed_with_settings<T, Ps...>(
+      _settings, [&](const auto& _options) {
+        return internal::parse_argv(argc, argv, _options);
+      });
+}
+
+template <class T, class... Ps>
+rfl::Result<ReadResult<T>> read_detailed(int argc, wchar_t* argv[],
+                                         const Settings& _settings) {
+  return read_detailed<T, Ps...>(
+      argc, static_cast<const wchar_t* const*>(argv), _settings);
+}
+
+template <class... Ps, class T,
+          class R = std::initializer_list<std::string_view>>
+  requires internal::StringRange<R> || internal::WideStringRange<R>
+rfl::Result<ReadIntoResult> read_into(T& _target, R&& _args,
+                                      const Settings& _settings) {
+  return internal::parse_and_read_into_with_settings<T, Ps...>(
+      _target, _settings, [&](const auto& _options) {
+        return internal::parse_argv(std::forward<R>(_args), _options);
+      });
+}
+
+template <class... Ps, class T>
+rfl::Result<ReadIntoResult> read_into(T& _target, int argc,
+                                      const char* const argv[],
+                                      const Settings& _settings) {
+  return internal::parse_and_read_into_with_settings<T, Ps...>(
+      _target, _settings, [&](const auto& _options) {
+        return internal::parse_argv(argc, argv, _options);
+      });
+}
+
+template <class... Ps, class T>
+rfl::Result<ReadIntoResult> read_into(T& _target, int argc, char* argv[],
+                                      const Settings& _settings) {
+  return internal::parse_and_read_into_with_settings<T, Ps...>(
+      _target, _settings, [&](const auto& _options) {
+        return internal::parse_argv(argc, argv, _options);
+      });
+}
+
+template <class... Ps, class T>
+rfl::Result<ReadIntoResult> read_into(T& _target, int argc,
+                                      const wchar_t* const argv[],
+                                      const Settings& _settings) {
+  return internal::parse_and_read_into_with_settings<T, Ps...>(
+      _target, _settings, [&](const auto& _options) {
+        return internal::parse_argv(argc, argv, _options);
+      });
+}
+
+template <class... Ps, class T>
+rfl::Result<ReadIntoResult> read_into(T& _target, int argc, wchar_t* argv[],
+                                      const Settings& _settings) {
+  return read_into<Ps...>(_target, argc,
+                          static_cast<const wchar_t* const*>(argv), _settings);
 }
 
 }  // namespace rfl::cli

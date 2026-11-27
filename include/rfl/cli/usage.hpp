@@ -54,6 +54,7 @@
 #include "Opt.hpp"
 #include "OptionsFirst.hpp"
 #include "Reader.hpp"
+#include "Settings.hpp"
 #include "options.hpp"
 #include "resolve_args.hpp"
 
@@ -123,6 +124,9 @@ struct UsageArg {
   std::optional<std::string> default_value;
   /// Display-only default value hint (from rfl::DefaultHint or attr::DefaultHint).
   std::string default_hint;
+  /// Whether this argument was marked `rfl::Hidden` (omitted from `usage()`
+  /// output, preserved in `rfl::cli::describe()` metadata).
+  bool hidden = false;
   /// Optional help section header (from rfl::Group).
   std::string group;
 };
@@ -206,6 +210,7 @@ std::optional<std::string> format_default_value(
     }
   } else if constexpr (rfl::internal::is_short_v<U> ||
                        rfl::internal::is_positional_v<U> ||
+                       rfl::internal::is_alias_v<U> ||
                        rfl::internal::is_transparent_wrapper_v<U> ||
                        parsing::is_rename_v<U> ||
                        parsing::is_default_val_v<U> ||
@@ -518,6 +523,7 @@ struct usage_peel<Opt<T, Attrs...>, _outermost> {
 
 template <class T, bool _outermost>
   requires((rfl::internal::is_short_v<T> || rfl::internal::is_positional_v<T> ||
+            rfl::internal::is_alias_v<T> ||
             rfl::internal::is_transparent_wrapper_v<T> ||
             parsing::is_rename_v<T> || parsing::is_skip_v<T> ||
             parsing::is_commented_v<T>) &&
@@ -649,10 +655,12 @@ struct usage_peel<T, _outermost> {
 template <class ProcessorsType>
 class UsageWalker {
  public:
-  UsageWalker(const Options* _options, const std::optional<char> _delimiter)
+  UsageWalker(const Options* _options, const std::optional<char> _delimiter,
+              const bool _include_hidden = false)
       : options_(_options),
         optionals_are_required_(rfl::internal::no_optionals_v<ProcessorsType>),
-        delimiter_(_delimiter) {
+        delimiter_(_delimiter),
+        include_hidden_(_include_hidden) {
     short_names_.reserve(_options->short_options.size());
     for (const auto& [short_name, path] : _options->short_options) {
       short_names_.emplace_back(path, short_name);
@@ -871,7 +879,7 @@ class UsageWalker {
           using FieldVal = std::remove_cvref_t<typename FieldType::Type>;
           if constexpr (!rfl::internal::is_extra_fields_v<FieldVal>) {
             auto arg = make_child_arg(_parent, FieldType::name());
-            if (options_->is_hidden(arg.name)) {
+            if (arg.hidden && !include_hidden_) {
               return;
             }
             if constexpr (rfl::internal::is_default_val_v<FieldVal>) {
@@ -958,7 +966,7 @@ class UsageWalker {
             using FieldVal = std::remove_cvref_t<typename FieldType::Type>;
             if constexpr (!rfl::internal::is_extra_fields_v<FieldVal>) {
               auto arg = make_child_arg(_parent, FieldType::name());
-              if (options_->is_hidden(arg.name)) {
+              if (arg.hidden && !include_hidden_) {
                 return;
               }
               const FieldVal* ptr = nullptr;
@@ -984,7 +992,7 @@ class UsageWalker {
           using FieldVal = std::remove_cvref_t<typename FieldType::Type>;
           if constexpr (!rfl::internal::is_extra_fields_v<FieldVal>) {
             auto arg = make_child_arg(_parent, FieldType::name());
-            if (options_->is_hidden(arg.name)) {
+            if (arg.hidden && !include_hidden_) {
               return;
             }
             walk_peeled<FieldVal, VisitedType, /*_outermost=*/true>(
@@ -1005,6 +1013,7 @@ class UsageWalker {
                    ? std::string(_field_name)
                    : _parent.name + path_separator + std::string(_field_name);
     arg.required = _parent.required;
+    arg.hidden = _parent.hidden || options_->is_hidden(arg.name);
     if (is_root) {
       const auto& positionals = options_->positionals;
       arg.positional =
@@ -1082,6 +1091,7 @@ class UsageWalker {
   const Options* options_;
   const bool optionals_are_required_;
   const std::optional<char> delimiter_;
+  const bool include_hidden_;
   std::vector<std::pair<std::string_view, std::string_view>> short_names_;
   std::vector<UsageArg> args_;
 };
@@ -1353,22 +1363,18 @@ inline std::string format_usage(const std::string& _program_name,
 /// T can succeed: two fields have the same short name, or T has a bare
 /// rfl::DefaultVal and default-constructing it throws.
 template <class T, class... Ps>
-rfl::Result<std::string> usage(const std::string& _program_name,
-                               const UsageOptions& _opts) {
+rfl::Result<std::string> usage_from_options(
+    const std::string& _program_name, const internal::Options& _options,
+    const internal::BuiltinOptions& _builtin,
+    const std::optional<char> _delimiter, const UsageOptions& _opts) {
   using ProcessorsType = internal::cli_processors_t<Ps...>;
-  constexpr auto delimiter = internal::list_delimiter_v<ProcessorsType>;
-  // The table that read() parses with, so the help shows what the parser
-  // accepts, including the options inside nested structs and maps, and the
-  // built-in options of rfl::cli::App that read_app handles.
-  const auto& [options, builtin] =
-      internal::cached_app_options<T, ProcessorsType, /*_all_paths=*/true>();
-  return internal::check_short_names(options).and_then(
+  return internal::check_short_names(_options).and_then(
       [&](auto) -> rfl::Result<std::string> {
         try {
           auto walker =
-              internal::UsageWalker<ProcessorsType>(&options, delimiter);
+              internal::UsageWalker<ProcessorsType>(&_options, _delimiter);
           auto builtin_args =
-              internal::builtin_usage_args(builtin, _opts.help_group);
+              internal::builtin_usage_args(_builtin, _opts.help_group);
           auto fields = walker.template collect<T>();
           auto args = std::vector<internal::UsageArg>();
           args.reserve(builtin_args.size() + fields.size());
@@ -1403,12 +1409,39 @@ rfl::Result<std::string> usage(const std::string& _program_name,
                 args.end());
           }
           return internal::format_usage(
-              _program_name, args, _opts, delimiter, options.options_first,
+              _program_name, args, _opts, _delimiter, _options.options_first,
               internal::app_header<ProcessorsType>(_program_name));
         } catch (std::exception& e) {
           return error(e.what());
         }
       });
+}
+
+template <class T, class... Ps>
+rfl::Result<std::string> usage(const std::string& _program_name,
+                               const UsageOptions& _opts) {
+  using ProcessorsType = internal::cli_processors_t<Ps...>;
+  constexpr auto delimiter = internal::list_delimiter_v<ProcessorsType>;
+  // The table that read() parses with, so the help shows what the parser
+  // accepts, including the options inside nested structs and maps, and the
+  // built-in options of rfl::cli::App that read_app handles.
+  const auto& [options, builtin] =
+      internal::cached_app_options<T, ProcessorsType, /*_all_paths=*/true>();
+  return usage_from_options<T, Ps...>(_program_name, options, builtin,
+                                      delimiter, _opts);
+}
+
+template <class T, class... Ps>
+rfl::Result<std::string> usage(const std::string& _program_name,
+                               const Settings& _settings,
+                               const UsageOptions& _opts = UsageOptions{
+                                   .detailed = true}) {
+  using ProcessorsType = internal::cli_processors_t<Ps...>;
+  const auto& [base_options, builtin] =
+      internal::cached_app_options<T, ProcessorsType, /*_all_paths=*/true>();
+  const auto options = internal::apply_settings(base_options, _settings);
+  return usage_from_options<T, Ps...>(_program_name, options, builtin,
+                                      _settings.list_delimiter, _opts);
 }
 
 template <class T, class... Ps>

@@ -14,6 +14,7 @@
 #include "../internal/strings/utf8_conversions.hpp"
 #include "App.hpp"
 #include "Reader.hpp"
+#include "Settings.hpp"
 #include "options.hpp"
 #include "parse_argv.hpp"
 #include "read.hpp"
@@ -90,6 +91,59 @@ rfl::Result<std::variant<T, HelpOrVersion>> parse_and_read_app(
                       app_version_text<ProcessorsType>(_program_name)});
   }
   return read_parsed<T, ProcessorsType>(std::move(*parsed), options)
+      .transform([](T&& _t) { return ResultType(std::move(_t)); });
+}
+
+template <class T, class... Ps, class ParseFn>
+rfl::Result<std::variant<T, HelpOrVersion>> parse_and_read_app_with_settings(
+    const std::string& _program_name, const Settings& _settings,
+    const ParseFn& _parse,
+    const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
+  using ProcessorsType = internal::cli_processors_t<Ps...>;
+  using ResultType = std::variant<T, HelpOrVersion>;
+  const auto valid = validate_settings(_settings);
+  if (!valid) {
+    return error(valid.error().what());
+  }
+  const auto& [base_options, builtin] =
+      cached_app_options<T, ProcessorsType, /*_all_paths=*/true>();
+  const auto options = apply_settings(base_options, _settings);
+  const auto short_names = check_short_names(options);
+  if (!short_names) {
+    return error(short_names.error().what());
+  }
+  auto parsed = _parse(options);
+  if (!parsed) {
+    return error(parsed.error().what());
+  }
+
+  const auto help =
+      take_builtin_flag(builtin.help, &parsed->named, help_option);
+  const auto help_short = take_builtin_flag(
+      builtin.help_short, &parsed->short_args, help_short_option);
+  const auto version =
+      take_builtin_flag(builtin.version, &parsed->named, version_option);
+  for (const auto* r : {&help, &help_short, &version}) {
+    if (!*r) {
+      return error(r->error().what());
+    }
+  }
+
+  if (*help || *help_short) {
+    return usage<T, Ps...>(_program_name, _settings, _usage_opts)
+        .transform([](std::string _text) {
+          return ResultType(
+              HelpOrVersion{HelpOrVersion::Kind::help, std::move(_text)});
+        });
+  }
+  if (*version) {
+    return ResultType(
+        HelpOrVersion{HelpOrVersion::Kind::version,
+                      app_version_text<ProcessorsType>(_program_name)});
+  }
+  return read_parsed_with_reader<T, ProcessorsType>(
+             std::move(*parsed), options, _settings.list_delimiter,
+             _settings.keep_empty_items)
       .transform([](T&& _t) { return ResultType(std::move(_t)); });
 }
 
@@ -204,6 +258,73 @@ rfl::Result<std::variant<T, HelpOrVersion>> read_app(
   using ProcessorsType = internal::cli_processors_t<Ps...>;
   return read_app<T, Ps...>(internal::app_settings_t<ProcessorsType>::name,
                             std::forward<R>(_args), _usage_opts);
+}
+
+// --- Consolidated runtime `rfl::cli::Settings` overloads ---
+
+template <class T, class... Ps>
+rfl::Result<std::variant<T, HelpOrVersion>> read_app(
+    int argc, const char* const argv[], const Settings& _settings,
+    const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
+  return internal::parse_and_read_app_with_settings<T, Ps...>(
+      internal::program_name(argc, argv), _settings,
+      [&](const auto& _options) {
+        return internal::parse_argv(argc, argv, _options);
+      },
+      _usage_opts);
+}
+
+template <class T, class... Ps>
+rfl::Result<std::variant<T, HelpOrVersion>> read_app(
+    int argc, char* argv[], const Settings& _settings,
+    const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
+  return read_app<T, Ps...>(argc, static_cast<const char* const*>(argv),
+                            _settings, _usage_opts);
+}
+
+template <class T, class... Ps>
+rfl::Result<std::variant<T, HelpOrVersion>> read_app(
+    int argc, const wchar_t* const argv[], const Settings& _settings,
+    const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
+  return internal::parse_and_read_app_with_settings<T, Ps...>(
+      internal::program_name(argc, argv), _settings,
+      [&](const auto& _options) {
+        return internal::parse_argv(argc, argv, _options);
+      },
+      _usage_opts);
+}
+
+template <class T, class... Ps>
+rfl::Result<std::variant<T, HelpOrVersion>> read_app(
+    int argc, wchar_t* argv[], const Settings& _settings,
+    const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
+  return read_app<T, Ps...>(argc, static_cast<const wchar_t* const*>(argv),
+                            _settings, _usage_opts);
+}
+
+template <class T, class... Ps,
+          class R = std::initializer_list<std::string_view>>
+  requires(internal::StringRange<R> || internal::WideStringRange<R>)
+rfl::Result<std::variant<T, HelpOrVersion>> read_app(
+    std::string_view _program_name, R&& _args, const Settings& _settings,
+    const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
+  return internal::parse_and_read_app_with_settings<T, Ps...>(
+      std::string(_program_name), _settings,
+      [&](const auto& _options) {
+        return internal::parse_argv(std::forward<R>(_args), _options);
+      },
+      _usage_opts);
+}
+
+template <class T, class... Ps,
+          class R = std::initializer_list<std::string_view>>
+  requires(internal::StringRange<R> || internal::WideStringRange<R>)
+rfl::Result<std::variant<T, HelpOrVersion>> read_app(
+    R&& _args, const Settings& _settings,
+    const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
+  using ProcessorsType = internal::cli_processors_t<Ps...>;
+  return read_app<T, Ps...>(internal::app_settings_t<ProcessorsType>::name,
+                            std::forward<R>(_args), _settings, _usage_opts);
 }
 
 }  // namespace rfl::cli

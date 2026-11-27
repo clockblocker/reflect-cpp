@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "../Result.hpp"
+#include "Settings.hpp"
 #include "options.hpp"
 #include "parse_argv.hpp"
 #include "resolve_args.hpp"
@@ -87,6 +88,51 @@ class DynamicOptions {
 
   DynamicOptions() {
     opts_.negative_numbers_are_options = false;
+  }
+
+  /// Applies a consolidated `rfl::cli::Settings` configuration to this dynamic
+  /// option table.
+  DynamicOptions& apply_settings(const Settings& _settings) {
+    separate_values = _settings.separate_values;
+    allow_abbreviations = _settings.allow_abbreviations;
+    pure_flags = _settings.pure_flags;
+    last_value_wins = _settings.last_value_wins;
+    require_equals = _settings.require_equals;
+    options_first = _settings.options_first;
+    reject_unknown = _settings.reject_unknown;
+    single_dash_long = _settings.single_dash_long;
+    bool_value_tokens = _settings.bool_value_tokens;
+    allow_universal_negation = _settings.allow_universal_negation;
+    negation_prefix = _settings.negation_prefix;
+    allow_option_like_values = _settings.allow_option_like_values;
+    return *this;
+  }
+
+  /// Read-only view of registered dynamic option metadata (used by
+  /// `CommandNode::describe()`).
+  struct OptionMeta {
+    std::string long_name;
+    std::string short_name;
+    OptionKind kind = OptionKind::unknown;
+    bool is_list = false;
+    bool is_counter = false;
+    bool multi_token = false;
+    bool sensitive = false;
+    std::string implicit_value;
+    bool required = false;
+    bool hidden = false;
+    std::string description;
+    std::string default_hint;
+    std::string group;
+  };
+
+  const std::vector<OptionMeta>& registered_options() const noexcept {
+    return meta_;
+  }
+
+  const internal::Options& compiled_options() const {
+    sync_flags();
+    return opts_;
   }
 
   /// Registers a boolean flag option (`--name`, optional `-s`).
@@ -367,7 +413,7 @@ class DynamicOptions {
     if (!_header.empty()) {
       oss << _header << "\n";
     }
-    const auto format_entry = [&](const Meta& _m) {
+    const auto format_entry = [&](const OptionMeta& _m) {
       oss << "  ";
       if (!_m.short_name.empty()) {
         oss << "-" << _m.short_name << ", ";
@@ -389,7 +435,7 @@ class DynamicOptions {
 
     const bool has_groups = std::any_of(
         meta_.begin(), meta_.end(),
-        [](const Meta& _m) { return !_m.hidden && !_m.group.empty(); });
+        [](const OptionMeta& _m) { return !_m.hidden && !_m.group.empty(); });
     if (!has_groups) {
       for (const auto& m : meta_) {
         if (!m.hidden) {
@@ -428,17 +474,6 @@ class DynamicOptions {
   }
 
  private:
-  struct Meta {
-    std::string long_name;
-    std::string short_name;
-    internal::OptionKind kind = internal::OptionKind::unknown;
-    bool required = false;
-    bool hidden = false;
-    std::string description;
-    std::string default_hint;
-    std::string group;
-  };
-
   DynamicOptions& add_prefix_entry(std::string _prefix,
                                    const internal::OptionKind _kind,
                                    const DynamicOptionFlags& _flags) {
@@ -447,8 +482,10 @@ class DynamicOptions {
     opt.kind = _kind;
     opt.is_list = true;
     opt.sensitive = _flags.sensitive;
-    meta_.push_back(Meta{_prefix, {}, opt.kind, _flags.required, _flags.hidden,
-                         _flags.description, _flags.default_hint, _flags.group});
+    meta_.push_back(OptionMeta{_prefix, {}, opt.kind, true, false, false,
+                               _flags.sensitive, {}, _flags.required,
+                               _flags.hidden, _flags.description,
+                               _flags.default_hint, _flags.group});
     opts_.add_prefix_option(std::move(_prefix), opt);
     return *this;
   }
@@ -472,9 +509,12 @@ class DynamicOptions {
       }
       opts_.add_short_alias(_short_name, _long_name);
     }
-    meta_.push_back(Meta{_long_name, _short_name, _opt.kind, _flags.required,
-                         _flags.hidden, _flags.description, _flags.default_hint,
-                         _flags.group});
+    meta_.push_back(OptionMeta{_long_name, _short_name, _opt.kind, _opt.is_list,
+                               _opt.is_counter, _opt.multi_token,
+                               _opt.sensitive, _opt.implicit_value,
+                               _flags.required, _flags.hidden,
+                               _flags.description, _flags.default_hint,
+                               _flags.group});
     opts_.long_options.emplace_back(std::move(_long_name), _opt);
   }
 
@@ -531,7 +571,7 @@ class DynamicOptions {
   }
 
   mutable internal::Options opts_;
-  std::vector<Meta> meta_;
+  std::vector<OptionMeta> meta_;
   std::vector<std::string> extra_candidates_;
   mutable bool finalized_ = false;
 };

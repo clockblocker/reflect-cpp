@@ -54,7 +54,7 @@
 #include "SeparateOptionValues.hpp"
 #include "SingleDashLong.hpp"
 
-namespace rfl::cli::internal {
+namespace rfl::cli {
 
 /// What an option does with the token that follows it.
 enum class OptionKind {
@@ -62,7 +62,7 @@ enum class OptionKind {
   /// token; `-f` takes it only if it is `true`, `false`, `1` or `0`.
   flag,
   /// A field that takes a value: `--key=value`, `-k value`, `-k=value`, and
-  /// with rfl::cli::SeparateOptionValues `--key value`.
+  /// with rfl::cli::SeparateOptionValues / Settings::separate_values `--key value`.
   value,
   /// A field wrapped in rfl::ImplicitValue: `--key` and `-k` stand for its
   /// implicit value. A value can only be given after '=', never as the next
@@ -76,6 +76,10 @@ enum class OptionKind {
   /// No field matches this option.
   unknown
 };
+
+namespace internal {
+
+using rfl::cli::OptionKind;
 
 /// How an option is given on the command line.
 struct Option {
@@ -151,7 +155,7 @@ struct Options {
   /// For the open prefixes whose sub-keys hold structs or maps: the options
   /// inside one such value, with paths relative to it, so that
   /// `--servers.eu.port` is looked up as `port`. Sorted by prefix.
-  std::vector<std::pair<std::string, std::unique_ptr<Options>>>
+  std::vector<std::pair<std::string, std::shared_ptr<Options>>>
       open_prefix_options;
 
   /// Paths of fields wrapped in rfl::Hidden, which are parsed normally but
@@ -940,7 +944,7 @@ void add_open_prefix(const std::string& _prefix, Options* _options) {
                 && (parsing::is_string_map_v<U>
                     || (is_option_struct_v<U>
                         && !VisitedType::template contains<U>))) {
-    auto nested = std::make_unique<Options>();
+    auto nested = std::make_shared<Options>();
     collect_value_options<T, ProcessorsType, VisitedType>(nested.get());
     _options->open_prefix_options.emplace_back(_prefix, std::move(nested));
   }
@@ -1314,6 +1318,7 @@ const Options& cached_options() {
   return options;
 }
 
-}  // namespace rfl::cli::internal
+}  // namespace internal
+}  // namespace rfl::cli
 
 #endif

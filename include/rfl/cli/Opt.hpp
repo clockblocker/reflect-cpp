@@ -5,10 +5,17 @@
 #include <string_view>
 #include <type_traits>
 
+#include "../Alias.hpp"
 #include "../internal/StringLiteral.hpp"
 #include "../internal/TransparentWrapper.hpp"
+#include "../internal/field_aliases.hpp"
 
 namespace rfl::cli {
+
+/// Canonical CLI alias wrapper: directly aliases core `rfl::Alias` so CLI and
+/// data formats (JSON/YAML/XML/env/Generic) share one single alias mechanism.
+template <rfl::internal::StringLiteral _name, class T>
+using Alias = rfl::Alias<_name, T>;
 
 /// Attribute tags accepted by `rfl::cli::Opt<T, Attrs...>` in any order.
 namespace attr {
@@ -328,8 +335,41 @@ template <class T>
 constexpr bool is_cli_opt_v =
     is_cli_opt<std::remove_cvref_t<std::remove_pointer_t<T>>>::value;
 
+template <class TailList, class... Attrs>
+struct opt_alias_list {
+  using type = TailList;
+};
+
+template <class TailList, rfl::internal::StringLiteral _name, class... Rest>
+struct opt_alias_list<TailList, attr::Alias<_name>, Rest...> {
+  using type = typename rfl::internal::prepend_alias<
+      _name, typename opt_alias_list<TailList, Rest...>::type>::type;
+};
+
+template <class TailList, class First, class... Rest>
+struct opt_alias_list<TailList, First, Rest...> {
+  using type = typename opt_alias_list<TailList, Rest...>::type;
+};
+
 }  // namespace internal
 
 }  // namespace rfl::cli
+
+namespace rfl::internal {
+
+template <class T, class... Attrs>
+struct has_custom_field_aliases<rfl::cli::Opt<T, Attrs...>> : std::true_type {};
+
+/// Reconciles `rfl::cli::attr::Alias` with core `rfl::Alias` so aliases
+/// declared on `rfl::cli::Opt` participate in compile-time collision checking
+/// (`no_alias_collisions`) and work identically across CLI and non-CLI formats.
+template <class T, class... Attrs>
+struct field_aliases_impl<rfl::cli::Opt<T, Attrs...>> {
+  using type =
+      typename rfl::cli::internal::opt_alias_list<field_aliases_t<T>,
+                                                  Attrs...>::type;
+};
+
+}  // namespace rfl::internal
 
 #endif

@@ -22,6 +22,7 @@
 #include "../TriState.hpp"
 #include "../Tuple.hpp"
 #include "StringLiteral.hpp"
+#include "TransparentWrapper.hpp"
 
 namespace rfl::internal {
 
@@ -123,6 +124,19 @@ struct field_aliases_impl<Attribute<T>> {
 template <class T>
 struct field_aliases_impl<Commented<T>> {
   using type = field_aliases_t<T>;
+};
+
+template <class T>
+struct has_custom_field_aliases : std::false_type {};
+
+template <class T>
+constexpr bool has_custom_field_aliases_v =
+    has_custom_field_aliases<std::remove_cvref_t<T>>::value;
+
+template <class T>
+  requires(is_transparent_wrapper_v<T> && !has_custom_field_aliases_v<T>)
+struct field_aliases_impl<T> {
+  using type = field_aliases_t<typename T::Type>;
 };
 
 /// Returns true if any field in Fields declares at least one rfl::Alias.
