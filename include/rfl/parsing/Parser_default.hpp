@@ -665,22 +665,43 @@ struct Parser {
 
       } else {
         using NamedTupleType = internal::processed_t<U, ProcessorsType>;
-        // The schema takes the default values of rfl::DefaultVal fields from
-        // a default-constructed instance. A tagged union wrapper holds its
-        // alternative through a pointer that U{} leaves null, so we construct
-        // the wrapper that holds the alternative by value instead.
+        // The schema takes the default values of rfl::DefaultVal fields (and
+        // all fields under rfl::DefaultIfMissing) from a default-constructed
+        // instance. A tagged union wrapper holds its alternative through a
+        // pointer that U{} leaves null, so we construct the wrapper that holds
+        // the alternative by value instead.
         using DefaultsType = tagged_union_wrapper_no_ptr_t<U>;
         if constexpr (internal::has_default_val_v<U>) {
           static_assert(requires { DefaultsType{}; },
                         "A struct with rfl::DefaultVal fields must be "
                         "default-constructible, because the default values "
                         "come from a default-constructed instance.");
-          auto defaults = DefaultsType{};
-          auto view = ProcessorsType::template process<DefaultsType>(
-              to_view(defaults));
-          (*_definitions)[name] =
-              Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-                  _definitions, &view);
+          try {
+            auto defaults = DefaultsType{};
+            auto view = ProcessorsType::template process<DefaultsType>(
+                to_view(defaults));
+            (*_definitions)[name] =
+                Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
+                    _definitions, &view);
+          } catch (...) {
+            (*_definitions)[name] =
+                Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
+                    _definitions);
+          }
+        } else if constexpr (internal::default_if_missing_v<ProcessorsType> &&
+                             std::is_default_constructible_v<DefaultsType>) {
+          try {
+            auto defaults = DefaultsType{};
+            auto view = ProcessorsType::template process<DefaultsType>(
+                to_view(defaults));
+            (*_definitions)[name] =
+                Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
+                    _definitions, &view);
+          } catch (...) {
+            (*_definitions)[name] =
+                Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
+                    _definitions);
+          }
         } else {
           (*_definitions)[name] =
               Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(

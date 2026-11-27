@@ -29,6 +29,8 @@ struct Rename {
   using Name = rfl::Literal<_name>;
 
   /// Default constructor - creates a Rename with a default-constructed value.
+  template <class U = Type>
+    requires std::is_default_constructible_v<U>
   Rename() : value_(Type()) {}
 
   /// Constructs from a const reference to the value.
