@@ -618,4 +618,24 @@ TEST(json, test_schema_default_if_missing_recursive_incomplete_box_ref) {
       << direct_schema;
 }
 
+struct AggregateWithNoDefaultDmi {
+  NoDefaultCtor x = NoDefaultCtor(42);
+  int y = 7;
+};
+
+TEST(json, test_schema_default_if_missing_aggregate_dmi_and_references) {
+  static_assert(!rfl::internal::is_safe_default_constructible_v<int&>);
+  static_assert(!rfl::internal::is_safe_default_constructible_v<const int&>);
+  static_assert(!rfl::internal::is_safe_default_constructible_v<int&&>);
+  static_assert(
+      rfl::internal::is_safe_default_constructible_v<AggregateWithNoDefaultDmi>);
+
+  const auto schema =
+      rfl::json::to_schema<AggregateWithNoDefaultDmi, rfl::DefaultIfMissing>();
+  EXPECT_NE(schema.find(R"("y":{"type":"integer","default":7})"),
+            std::string::npos)
+      << schema;
+  EXPECT_NE(schema.find(R"("default":42)"), std::string::npos) << schema;
+}
+
 }  // namespace test_json_schema_default_if_missing
