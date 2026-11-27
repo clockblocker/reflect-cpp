@@ -50,7 +50,8 @@ inline rfl::Result<bool> take_builtin_flag(
 /// instead of reading the struct.
 template <class T, class... Ps, class ParseFn>
 rfl::Result<std::variant<T, HelpOrVersion>> parse_and_read_app(
-    const std::string& _program_name, const ParseFn& _parse) {
+    const std::string& _program_name, const ParseFn& _parse,
+    const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
   using ProcessorsType = Processors<SnakeCaseToKebabCase, Ps...>;
   using ResultType = std::variant<T, HelpOrVersion>;
   auto options = make_options<T, ProcessorsType>();
@@ -78,7 +79,7 @@ rfl::Result<std::variant<T, HelpOrVersion>> parse_and_read_app(
   }
 
   if (*help || *help_short) {
-    return usage<T, Ps...>(_program_name, true)
+    return usage<T, Ps...>(_program_name, _usage_opts)
         .transform([](std::string _text) {
           return ResultType(
               HelpOrVersion{HelpOrVersion::Kind::help, std::move(_text)});
@@ -135,36 +136,45 @@ inline std::string program_name(int argc, const wchar_t* const argv[]) {
 /// has no name.
 /// @return The struct, or the help or version text, or an error
 template <class T, class... Ps>
-rfl::Result<std::variant<T, HelpOrVersion>> read_app(int argc,
-                                                     const char* const argv[]) {
+rfl::Result<std::variant<T, HelpOrVersion>> read_app(
+    int argc, const char* const argv[],
+    const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
   return internal::parse_and_read_app<T, Ps...>(
       internal::program_name(argc, argv),
       [&](const auto& _options) {
         return internal::parse_argv(argc, argv, _options);
-      });
+      },
+      _usage_opts);
 }
 
 template <class T, class... Ps>
-rfl::Result<std::variant<T, HelpOrVersion>> read_app(int argc, char* argv[]) {
-  return read_app<T, Ps...>(argc, static_cast<const char* const*>(argv));
+rfl::Result<std::variant<T, HelpOrVersion>> read_app(
+    int argc, char* argv[],
+    const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
+  return read_app<T, Ps...>(argc, static_cast<const char* const*>(argv),
+                            _usage_opts);
 }
 
 /// Like rfl::cli::read_app, for wide-character arguments, which are
 /// converted to UTF-8 first.
 template <class T, class... Ps>
 rfl::Result<std::variant<T, HelpOrVersion>> read_app(
-    int argc, const wchar_t* const argv[]) {
+    int argc, const wchar_t* const argv[],
+    const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
   return internal::parse_and_read_app<T, Ps...>(
       internal::program_name(argc, argv),
       [&](const auto& _options) {
         return internal::parse_argv(argc, argv, _options);
-      });
+      },
+      _usage_opts);
 }
 
 template <class T, class... Ps>
-rfl::Result<std::variant<T, HelpOrVersion>> read_app(int argc,
-                                                     wchar_t* argv[]) {
-  return read_app<T, Ps...>(argc, static_cast<const wchar_t* const*>(argv));
+rfl::Result<std::variant<T, HelpOrVersion>> read_app(
+    int argc, wchar_t* argv[],
+    const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
+  return read_app<T, Ps...>(argc, static_cast<const wchar_t* const*>(argv),
+                            _usage_opts);
 }
 
 /// Like rfl::cli::read_app, reading every element of a range of narrow or
@@ -174,11 +184,14 @@ template <class T, class... Ps,
           class R = std::initializer_list<std::string_view>>
   requires(internal::StringRange<R> || internal::WideStringRange<R>)
 rfl::Result<std::variant<T, HelpOrVersion>> read_app(
-    std::string_view _program_name, R&& _args) {
+    std::string_view _program_name, R&& _args,
+    const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
   return internal::parse_and_read_app<T, Ps...>(
-      std::string(_program_name), [&](const auto& _options) {
+      std::string(_program_name),
+      [&](const auto& _options) {
         return internal::parse_argv(std::forward<R>(_args), _options);
-      });
+      },
+      _usage_opts);
 }
 
 /// Like rfl::cli::read_app, reading every element of a range of narrow or
@@ -186,10 +199,12 @@ rfl::Result<std::variant<T, HelpOrVersion>> read_app(
 template <class T, class... Ps,
           class R = std::initializer_list<std::string_view>>
   requires(internal::StringRange<R> || internal::WideStringRange<R>)
-rfl::Result<std::variant<T, HelpOrVersion>> read_app(R&& _args) {
+rfl::Result<std::variant<T, HelpOrVersion>> read_app(
+    R&& _args,
+    const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
   using ProcessorsType = Processors<SnakeCaseToKebabCase, Ps...>;
   return read_app<T, Ps...>(internal::app_settings_t<ProcessorsType>::name,
-                            std::forward<R>(_args));
+                            std::forward<R>(_args), _usage_opts);
 }
 
 }  // namespace rfl::cli
