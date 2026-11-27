@@ -12,6 +12,7 @@
 #include "has_reflection_type_v.hpp"
 #include "has_reflector.hpp"
 #include "is_empty.hpp"
+#include "is_extra_fields.hpp"
 #include "is_flatten_field.hpp"
 #include "is_named_tuple.hpp"
 #include "is_tagged_union.hpp"
@@ -75,9 +76,9 @@ template <class T>
 constexpr bool has_flattened_tagged_union_impl() {
   using U = remove_all_ptrs_t<T>;
   if constexpr (is_tagged_union_based<U> || is_named_tuple_v<U> ||
-                !std::is_class_v<U> || !std::is_aggregate_v<U> ||
-                has_reflection_type_v<U> || has_read_reflector<U> ||
-                has_write_reflector<U>) {
+                is_extra_fields_v<U> || !std::is_class_v<U> ||
+                !std::is_aggregate_v<U> || has_reflection_type_v<U> ||
+                has_read_reflector<U> || has_write_reflector<U>) {
     return false;
   } else if constexpr (is_empty<U>()) {
     return false;
