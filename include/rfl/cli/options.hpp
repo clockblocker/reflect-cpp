@@ -20,6 +20,7 @@
 #include "../Short.hpp"
 #include "../Tuple.hpp"
 #include "../internal/StringLiteral.hpp"
+#include "../internal/TransparentWrapper.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/has_reflector.hpp"
 #include "../internal/is_extra_fields.hpp"
@@ -378,7 +379,7 @@ auto unwrap_option_type() {
   }
   else if constexpr (rfl::internal::is_short_v<U>
                      || rfl::internal::is_positional_v<U>
-                     || rfl::internal::is_implicit_value_v<U>
+                     || rfl::internal::is_transparent_wrapper_v<U>
                      || parsing::is_rename_v<U>
                      || parsing::is_default_val_v<U>
                      || parsing::is_skip_v<U>) {
