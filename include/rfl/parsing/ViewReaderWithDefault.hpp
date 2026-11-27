@@ -27,6 +27,98 @@
 
 namespace rfl::parsing {
 
+/// Reads one field into an already-constructed view slot. Free function
+/// parameterized only by (R, W, OriginalType, ProcessorsType, _overlay)—never
+/// the enclosing ViewType—so instantiations do not repeat the full NamedTuple
+/// in mangled symbol names or DWARF debug info.
+template <class R, class W, class OriginalType, class ProcessorsType,
+          bool _overlay>
+RFL_ALWAYS_INLINE void assign_default_view_field(
+    const R& _r, const typename R::InputVarType& _var,
+    const std::string_view _name, OriginalType& _slot,
+    FieldErrors<ProcessorsType>* _errors) {
+  using T = std::remove_cvref_t<std::remove_pointer_t<OriginalType>>;
+  if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                !is_nullable_v<T>) {
+    if (_r.is_empty(_var)) {
+      return;
+    }
+  }
+  if constexpr (_overlay) {
+    if constexpr (std::is_pointer_v<OriginalType>) {
+      using Target = std::remove_pointer_t<OriginalType>;
+      if constexpr (std::is_array_v<Target>) {
+        auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
+        if (!res) [[unlikely]] {
+          _errors->emplace_back(
+              wrap_field_error(_name, std::move(res).error()));
+          return;
+        }
+        move_assign_field(_slot, &(*res));
+      } else if constexpr (std::is_const_v<Target>) {
+        auto res = [&]() {
+          if constexpr (std::is_copy_constructible_v<T>) {
+            return read_into_or_read<R, W, T, ProcessorsType>(_r, _var,
+                                                              T(*_slot));
+          } else {
+            return Parser<R, W, T, ProcessorsType>::read(_r, _var);
+          }
+        }();
+        if (!res) [[unlikely]] {
+          _errors->emplace_back(
+              wrap_field_error(_name, std::move(res).error()));
+          return;
+        }
+        move_assign_field(_slot, &(*res));
+      } else {
+        auto res = read_into_or_read<R, W, T, ProcessorsType>(
+            _r, _var, std::move(*_slot));
+        if (!res) [[unlikely]] {
+          _errors->emplace_back(
+              wrap_field_error(_name, std::move(res).error()));
+          return;
+        }
+        move_assign_field(_slot, &(*res));
+      }
+    } else {
+      auto res = read_into_or_read<R, W, T, ProcessorsType>(_r, _var,
+                                                            std::move(_slot));
+      if (!res) [[unlikely]] {
+        _errors->emplace_back(wrap_field_error(_name, std::move(res).error()));
+        return;
+      }
+      _slot = std::move(*res);
+    }
+  } else {
+    using Peel = peel_transparent<T, R>;
+    auto res = read_field_core<R, W, typename Peel::CoreType, ProcessorsType>(
+        _r, _var, _name, _errors);
+    if (!res) [[unlikely]] {
+      return;
+    }
+    // Parser::check_deferred_defaults relies on DefaultVal fields being
+    // replaced as a whole. For pure non-DefaultVal transparent wrappers on
+    // mutable fields, assign directly to the inner CoreType without
+    // instantiating per-wrapper move helpers.
+    if constexpr (std::is_pointer_v<OriginalType>) {
+      using TargetType = std::remove_pointer_t<OriginalType>;
+      if constexpr (Peel::peeled && !Peel::has_default_val &&
+                    !std::is_const_v<TargetType> &&
+                    !std::is_array_v<TargetType> &&
+                    !rfl::internal::is_array_v<typename Peel::CoreType>) {
+        Peel::unwrap_ref(*_slot) = std::move(*res);
+      } else if constexpr (Peel::peeled) {
+        auto wrapped = Peel::wrap(std::move(*res));
+        move_assign_field(_slot, &wrapped);
+      } else {
+        move_assign_field(_slot, &(*res));
+      }
+    } else {
+      _slot = Peel::wrap(std::move(*res));
+    }
+  }
+}
+
 template <class R, class W, class _ViewType, class ProcessorsType,
           bool _overlay = false>
 class ViewReaderWithDefault {
@@ -238,101 +330,12 @@ class ViewReaderWithDefault {
     extra_fields->emplace(std::string(_current_name), std::move(*res));
   }
 
-  template <int _i>
-  static RFL_ALWAYS_INLINE void assign_one_field(
-      const R& _r, const auto& _var, ViewType* _view,
-      FieldErrors<ProcessorsType>* _errors) {
-    using FieldType = tuple_element_t<_i, typename ViewType::Fields>;
-    using OriginalType = typename FieldType::Type;
-    using T = std::remove_cvref_t<std::remove_pointer_t<OriginalType>>;
-    constexpr auto name = FieldType::name();
-    if constexpr (internal::default_if_null_v<ProcessorsType> &&
-                  !is_nullable_v<T>) {
-      if (_r.is_empty(_var)) {
-        return;
-      }
-    }
-    if constexpr (_overlay) {
-      if constexpr (std::is_pointer_v<OriginalType>) {
-        using Target = std::remove_pointer_t<OriginalType>;
-        if constexpr (std::is_array_v<Target>) {
-          auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
-          if (!res) [[unlikely]] {
-            _errors->emplace_back(
-                wrap_field_error(name, std::move(res).error()));
-            return;
-          }
-          move_assign_field(rfl::get<_i>(*_view), &(*res));
-        } else if constexpr (std::is_const_v<Target>) {
-          auto res = [&]() {
-            if constexpr (std::is_copy_constructible_v<T>) {
-              return read_into_or_read<R, W, T, ProcessorsType>(
-                  _r, _var, T(*rfl::get<_i>(*_view)));
-            } else {
-              return Parser<R, W, T, ProcessorsType>::read(_r, _var);
-            }
-          }();
-          if (!res) [[unlikely]] {
-            _errors->emplace_back(
-                wrap_field_error(name, std::move(res).error()));
-            return;
-          }
-          move_assign_field(rfl::get<_i>(*_view), &(*res));
-        } else {
-          auto res = read_into_or_read<R, W, T, ProcessorsType>(
-              _r, _var, std::move(*rfl::get<_i>(*_view)));
-          if (!res) [[unlikely]] {
-            _errors->emplace_back(
-                wrap_field_error(name, std::move(res).error()));
-            return;
-          }
-          move_assign_field(rfl::get<_i>(*_view), &(*res));
-        }
-      } else {
-        auto res = read_into_or_read<R, W, T, ProcessorsType>(
-            _r, _var, std::move(rfl::get<_i>(*_view)));
-        if (!res) [[unlikely]] {
-          _errors->emplace_back(
-              wrap_field_error(name, std::move(res).error()));
-          return;
-        }
-        rfl::get<_i>(*_view) = std::move(*res);
-      }
-    } else {
-      using Peel = peel_transparent<T, R>;
-      auto res = read_field_core<R, W, typename Peel::CoreType, ProcessorsType>(
-          _r, _var, name, _errors);
-      if (!res) [[unlikely]] {
-        return;
-      }
-      // Parser::check_deferred_defaults relies on DefaultVal fields being
-      // replaced as a whole. For pure non-DefaultVal transparent wrappers on
-      // mutable fields, assign directly to the inner CoreType without
-      // instantiating per-wrapper move helpers.
-      if constexpr (std::is_pointer_v<OriginalType>) {
-        using TargetType = std::remove_pointer_t<OriginalType>;
-        if constexpr (Peel::peeled && !Peel::has_default_val &&
-                      !std::is_const_v<TargetType> &&
-                      !std::is_array_v<TargetType> &&
-                      !rfl::internal::is_array_v<typename Peel::CoreType>) {
-          Peel::unwrap_ref(*rfl::get<_i>(*_view)) = std::move(*res);
-        } else if constexpr (Peel::peeled) {
-          auto wrapped = Peel::wrap(std::move(*res));
-          move_assign_field(rfl::get<_i>(*_view), &wrapped);
-        } else {
-          move_assign_field(rfl::get<_i>(*_view), &(*res));
-        }
-      } else {
-        rfl::get<_i>(*_view) = Peel::wrap(std::move(*res));
-      }
-    }
-  }
-
   template <int... is>
   static void assign_to_matching_field(
       const R& _r, const std::string_view& _current_name, const auto& _var,
       const std::optional<SourceLocation>& _key_loc, auto* _view, auto* _errors,
       auto* _found, std::integer_sequence<int, is...>) {
+    using Fields = typename ViewType::Fields;
     bool already_assigned = false;
     if (const auto* entry = find_field_entry(_current_name)) {
       const int idx = entry->field_idx;
@@ -343,16 +346,22 @@ class ViewReaderWithDefault {
           stream << "Field named '" << entry->primary_name
                  << "' was specified more than once (conflicting key '"
                  << _current_name << "').";
-          _errors->emplace_back(make_nested_error(std::string(_current_name),
-                                                  stream.str()));
+          _errors->emplace_back(
+              make_nested_error(std::string(_current_name), stream.str()));
           return;
         }
       } else {
         (*_found)[static_cast<size_t>(idx)] = true;
         already_assigned = true;
         static_cast<void>(
-            ((idx == is ? (assign_one_field<is>(_r, _var, _view, _errors), true)
-                        : false) ||
+            ((idx == is
+                  ? (assign_default_view_field<
+                         R, W, typename tuple_element_t<is, Fields>::Type,
+                         ProcessorsType, _overlay>(
+                         _r, _var, tuple_element_t<is, Fields>::name(),
+                         rfl::get<is>(*_view), _errors),
+                     true)
+                  : false) ||
              ...));
       }
     }

@@ -6,11 +6,13 @@
 #include <exception>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 
+#include "../Metadata.hpp"
 #include "../Result.hpp"
 #include "../always_false.hpp"
 #include "../internal/DeferredDefaults.hpp"
@@ -96,6 +98,51 @@
 #include "wrap_error.hpp"
 
 namespace rfl::parsing {
+
+/// Free per-field deferred-default helpers parameterized only by FieldSlotT
+/// (never the enclosing struct's ViewType) to avoid N-fold symbol bloat.
+template <class FieldSlotT>
+RFL_ALWAYS_INLINE void mark_invalid_default_field(
+    const FieldSlotT& _slot, bool* _no_default_slot) {
+  if constexpr (std::is_pointer_v<FieldSlotT>) {
+    auto check = DefaultValueCheck{};
+    check_default_value(*_slot, &check);
+    *_no_default_slot = check.invalid || check.unchecked;
+  }
+}
+
+template <class FieldSlotT>
+RFL_ALWAYS_INLINE void count_deferred_default_field(const FieldSlotT& _slot,
+                                                    DefaultValueCheck* _check) {
+  if constexpr (std::is_pointer_v<FieldSlotT>) {
+    check_default_value(*_slot, _check);
+  }
+}
+
+template <class ProcessorsType, class FieldSlotT>
+RFL_ALWAYS_INLINE void check_missing_deferred_default_field(
+    const FieldSlotT& _slot, const std::string_view _name, const bool _is_found,
+    FieldErrors<ProcessorsType>* _errors) {
+  if constexpr (std::is_pointer_v<FieldSlotT>) {
+    if ((_is_found && !internal::default_if_null_v<ProcessorsType>) ||
+        should_stop_on_field_error<ProcessorsType>(*_errors)) {
+      return;
+    }
+    auto check = DefaultValueCheck{};
+    check_default_value(*_slot, &check);
+    if (!check.invalid && !check.unchecked) [[likely]] {
+      return;
+    }
+    const auto name = std::string(_name);
+    const auto why = check.invalid
+                         ? "is invalid: " + check.invalid->what()
+                         : "could not be checked: " + *check.unchecked;
+    _errors->emplace_back(make_nested_error(
+        name, "Field named '" + name + "'" +
+                  (_is_found ? " was null" : " not found") +
+                  ", and its default value " + why));
+  }
+}
 
 /// Default case - anything that cannot be explicitly matched.
 template <class R, class W, class T, class ProcessorsType>
@@ -966,6 +1013,22 @@ struct Parser {
 
       } else {
         using NamedTupleType = internal::processed_t<U, ProcessorsType>;
+        const auto field_meta = internal::get_field_metadata<U>();
+        const auto get_raw_names = [&]() -> std::span<const std::string_view> {
+          if constexpr (internal::has_field_metadata_v<U>) {
+            using RawNT = rfl::named_tuple_t<U>;
+            if constexpr (RawNT::size() == NamedTupleType::size()) {
+              static constexpr auto raw_names_arr =
+                  []<size_t... _is>(std::index_sequence<_is...>) {
+                    return std::array<std::string_view, sizeof...(_is)>{
+                        tuple_element_t<_is, typename RawNT::Fields>::name()...};
+                  }(std::make_index_sequence<RawNT::size()>());
+              return raw_names_arr;
+            }
+          }
+          return {};
+        };
+        const auto raw_names = get_raw_names();
         // The schema takes the default values of rfl::DefaultVal fields (and
         // all fields under rfl::DefaultIfMissing) from a default-constructed
         // instance. A tagged union wrapper holds its alternative through a
@@ -982,14 +1045,16 @@ struct Parser {
                       requires { DefaultsType{}; }) {
           try {
             (*_definitions)[name] =
-                schema_with_defaults<DefaultsType, NamedTupleType>(_definitions);
+                schema_with_defaults<DefaultsType, NamedTupleType>(
+                    _definitions, field_meta, raw_names);
           } catch (std::exception&) {
             if (internal::has_unwrapped_default_val_v<U>) {
               throw;
             }
             (*_definitions)[name] =
                 Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-                    _definitions);
+                    _definitions, static_cast<void*>(nullptr), nullptr,
+                    field_meta, raw_names);
           }
         } else if constexpr (internal::default_if_missing_v<ProcessorsType>) {
           if constexpr (internal::is_safe_default_constructible_v<
@@ -997,21 +1062,32 @@ struct Parser {
             try {
               (*_definitions)[name] =
                   schema_with_defaults<DefaultsType, NamedTupleType>(
-                      _definitions);
+                      _definitions, field_meta, raw_names);
             } catch (...) {
               (*_definitions)[name] =
                   Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-                      _definitions);
+                      _definitions, static_cast<void*>(nullptr), nullptr,
+                      field_meta, raw_names);
             }
           } else {
             (*_definitions)[name] =
                 Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-                    _definitions);
+                    _definitions, static_cast<void*>(nullptr), nullptr,
+                    field_meta, raw_names);
           }
         } else {
           (*_definitions)[name] =
               Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-                  _definitions);
+                  _definitions, static_cast<void*>(nullptr), nullptr,
+                  field_meta, raw_names);
+        }
+      }
+      if constexpr (internal::has_struct_description_v<U>) {
+        const auto struct_desc = internal::get_struct_description<U>();
+        if (!struct_desc.empty()) {
+          (*_definitions)[name] = Type{Type::Description{
+              .description_ = std::string(struct_desc),
+              .type_ = Ref<Type>::make(std::move((*_definitions)[name]))}};
         }
       }
     }
@@ -1029,29 +1105,28 @@ struct Parser {
   /// throws is passed on.
   template <class U, class NamedTupleType>
   static schema::Type schema_with_defaults(
-      std::map<std::string, schema::Type>* _definitions) {
+      std::map<std::string, schema::Type>* _definitions,
+      const std::span<const FieldMeta> _field_meta = {},
+      const std::span<const std::string_view> _raw_names = {}) {
     internal::DeferredDefaults deferred;
     auto defaults = default_construct<U>(&deferred);
     auto view = ProcessorsType::template process<U>(to_view(defaults));
     using ViewType = decltype(view);
     if (deferred.num() == 0) [[likely]] {
       return Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-          _definitions, &view);
+          _definitions, &view, nullptr, _field_meta, _raw_names);
     }
     if (!holds_all_deferred(deferred, view)) {
       auto all_no_default = std::array<bool, ViewType::size()>{};
       all_no_default.fill(true);
       return Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-          _definitions, &view, &all_no_default);
+          _definitions, &view, &all_no_default, _field_meta, _raw_names);
     }
     auto no_default = std::array<bool, ViewType::size()>{};
-    for_each_field(view, [&](size_t _i, const auto& _field) {
-      auto check = DefaultValueCheck{};
-      check_default_value(_field, &check);
-      no_default[_i] = check.invalid || check.unchecked;
-    });
+    mark_invalid_defaults_in_view(view, &no_default,
+                                  std::make_index_sequence<ViewType::size()>());
     return Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-        _definitions, &view, &no_default);
+        _definitions, &view, &no_default, _field_meta, _raw_names);
   }
 
   template <class U>
@@ -1194,6 +1269,14 @@ struct Parser {
     return U{};
   }
 
+  template <class ViewType, size_t... _is>
+  static void mark_invalid_defaults_in_view(
+      const ViewType& _view, std::array<bool, ViewType::size()>* _no_default,
+      std::index_sequence<_is...>) {
+    (mark_invalid_default_field(rfl::get<_is>(_view), &(*_no_default)[_is]),
+     ...);
+  }
+
   /// Whether the struct still holds as many invalid Validators as have been
   /// deferred. If one of them has been used up while constructing it, for
   /// instance a temporary in a default member initializer, or is inside a
@@ -1203,10 +1286,16 @@ struct Parser {
   static bool holds_all_deferred(const internal::DeferredDefaults& _deferred,
                                  const ViewType& _view) {
     auto check = DefaultValueCheck{.stop_early = false};
-    for_each_field(_view, [&](size_t, const auto& _field) {
-      check_default_value(_field, &check);
-    });
+    count_deferred_in_view(_view, &check,
+                           std::make_index_sequence<ViewType::size()>());
     return check.num_invalid >= _deferred.num();
+  }
+
+  template <class ViewType, size_t... _is>
+  static void count_deferred_in_view(const ViewType& _view,
+                                     DefaultValueCheck* _check,
+                                     std::index_sequence<_is...>) {
+    (count_deferred_default_field(rfl::get<_is>(_view), _check), ...);
   }
 
   /// Returns an error if the default value of a field that is missing from
@@ -1217,28 +1306,9 @@ struct Parser {
   template <class ViewType>
   static std::optional<Error> check_deferred_defaults(
       const ViewType& _view, const std::array<bool, ViewType::size()>& _found) {
-    constexpr auto names = field_names<ViewType>(
-        std::make_index_sequence<ViewType::size()>());
     FieldErrors<ProcessorsType> errors;
-    for_each_field(_view, [&](size_t _i, const auto& _field) {
-      if ((_found[_i] && !internal::default_if_null_v<ProcessorsType>) ||
-          should_stop_on_field_error<ProcessorsType>(errors)) {
-        return;
-      }
-      auto check = DefaultValueCheck{};
-      check_default_value(_field, &check);
-      if (!check.invalid && !check.unchecked) [[likely]] {
-        return;
-      }
-      const auto name = std::string(names[_i]);
-      const auto why = check.invalid
-                           ? "is invalid: " + check.invalid->what()
-                           : "could not be checked: " + *check.unchecked;
-      errors.emplace_back(make_nested_error(
-          name, "Field named '" + name + "'" +
-                    (_found[_i] ? " was null" : " not found") +
-                    ", and its default value " + why));
-    });
+    check_deferred_in_view(_view, _found, &errors,
+                           std::make_index_sequence<ViewType::size()>());
     if constexpr (internal::fail_fast_v<ProcessorsType>) {
       return std::move(errors).error();
     } else {
@@ -1250,25 +1320,14 @@ struct Parser {
   }
 
   template <class ViewType, size_t... _is>
-  static constexpr auto field_names(std::index_sequence<_is...>) {
-    return std::array<std::string_view, sizeof...(_is)>{
-        tuple_element_t<_is, typename ViewType::Fields>::name()...};
-  }
-
-  /// Calls _f(i, field) for every field i of _view that points into the
-  /// struct.
-  template <class ViewType, class F>
-  static void for_each_field(const ViewType& _view, const F& _f) {
-    [&]<size_t... _is>(std::index_sequence<_is...>) {
-      const auto call = [&]<size_t _i>(std::integral_constant<size_t, _i>) {
-        using Type =
-            typename tuple_element_t<_i, typename ViewType::Fields>::Type;
-        if constexpr (std::is_pointer_v<Type>) {
-          _f(_i, *rfl::get<_i>(_view));
-        }
-      };
-      (call(std::integral_constant<size_t, _is>{}), ...);
-    }(std::make_index_sequence<ViewType::size()>());
+  static void check_deferred_in_view(
+      const ViewType& _view, const std::array<bool, ViewType::size()>& _found,
+      FieldErrors<ProcessorsType>* _errors, std::index_sequence<_is...>) {
+    (check_missing_deferred_default_field<ProcessorsType>(
+         rfl::get<_is>(_view),
+         tuple_element_t<_is, typename ViewType::Fields>::name(), _found[_is],
+         _errors),
+     ...);
   }
 
   /// Overlays input data onto an existing struct instance, preserving any
