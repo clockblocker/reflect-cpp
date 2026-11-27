@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "../NamedTuple.hpp"
-#include "../Nullable.hpp"
 #include "../Result.hpp"
 #include "../TriState.hpp"
 #include "../internal/add_null_fields_v.hpp"
@@ -89,12 +88,32 @@ consteval bool contains_tri_state_wrapper() {
   using U = std::remove_cvref_t<T>;
   if constexpr (internal::is_tri_state_v<U>) {
     return true;
+  } else if constexpr (internal::is_skip_v<U>) {
+    return false;
   } else if constexpr (internal::is_rename_v<U> || internal::is_short_v<U> ||
-                       internal::is_positional_v<U>) {
+                       internal::is_positional_v<U> ||
+                       internal::is_default_val_v<U>) {
     return contains_tri_state_wrapper<typename U::Type>();
   } else if constexpr (internal::has_reflection_type_v<U> &&
                        !std::is_same_v<U, rfl::Generic>) {
     return contains_tri_state_wrapper<typename U::ReflectionType>();
+  } else {
+    return false;
+  }
+}
+
+template <class T>
+consteval bool contains_skip_serialization_wrapper() {
+  using U = std::remove_cvref_t<T>;
+  if constexpr (internal::is_skip_v<U>) {
+    return U::skip_serialization_;
+  } else if constexpr (internal::is_rename_v<U> || internal::is_short_v<U> ||
+                       internal::is_positional_v<U> ||
+                       internal::is_default_val_v<U>) {
+    return contains_skip_serialization_wrapper<typename U::Type>();
+  } else if constexpr (internal::has_reflection_type_v<U> &&
+                       !std::is_same_v<U, rfl::Generic>) {
+    return contains_skip_serialization_wrapper<typename U::ReflectionType>();
   } else {
     return false;
   }
@@ -282,7 +301,9 @@ struct NamedTupleParser {
             _w, v, new_parent);
       }
     } else if constexpr (!_all_required && !_no_field_names &&
-                         !is_required<ValueType, _ignore_empty_containers>()) {
+                         (!is_required<ValueType, _ignore_empty_containers>() ||
+                          contains_tri_state_wrapper<std::remove_cvref_t<
+                              std::remove_pointer_t<ValueType>>>())) {
       constexpr auto name = FieldType::name_.string_view();
       const auto new_parent = make_parent(name, _ptr);
       using UnwrappedValueT =
@@ -291,7 +312,8 @@ struct NamedTupleParser {
           !is_required<ValueType, false>() || std::is_pointer_v<UnwrappedValueT>;
       constexpr bool force_emit_null =
           internal::add_null_fields_v<ProcessorsType> && is_nullable_field &&
-          !contains_tri_state_wrapper<UnwrappedValueT>();
+          !contains_tri_state_wrapper<UnwrappedValueT>() &&
+          !contains_skip_serialization_wrapper<UnwrappedValueT>();
       if (force_emit_null || !is_empty(value)) {
         if constexpr (internal::is_attribute_v<ValueType>) {
           Parser<R, W, ValueType, ProcessorsType>::write(
@@ -326,11 +348,12 @@ struct NamedTupleParser {
         s.variant_.visit([&](auto& value) {
           if constexpr (std::is_same_v<std::remove_cvref_t<decltype(value)>,
                                        schema::Type::DefaultVal>) {
-            const auto& dv_inner = (*rfl::get<_i>(*_view)).get();
+            const auto& dv_inner =
+                internal::get_default_val(*rfl::get<_i>(*_view)).get();
             bool skip_omitted_tristate = false;
-            if constexpr (internal::is_tri_state_v<
-                              std::remove_cvref_t<decltype(dv_inner)>>) {
-              skip_omitted_tristate = dv_inner.is_omitted();
+            if constexpr (contains_tri_state_wrapper<
+                              std::remove_cvref_t<decltype(dv_inner)>>()) {
+              skip_omitted_tristate = is_empty(dv_inner);
             }
             if (!skip_omitted_tristate) {
               value.default_value_ =

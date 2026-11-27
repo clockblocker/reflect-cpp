@@ -1,9 +1,12 @@
 #ifndef RFL_PARSING_PARSER_NULLABLE_HPP_
 #define RFL_PARSING_PARSER_NULLABLE_HPP_
 
+#include <cstddef>
 #include <map>
 #include <optional>
+#include <string>
 #include <type_traits>
+#include <utility>
 
 #include "../Nullable.hpp"
 #include "../Ref.hpp"

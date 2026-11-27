@@ -38,13 +38,10 @@ constexpr bool is_tri_state_v = is_tri_state<std::remove_cvref_t<T>>::value;
 ///   3. `State::value`   — key was explicitly present with a value of type `T`
 ///      (serializes as `"field": <value>`).
 ///
-/// Works across `read`, `read_into` (preserving prior layer state when omitted,
-/// overriding with `State::null` on explicit `null`, and recursively overlaying
-/// nested structs when both layers hold values), `write`, and Draft 2020-12
-/// JSON Schema generation.
+/// Works across `read`, `write`, and Draft 2020-12 JSON Schema generation.
 ///
 /// Note: `rfl::TriState<T>` is intended for formats with native null values
-/// (JSON, YAML, Generic, nlohmann, CBOR, MsgPack, etc.).
+/// (JSON, YAML, Generic, CBOR, MsgPack, etc.).
 template <class T>
 class TriState {
  public:
@@ -191,7 +188,11 @@ class TriState {
     return ref;
   }
 
-  constexpr bool operator==(const TriState& _other) const {
+  constexpr bool operator==(const TriState& _other) const
+    requires requires(const T& _a, const T& _b) {
+      { _a == _b } -> std::convertible_to<bool>;
+    }
+  {
     if (state_ != _other.state_) {
       return false;
     }

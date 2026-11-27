@@ -1,9 +1,12 @@
 #ifndef RFL_PARSING_PARSER_TRISTATE_HPP_
 #define RFL_PARSING_PARSER_TRISTATE_HPP_
 
+#include <cstddef>
 #include <map>
 #include <optional>
+#include <string>
 #include <type_traits>
+#include <utility>
 
 #include "../Ref.hpp"
 #include "../Result.hpp"

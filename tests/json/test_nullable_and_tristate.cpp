@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <rfl.hpp>
@@ -39,6 +40,8 @@ struct WrappedPresence {
   rfl::DefaultVal<rfl::Nullable<int>> with_default = 7;
   rfl::DefaultVal<rfl::TriState<int>> with_default_null = std::nullopt;
   rfl::DefaultVal<rfl::TriState<int>> with_default_omitted = rfl::omitted;
+  rfl::Rename<"renamedOmitted", rfl::DefaultVal<rfl::TriState<int>>>
+      renamed_default_omitted = rfl::omitted;
 };
 
 struct AddNullFieldsStruct {
@@ -47,11 +50,19 @@ struct AddNullFieldsStruct {
   rfl::TriState<int> c = rfl::omitted;
   rfl::TriState<int> d = std::nullopt;
   std::unique_ptr<int> ptr = nullptr;
+  std::shared_ptr<int> sptr = nullptr;
+  rfl::Skip<int> skipped = 42;
+  rfl::SkipSerialization<int> skip_ser = 99;
 };
 
 struct XmlContainerAddNull {
   std::vector<int> items = {};
+  std::map<std::string, int> mapping = {};
   std::string name = "x";
+};
+
+struct NonComparable {
+  int v = 0;
 };
 
 struct MoveOnlyHolder {
@@ -161,10 +172,17 @@ TEST(json, test_tristate_jsonrpc_omitted_vs_null_vs_value) {
 }
 
 TEST(json, test_add_null_fields_processor_and_xml_empty_container) {
+  static_assert(rfl::internal::add_null_fields_v<rfl::AddNullFields>);
+  static_assert(rfl::internal::add_null_fields_v<
+                rfl::Processors<rfl::Processors<rfl::AddNullFields>>>);
+
   AddNullFieldsStruct s;
   EXPECT_EQ(rfl::json::write(s), R"({"b":"ok","d":null})");
   EXPECT_EQ(rfl::json::write<rfl::AddNullFields>(s),
-            R"({"a":null,"b":"ok","d":null,"ptr":null})");
+            R"({"a":null,"b":"ok","d":null,"ptr":null,"sptr":null})");
+  // Nested Processors<...> pack must still honor AddNullFields.
+  EXPECT_EQ(rfl::json::write<rfl::Processors<rfl::AddNullFields>>(s),
+            R"({"a":null,"b":"ok","d":null,"ptr":null,"sptr":null})");
 
   const auto read_back =
       rfl::json::read<AddNullFieldsStruct, rfl::AddNullFields>(R"({"b":"hi"})")
@@ -174,9 +192,27 @@ TEST(json, test_add_null_fields_processor_and_xml_empty_container) {
   EXPECT_TRUE(read_back.c.is_omitted());
   EXPECT_TRUE(read_back.d.is_omitted());
   EXPECT_EQ(read_back.ptr, nullptr);
+  EXPECT_EQ(read_back.sptr, nullptr);
+
+  // Under NoOptionals, omitted Nullable and TriState keys must fail on read.
+  EXPECT_FALSE(
+      (rfl::json::read<JsonRpcEnvelope, rfl::NoOptionals>(
+           R"({"jsonrpc":"2.0","method":"notify"})"))
+          .has_value());
+  EXPECT_FALSE(
+      (rfl::json::read<VariableDeclaration, rfl::NoOptionals>(
+           R"({"nodeType":"VariableDeclaration","variables":[]})"))
+          .has_value());
+  // Invalid value type propagates parse error.
+  EXPECT_FALSE(
+      rfl::json::read<WrappedPresence>(R"({"explicit_null":"not_an_int"})")
+          .has_value());
+  EXPECT_FALSE(
+      rfl::json::read<WrappedPresence>(R"({"reqId":"not_an_int"})")
+          .has_value());
 
   // Under XML (_ignore_empty_containers=true), AddNullFields must NOT treat
-  // non-nullable empty vectors as nullable fields.
+  // non-nullable empty vectors or maps as nullable fields.
   XmlContainerAddNull xc;
   const auto xml_plain = rfl::xml::write<"root">(xc);
   const auto xml_anf = rfl::xml::write<"root", rfl::AddNullFields>(xc);
@@ -184,6 +220,12 @@ TEST(json, test_add_null_fields_processor_and_xml_empty_container) {
 }
 
 TEST(json, test_nullable_and_tristate_schema_and_wrappers) {
+  // DefaultVal<TriState> in State::omitted must omit on write (not emit null).
+  WrappedPresence wp;
+  EXPECT_EQ(
+      rfl::json::write(wp),
+      R"({"explicit_null":null,"with_default":7,"with_default_null":null})");
+
   const auto schema = rfl::json::to_schema<VariableDeclaration>();
   EXPECT_NE(
       schema.find(
@@ -203,11 +245,17 @@ TEST(json, test_nullable_and_tristate_schema_and_wrappers) {
   EXPECT_NE(wrapped_schema.find("\"default\":7"), std::string::npos);
   EXPECT_NE(wrapped_schema.find("\"default\":null"), std::string::npos);
   EXPECT_NE(wrapped_schema.find("\"reqId\""), std::string::npos);
-  // DefaultVal<TriState<int>> with State::omitted must NOT emit "default":null.
+  // DefaultVal<TriState<int>> with State::omitted must NOT emit "default":null,
+  // including when wrapped inside rfl::Rename.
   const auto pos_omitted = wrapped_schema.find("\"with_default_omitted\"");
   ASSERT_NE(pos_omitted, std::string::npos);
   const auto omitted_slice = wrapped_schema.substr(pos_omitted, 120);
   EXPECT_EQ(omitted_slice.find("\"default\""), std::string::npos);
+
+  const auto pos_renamed_omitted = wrapped_schema.find("\"renamedOmitted\"");
+  ASSERT_NE(pos_renamed_omitted, std::string::npos);
+  const auto renamed_slice = wrapped_schema.substr(pos_renamed_omitted, 120);
+  EXPECT_EQ(renamed_slice.find("\"default\""), std::string::npos);
 }
 
 TEST(json, test_nullable_and_tristate_type_safety_and_exception_safety) {
@@ -255,6 +303,9 @@ TEST(json, test_nullable_and_tristate_type_safety_and_exception_safety) {
   EXPECT_THROW(ts_throw.emplace(-1), std::runtime_error);
   EXPECT_FALSE(ts_throw.has_value());
   EXPECT_TRUE(ts_throw.is_omitted());
+
+  static_assert(!std::equality_comparable<rfl::TriState<NonComparable>>);
+  static_assert(!std::equality_comparable<rfl::Nullable<NonComparable>>);
 
   // Unambiguous comparisons and braced empty assignment.
   rfl::Nullable<std::string> ns;

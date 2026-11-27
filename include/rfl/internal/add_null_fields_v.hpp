@@ -8,20 +8,19 @@
 
 namespace rfl::internal {
 
-template <class ProcessorsType>
-struct add_null_fields;
+template <class T>
+struct add_null_fields : std::false_type {};
 
 template <>
-struct add_null_fields<Processors<>> : std::false_type {};
+struct add_null_fields<AddNullFields> : std::true_type {};
 
-template <class Head, class... Tail>
-struct add_null_fields<Processors<Head, Tail...>>
-    : std::bool_constant<std::is_same_v<Head, AddNullFields> ||
-                         add_null_fields<Processors<Tail...>>::value> {};
+template <class... Ps>
+struct add_null_fields<Processors<Ps...>>
+    : std::bool_constant<(add_null_fields<Ps>::value || ...)> {};
 
-template <class ProcessorsType>
-constexpr bool add_null_fields_v =
-    add_null_fields<std::remove_cvref_t<ProcessorsType>>::value;
+template <class T>
+inline constexpr bool add_null_fields_v =
+    add_null_fields<std::remove_cvref_t<T>>::value;
 
 }  // namespace rfl::internal
 

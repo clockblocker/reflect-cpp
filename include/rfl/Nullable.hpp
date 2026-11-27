@@ -52,15 +52,14 @@ constexpr bool is_bool_optional_like_conversion_v =
 /// which omits empty keys by default.
 ///
 /// On `read`, `rfl::Nullable<T>` accepts an omitted key (becoming null), an
-/// explicit `null` (becoming null), or a value of type `T`. On `read_into`, an
-/// omitted key preserves the existing base value while an explicit `null`
-/// resets it to null. In JSON Schema (Draft 2020-12), it emits a nullable
-/// schema (`anyOf: [<T>, {"type": "null"}]`) and is not marked required unless
-/// `rfl::NoOptionals` is used.
+/// explicit `null` (becoming null), or a value of type `T`; with
+/// `rfl::NoOptionals`, an omitted key fails to parse. In JSON Schema
+/// (Draft 2020-12), it emits a nullable schema (`anyOf: [<T>, {"type":
+/// "null"}]`) and is not placed in `required`.
 ///
 /// Note: Formats without a native null representation (TOML, XML) serialize
 /// null via their writer's fallback; `rfl::Nullable<T>` is intended for formats
-/// with native null values (JSON, YAML, Generic, nlohmann, CBOR, MsgPack, etc.).
+/// with native null values (JSON, YAML, Generic, CBOR, MsgPack, etc.).
 template <class T>
 class Nullable {
  public:
