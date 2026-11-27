@@ -55,8 +55,7 @@ rfl::Result<std::variant<T, HelpOrVersion>> parse_and_read_app(
   using ProcessorsType =
       rfl::internal::flatten_processors_t<SnakeCaseToKebabCase, Ps...>;
   using ResultType = std::variant<T, HelpOrVersion>;
-  auto options = make_options<T, ProcessorsType>();
-  const auto builtin = add_builtin_options<T, ProcessorsType>(&options);
+  const auto& [options, builtin] = cached_app_options<T, ProcessorsType>();
   const auto short_names = check_short_names(options);
   if (!short_names) {
     return error(short_names.error().what());

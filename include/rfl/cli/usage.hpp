@@ -2,36 +2,50 @@
 #define RFL_CLI_USAGE_HPP_
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <exception>
 #include <locale>
-#include <map>
 #include <optional>
-#include <set>
+#include <ranges>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
 
-#include "../Generic.hpp"
 #include "../Processors.hpp"
 #include "../Result.hpp"
 #include "../SnakeCaseToKebabCase.hpp"
-#include "../generic/Writer.hpp"
+#include "../Tuple.hpp"
+#include "../apply.hpp"
+#include "../enums.hpp"
+#include "../internal/TransparentWrapper.hpp"
+#include "../internal/always_inline.hpp"
 #include "../internal/default_if_missing_v.hpp"
+#include "../internal/has_default_val_v.hpp"
+#include "../internal/has_reflection_method_v.hpp"
+#include "../internal/has_reflection_type_v.hpp"
+#include "../internal/has_reflector.hpp"
+#include "../internal/is_bitset.hpp"
 #include "../internal/is_default_val_v.hpp"
+#include "../internal/is_deprecated.hpp"
+#include "../internal/is_description.hpp"
 #include "../internal/is_extra_fields.hpp"
+#include "../internal/is_literal.hpp"
 #include "../internal/is_named_tuple.hpp"
+#include "../internal/is_positional.hpp"
+#include "../internal/is_short.hpp"
+#include "../internal/is_validator.hpp"
 #include "../internal/no_optionals_v.hpp"
-#include "../internal/processed_t.hpp"
-#include "../parsing/is_required.hpp"
-#include "../parsing/schema/Definition.hpp"
-#include "../parsing/schema/Type.hpp"
+#include "../internal/underlying_enums_v.hpp"
+#include "../parsing/ParserCommented.hpp"
+#include "../parsing/ParserFilepath.hpp"
 #include "../parsing/schema/ValidationType.hpp"
-#include "../parsing/schema/make.hpp"
-#include "../to_generic.hpp"
+#include "../to_view.hpp"
 #include "App.hpp"
 #include "ListDelimiter.hpp"
 #include "OptionsFirst.hpp"
@@ -67,12 +81,6 @@ struct UsageOptions {
 
 namespace internal {
 
-/// Whether a top-level field is required, which the schema cannot tell the
-/// way the parser sees it.
-struct UsageFieldMeta {
-  bool required = true;
-};
-
 /// Everything usage() renders about one argument.
 struct UsageArg {
   /// The long name, including the path of nested objects ("database.host").
@@ -92,9 +100,6 @@ struct UsageArg {
   /// takes the remaining positional arguments.
   bool takes_rest = false;
   bool required = true;
-  /// Whether `required` was taken from the parser's compile-time traits, so
-  /// that the schema must not override it.
-  bool required_is_known = false;
   /// Whether the option is shown without a value, as the built-in `--help`
   /// and `--version` are.
   bool bare = false;
@@ -111,63 +116,6 @@ struct UsageArg {
   /// Optional help section header (from rfl::Group).
   std::string group;
 };
-
-template <class NamedTupleType, class ProcessorsType, size_t _i>
-void add_usage_field_meta(const bool _default_vals_are_optional,
-                          std::map<std::string, UsageFieldMeta>* _meta) {
-  using Info = field_info<NamedTupleType, _i>;
-  using ValueType = std::remove_cvref_t<typename Info::InnerType>;
-  auto& meta = (*_meta)[std::string(Info::name())];
-  // The same condition as in NamedTupleParser::handle_one_missing_field.
-  // is_default_val_v sees a DefaultVal through Short, Positional, Rename,
-  // Description and Deprecated, in any order, as the parser does. The schema
-  // cannot tell, because it marks a DefaultVal field as optional even where
-  // the parser requires it (see usage_default_vals_are_optional).
-  meta.required =
-      !(rfl::internal::is_default_val_v<ValueType>
-        && _default_vals_are_optional)
-      && !rfl::internal::is_extra_fields_v<ValueType>
-      && (rfl::internal::no_optionals_v<ProcessorsType>
-          || parsing::is_required<ValueType, false>());
-}
-
-/// Collects whether each top-level field is required from the same
-/// compile-time traits that the parser uses, so the help matches what the
-/// parser accepts. Positional, Short, flags, implicit values and lists come
-/// from the parser's option table (make_options).
-template <class NamedTupleType, class ProcessorsType, size_t... _is>
-std::map<std::string, UsageFieldMeta> collect_usage_field_meta(
-    const bool _default_vals_are_optional, std::index_sequence<_is...>) {
-  std::map<std::string, UsageFieldMeta> meta;
-  (add_usage_field_meta<NamedTupleType, ProcessorsType, _is>(
-       _default_vals_are_optional, &meta),
-   ...);
-  return meta;
-}
-
-/// Whether the parser fills in the rfl::DefaultVal fields of T that are
-/// missing. It does so by default-constructing T before reading it. If T is
-/// not default-constructible (only possible if all of them are wrapped in
-/// another type), or T{} throws (for instance because a validator rejects
-/// another field's default value), they are required, or the read fails if
-/// one of them is not wrapped in another type. An
-/// rfl::NamedTuple has no in-class initializers, so it is never
-/// default-constructed for its defaults.
-template <class T>
-bool usage_default_vals_are_optional() {
-  if constexpr (rfl::internal::is_named_tuple_v<T>) {
-    return true;
-  } else if constexpr (std::is_default_constructible_v<T>) {
-    try {
-      static_cast<void>(T{});
-      return true;
-    } catch (const std::exception&) {
-      return false;
-    }
-  } else {
-    return false;
-  }
-}
 
 /// Renders a number without locale-dependent separators.
 inline std::string usage_number_to_string(const double _value) {
@@ -189,46 +137,152 @@ inline std::string usage_number_to_string(
   });
 }
 
-/// Renders a default value the way it would be passed on the command line.
-/// Returns nullopt for values that cannot be rendered sensibly (null,
-/// objects, empty arrays).
-/// Lists are joined with the list delimiter. If lists are not split
-/// (ListDelimiter<"">), a list of several items cannot be typed as one
-/// value, so it is left out.
-inline std::optional<std::string> usage_default_to_string(
-    const Generic& _value, const std::optional<char> _delimiter) {
-  return std::visit(
-      [&](const auto& _v) -> std::optional<std::string> {
-        using V = std::remove_cvref_t<decltype(_v)>;
-        if constexpr (std::is_same_v<V, bool>) {
-          return _v ? "true" : "false";
-        } else if constexpr (std::is_same_v<V, int64_t>) {
-          return std::to_string(_v);
-        } else if constexpr (std::is_same_v<V, double>) {
-          return usage_number_to_string(_v);
-        } else if constexpr (std::is_same_v<V, std::string>) {
-          return _v.empty() ? std::string("\"\"") : _v;
-        } else if constexpr (std::is_same_v<V, Generic::Array>) {
-          if (_v.empty() || (!_delimiter && _v.size() > 1)) {
-            return std::nullopt;
-          }
-          std::string joined;
-          for (const auto& element : _v) {
-            const auto str = usage_default_to_string(element, _delimiter);
-            if (!str) {
-              return std::nullopt;
-            }
-            if (!joined.empty()) {
-              joined += *_delimiter;
-            }
-            joined += *str;
-          }
-          return joined;
-        } else {
-          return std::nullopt;
-        }
-      },
-      _value.variant());
+/// Renders a C++ default value directly the way it would be passed on the
+/// command line, without converting through rfl::Generic.
+/// Returns nullopt for values that cannot be rendered sensibly (nullopt,
+/// structs, maps, empty lists, or multi-element lists without a delimiter).
+template <class ProcessorsType, class T>
+std::optional<std::string> format_default_value(
+    const T& _val, const std::optional<char> _delimiter) {
+  using U = std::remove_cvref_t<T>;
+  if constexpr (std::is_same_v<U, bool>) {
+    return _val ? std::string("true") : std::string("false");
+  } else if constexpr (std::is_integral_v<U>) {
+    return std::to_string(_val);
+  } else if constexpr (std::is_floating_point_v<U>) {
+    return usage_number_to_string(static_cast<double>(_val));
+  } else if constexpr (std::is_same_v<U, std::string> ||
+                       std::is_same_v<U, std::string_view>) {
+    return _val.empty() ? std::string("\"\"") : std::string(_val);
+  } else if constexpr (parsing::is_filepath_v<U>) {
+    const auto s = _val.string();
+    return s.empty() ? std::string("\"\"") : s;
+  } else if constexpr (rfl::internal::is_bitset_v<U>) {
+    return _val.to_string();
+  } else if constexpr (rfl::internal::is_literal_v<U>) {
+    const auto s = _val.str();
+    return s.empty() ? std::string("\"\"") : s;
+  } else if constexpr (std::is_enum_v<U>) {
+    if constexpr (rfl::internal::has_write_reflector<U> &&
+                  requires(const U& _u) { Reflector<U>::from(_u); }) {
+      return format_default_value<ProcessorsType>(Reflector<U>::from(_val),
+                                                  _delimiter);
+    } else if constexpr (rfl::internal::underlying_enums_v<ProcessorsType>) {
+      return std::to_string(static_cast<std::underlying_type_t<U>>(_val));
+    } else {
+      const auto s = rfl::enum_to_string(_val);
+      return s.empty() ? std::string("\"\"") : s;
+    }
+  } else if constexpr (parsing::is_optional_v<U> ||
+                       parsing::is_unique_ptr_v<U> ||
+                       parsing::is_shared_ptr_v<U>) {
+    if (!_val) {
+      return std::nullopt;
+    }
+    return format_default_value<ProcessorsType>(*_val, _delimiter);
+  } else if constexpr (parsing::is_box_v<U> || parsing::is_ref_v<U>) {
+    if (!_val.get()) {
+      return std::nullopt;
+    }
+    return format_default_value<ProcessorsType>(*_val, _delimiter);
+  } else if constexpr (std::is_pointer_v<U>) {
+    if constexpr (!std::is_void_v<std::remove_pointer_t<U>>) {
+      return _val ? format_default_value<ProcessorsType>(*_val, _delimiter)
+                  : std::nullopt;
+    } else {
+      return std::nullopt;
+    }
+  } else if constexpr (rfl::internal::is_short_v<U> ||
+                       rfl::internal::is_positional_v<U> ||
+                       rfl::internal::is_transparent_wrapper_v<U> ||
+                       parsing::is_rename_v<U> ||
+                       parsing::is_default_val_v<U> ||
+                       parsing::is_skip_v<U> ||
+                       rfl::internal::is_description_v<U> ||
+                       rfl::internal::is_deprecated_v<U> ||
+                       rfl::internal::is_validator_v<U> ||
+                       parsing::is_commented_v<U>) {
+    return format_default_value<ProcessorsType>(_val.value(), _delimiter);
+  } else if constexpr (parsing::is_variant_v<U>) {
+    if (_val.valueless_by_exception()) {
+      return std::nullopt;
+    }
+    return std::visit(
+        [&](const auto& _v) {
+          return format_default_value<ProcessorsType>(_v, _delimiter);
+        },
+        _val);
+  } else if constexpr (parsing::is_rfl_variant_v<U>) {
+    return _val.visit([&](const auto& _v) {
+      return format_default_value<ProcessorsType>(_v, _delimiter);
+    });
+  } else if constexpr (parsing::is_rfl_array_v<U>) {
+    return format_default_value<ProcessorsType>(_val.arr_, _delimiter);
+  } else if constexpr (parsing::is_tuple_v<U> || parsing::is_pair_v<U> ||
+                       parsing::is_rfl_tuple_v<U>) {
+    std::string joined;
+    size_t count = 0;
+    bool ok = true;
+    const auto append = [&](const auto& _elem) {
+      if (!ok) {
+        return;
+      }
+      if (count > 0 && !_delimiter) {
+        ok = false;
+        return;
+      }
+      const auto str = format_default_value<ProcessorsType>(_elem, _delimiter);
+      if (!str) {
+        ok = false;
+        return;
+      }
+      if (count > 0) {
+        joined += *_delimiter;
+      }
+      joined += *str;
+      ++count;
+    };
+    if constexpr (parsing::is_rfl_tuple_v<U>) {
+      rfl::apply([&](const auto&... _es) { (append(_es), ...); }, _val);
+    } else {
+      std::apply([&](const auto&... _es) { (append(_es), ...); }, _val);
+    }
+    if (!ok || count == 0) {
+      return std::nullopt;
+    }
+    return joined;
+  } else if constexpr (is_option_list_v<U> && std::ranges::range<const U>) {
+    std::string joined;
+    size_t count = 0;
+    for (const auto& elem : _val) {
+      if (count > 0 && !_delimiter) {
+        return std::nullopt;
+      }
+      const auto str = format_default_value<ProcessorsType>(elem, _delimiter);
+      if (!str) {
+        return std::nullopt;
+      }
+      if (count > 0) {
+        joined += *_delimiter;
+      }
+      joined += *str;
+      ++count;
+    }
+    if (count == 0) {
+      return std::nullopt;
+    }
+    return joined;
+  } else if constexpr (rfl::internal::has_write_reflector<U> &&
+                       requires(const U& _u) { Reflector<U>::from(_u); }) {
+    return format_default_value<ProcessorsType>(Reflector<U>::from(_val),
+                                                _delimiter);
+  } else if constexpr (rfl::internal::has_reflection_type_v<U> &&
+                       rfl::internal::has_reflection_method_v<U> &&
+                       requires(const U& _u) { _u.reflection(); }) {
+    return format_default_value<ProcessorsType>(_val.reflection(), _delimiter);
+  } else {
+    return std::nullopt;
+  }
 }
 
 /// Renders a numeric bound such as ">= 1", "1..10" or "< 0 or > 10".
@@ -335,181 +389,518 @@ inline std::vector<std::string> usage_constraints(
       });
 }
 
-/// Walks the format-agnostic schema of the struct and collects one UsageArg
-/// per command-line argument, in declaration order.
-class UsageCollector {
- public:
-  using Type = parsing::schema::Type;
+/// Compile-time metadata peeling for all transparent, documentation, optional,
+/// pointer, and DefaultVal wrappers around a field's core type. Peeling at
+/// compile time lets UsageWalker funnel all fields with the same unwrapped
+/// core type (e.g. bool, int, std::string, std::vector<std::string>) through a
+/// single walk_core<CoreType> instantiation, keeping symbol tables and compile
+/// times small on large CLI structs.
+template <class T, bool _outermost = true>
+struct usage_peel;
 
-  UsageCollector(const parsing::schema::Definition* _definition,
-                 const std::map<std::string, UsageFieldMeta>* _meta,
-                 const Options* _options,
-                 const bool _optionals_are_required,
-                 const std::optional<char> _delimiter)
-      : definition_(_definition),
-        meta_(_meta),
-        options_(_options),
-        optionals_are_required_(_optionals_are_required),
+template <class T, bool _outermost>
+struct usage_peel_base {
+  using CoreType = T;
+  static constexpr std::string_view description = {};
+  static constexpr bool is_deprecated = false;
+  static constexpr std::string_view deprecation_message = {};
+  static constexpr bool has_outermost_default_val = false;
+  static constexpr bool has_any_default_val = false;
+  static constexpr bool has_nullable = false;
+
+  static inline const CoreType* unwrap_ptr(const T* _p) noexcept { return _p; }
+};
+
+template <class T, bool _outermost>
+struct usage_peel : usage_peel_base<std::remove_cvref_t<T>, _outermost> {};
+
+template <rfl::internal::StringLiteral _desc, class T, bool _outermost>
+struct usage_peel<Description<_desc, T>, _outermost> {
+  using Next = usage_peel<std::remove_cvref_t<T>, _outermost>;
+  using CoreType = typename Next::CoreType;
+  static constexpr std::string_view description =
+      _desc.string_view().empty() ? Next::description : _desc.string_view();
+  static constexpr bool is_deprecated = Next::is_deprecated;
+  static constexpr std::string_view deprecation_message =
+      Next::deprecation_message;
+  static constexpr bool has_outermost_default_val =
+      Next::has_outermost_default_val;
+  static constexpr bool has_any_default_val = Next::has_any_default_val;
+  static constexpr bool has_nullable = Next::has_nullable;
+
+  static inline const CoreType* unwrap_ptr(
+      const Description<_desc, T>* _p) noexcept {
+    return Next::unwrap_ptr(_p ? &_p->value() : nullptr);
+  }
+};
+
+template <rfl::internal::StringLiteral _msg, rfl::internal::StringLiteral _desc,
+          class T, bool _outermost>
+struct usage_peel<Deprecated<_msg, _desc, T>, _outermost> {
+  using Next = usage_peel<std::remove_cvref_t<T>, _outermost>;
+  using CoreType = typename Next::CoreType;
+  static constexpr std::string_view description =
+      _desc.string_view().empty() ? Next::description : _desc.string_view();
+  static constexpr bool is_deprecated = true;
+  static constexpr std::string_view deprecation_message =
+      Next::is_deprecated ? Next::deprecation_message : _msg.string_view();
+  static constexpr bool has_outermost_default_val =
+      Next::has_outermost_default_val;
+  static constexpr bool has_any_default_val = Next::has_any_default_val;
+  static constexpr bool has_nullable = Next::has_nullable;
+
+  static inline const CoreType* unwrap_ptr(
+      const Deprecated<_msg, _desc, T>* _p) noexcept {
+    return Next::unwrap_ptr(_p ? &_p->value() : nullptr);
+  }
+};
+
+template <class T, bool _outermost>
+  requires(rfl::internal::is_short_v<T> || rfl::internal::is_positional_v<T> ||
+           rfl::internal::is_transparent_wrapper_v<T> ||
+           parsing::is_rename_v<T> || parsing::is_skip_v<T> ||
+           parsing::is_commented_v<T>)
+struct usage_peel<T, _outermost> {
+  using Next = usage_peel<std::remove_cvref_t<typename T::Type>, _outermost>;
+  using CoreType = typename Next::CoreType;
+  static constexpr std::string_view description = Next::description;
+  static constexpr bool is_deprecated = Next::is_deprecated;
+  static constexpr std::string_view deprecation_message =
+      Next::deprecation_message;
+  static constexpr bool has_outermost_default_val =
+      Next::has_outermost_default_val;
+  static constexpr bool has_any_default_val = Next::has_any_default_val;
+  static constexpr bool has_nullable = Next::has_nullable;
+
+  static inline const CoreType* unwrap_ptr(const T* _p) noexcept {
+    return Next::unwrap_ptr(_p ? &_p->value() : nullptr);
+  }
+};
+
+template <class T, bool _outermost>
+struct usage_peel<DefaultVal<T>, _outermost> {
+  using Next = usage_peel<std::remove_cvref_t<T>, false>;
+  using CoreType = typename Next::CoreType;
+  static constexpr std::string_view description = Next::description;
+  static constexpr bool is_deprecated = Next::is_deprecated;
+  static constexpr std::string_view deprecation_message =
+      Next::deprecation_message;
+  static constexpr bool has_outermost_default_val = _outermost;
+  static constexpr bool has_any_default_val = true;
+  static constexpr bool has_nullable = Next::has_nullable;
+
+  static inline const CoreType* unwrap_ptr(const DefaultVal<T>* _p) noexcept {
+    return Next::unwrap_ptr(_p ? &_p->value() : nullptr);
+  }
+};
+
+template <class T, bool _outermost>
+struct usage_peel<std::optional<T>, _outermost> {
+  using Next = usage_peel<std::remove_cvref_t<T>, false>;
+  using CoreType = typename Next::CoreType;
+  static constexpr std::string_view description = Next::description;
+  static constexpr bool is_deprecated = Next::is_deprecated;
+  static constexpr std::string_view deprecation_message =
+      Next::deprecation_message;
+  static constexpr bool has_outermost_default_val =
+      Next::has_outermost_default_val;
+  static constexpr bool has_any_default_val = Next::has_any_default_val;
+  static constexpr bool has_nullable = true;
+
+  static inline const CoreType* unwrap_ptr(
+      const std::optional<T>* _p) noexcept {
+    return Next::unwrap_ptr((_p && *_p) ? &(**_p) : nullptr);
+  }
+};
+
+template <class T, bool _outermost>
+  requires(parsing::is_unique_ptr_v<T> || parsing::is_shared_ptr_v<T>)
+struct usage_peel<T, _outermost> {
+  using Next =
+      usage_peel<std::remove_cvref_t<typename T::element_type>, false>;
+  using CoreType = typename Next::CoreType;
+  static constexpr std::string_view description = Next::description;
+  static constexpr bool is_deprecated = Next::is_deprecated;
+  static constexpr std::string_view deprecation_message =
+      Next::deprecation_message;
+  static constexpr bool has_outermost_default_val =
+      Next::has_outermost_default_val;
+  static constexpr bool has_any_default_val = Next::has_any_default_val;
+  static constexpr bool has_nullable = true;
+
+  static inline const CoreType* unwrap_ptr(const T* _p) noexcept {
+    return Next::unwrap_ptr((_p && *_p) ? _p->get() : nullptr);
+  }
+};
+
+template <class T, bool _outermost>
+  requires(parsing::is_box_v<T> || parsing::is_ref_v<T>)
+struct usage_peel<T, _outermost> {
+  using Elem = std::conditional_t<
+      parsing::is_box_v<T>, typename parsing::is_box<T>::element_type,
+      typename parsing::is_ref<T>::element_type>;
+  using Next = usage_peel<std::remove_cvref_t<Elem>, false>;
+  using CoreType = typename Next::CoreType;
+  static constexpr std::string_view description = Next::description;
+  static constexpr bool is_deprecated = Next::is_deprecated;
+  static constexpr std::string_view deprecation_message =
+      Next::deprecation_message;
+  static constexpr bool has_outermost_default_val =
+      Next::has_outermost_default_val;
+  static constexpr bool has_any_default_val = Next::has_any_default_val;
+  static constexpr bool has_nullable = Next::has_nullable;
+
+  static inline const CoreType* unwrap_ptr(const T* _p) noexcept {
+    return Next::unwrap_ptr((_p && _p->get()) ? _p->get() : nullptr);
+  }
+};
+
+/// Walks the target struct's fields directly at compile time and collects one
+/// UsageArg per command-line argument in declaration order, without building a
+/// JSON schema or converting to rfl::Generic.
+template <class ProcessorsType>
+class UsageWalker {
+ public:
+  UsageWalker(const Options* _options, const std::optional<char> _delimiter)
+      : options_(_options),
+        optionals_are_required_(rfl::internal::no_optionals_v<ProcessorsType>),
         delimiter_(_delimiter) {
+    short_names_.reserve(_options->short_options.size());
     for (const auto& [short_name, path] : _options->short_options) {
-      short_names_[path] = short_name;
+      short_names_.emplace_back(path, short_name);
     }
+    std::sort(short_names_.begin(), short_names_.end(),
+              [](const auto& _a, const auto& _b) {
+                return _a.first < _b.first;
+              });
   }
 
-  /// Collects the arguments.
-  /// @param _all_optional Whether no argument is required
-  /// (rfl::DefaultIfMissing).
-  /// @param _defaults The default values of all fields, if known.
-  std::vector<UsageArg> collect(const bool _all_optional,
-                                const std::optional<Generic>& _defaults) {
+  template <class T>
+  std::vector<UsageArg> collect() {
     auto root = UsageArg{};
-    root.required = !_all_optional;
-    add(definition_->root_, std::move(root), _defaults, false);
+    constexpr bool all_optional =
+        rfl::internal::default_if_missing_v<ProcessorsType>;
+    root.required = !all_optional;
+    walk_peeled<std::remove_cvref_t<T>, type_list<>, /*_outermost=*/false>(
+        std::move(root), static_cast<const std::remove_cvref_t<T>*>(nullptr),
+        /*_emit_default=*/all_optional);
     mark_rest_positional();
     return std::move(args_);
   }
 
  private:
-  /// @param _outermost Whether _type is the outermost type of a field.
-  void add(const Type& _type, UsageArg _arg,
-           const std::optional<Generic>& _default, const bool _outermost) {
-    _type.variant_.visit([&](const auto& _t) {
-      using T = std::remove_cvref_t<decltype(_t)>;
-      // Description and Deprecated do not change how a field is read, so a
-      // DefaultVal inside them still makes the field optional
-      // (is_default_val_v). Short, Positional and Rename leave no node.
-      if constexpr (std::is_same_v<T, Type::Description>) {
-        if (_arg.description.empty()) {
-          _arg.description = _t.description_;
-        }
-        add(*_t.type_, std::move(_arg), _default, _outermost);
-
-      } else if constexpr (std::is_same_v<T, Type::Deprecated>) {
-        if (_arg.description.empty()) {
-          _arg.description = _t.description_;
-        }
-        _arg.deprecation = _t.deprecation_message_;
-        add(*_t.type_, std::move(_arg), _default, _outermost);
-
-      } else if constexpr (std::is_same_v<T, Type::Optional>) {
-        if (!_arg.required_is_known && !optionals_are_required_) {
-          _arg.required = false;
-        }
-        add(*_t.type_, std::move(_arg), _default, false);
-
-      } else if constexpr (std::is_same_v<T, Type::DefaultVal>) {
-        // Like the parser (is_default_val_v), only count a DefaultVal that
-        // wraps the field, possibly inside Description or Deprecated. The
-        // schema has its default value only if the struct around it could be
-        // default-constructed, which is when the parser fills it in.
-        if (!_arg.required_is_known && _outermost && _t.default_value_) {
-          _arg.required = false;
-        }
-        add(*_t.type_, std::move(_arg),
-            _t.default_value_ ? _t.default_value_ : _default, false);
-
-      } else if constexpr (std::is_same_v<T, Type::Validated>) {
-        const auto constraints = usage_constraints(_t.validation_);
-        _arg.constraints.insert(_arg.constraints.end(), constraints.begin(),
-                                constraints.end());
-        add(*_t.type_, std::move(_arg), _default, false);
-
-      } else if constexpr (std::is_same_v<T, Type::Reference>) {
-        const auto it = definition_->definitions_.find(_t.name_);
-        if (it == definition_->definitions_.end()
-            || !visiting_.insert(_t.name_).second) {
-          // Unknown or recursive: there is no finite set of paths to list.
-          add_leaf(std::move(_arg), _default);
-          return;
-        }
-        add(it->second, std::move(_arg), _default, _outermost);
-        visiting_.erase(_t.name_);
-
-      } else if constexpr (std::is_same_v<T, Type::Object>) {
-        add_object(_t, _arg, _default);
-
-      } else if constexpr (std::is_same_v<T, Type::StringMap>) {
-        _arg.name += path_separator;
-        _arg.name += "<key>";
-        add_leaf(std::move(_arg), std::nullopt);
-
-      } else if constexpr (std::is_same_v<T, Type::Boolean>) {
-        _arg.value = "<bool>";
-        add_leaf(std::move(_arg), _default);
-
-      } else if constexpr (std::is_same_v<T, Type::Literal>) {
-        add_choices(_t.values_, std::move(_arg), _default);
-
-      } else if constexpr (std::is_same_v<T, Type::DescribedLiteral>) {
-        auto values = std::vector<std::string>();
-        for (const auto& v : _t.values_) {
-          values.push_back(v.value_);
-        }
-        add_choices(values, std::move(_arg), _default);
-
-      } else {
-        // Lists, too: whether a field is a list comes from the option table
-        // (add_leaf), which is what the parser uses.
-        add_leaf(std::move(_arg), _default);
-      }
-    });
+  template <class U>
+  static std::optional<U> try_default_construct() {
+    return U{};
   }
 
-  void add_object(const Type::Object& _object, const UsageArg& _parent,
-                  const std::optional<Generic>& _defaults) {
-    const bool is_root = _parent.name.empty();
-    for (const auto& [name, type] : _object.types_) {
-      auto arg = UsageArg{};
-      arg.name = is_root ? name : _parent.name + path_separator + name;
-      if (options_->hidden_options.contains(arg.name)) {
-        continue;
+  template <class T, class VisitedType, bool _outermost>
+  RFL_ALWAYS_INLINE void walk_peeled(UsageArg _arg, const T* _default_ptr,
+                                     const bool _emit_default) {
+    using Peel = usage_peel<std::remove_cvref_t<T>, _outermost>;
+    using Core = typename Peel::CoreType;
+    if constexpr (!Peel::description.empty()) {
+      if (_arg.description.empty()) {
+        _arg.description = std::string(Peel::description);
       }
-      // Children of an optional object are only needed if it is given.
-      arg.required = _parent.required;
-      if (is_root) {
-        const auto& positionals = options_->positionals;
-        arg.positional = std::find(positionals.begin(), positionals.end(),
-                                   name) != positionals.end();
-        const auto short_name = short_names_.find(name);
-        if (short_name != short_names_.end()) {
-          arg.short_name = short_name->second;
-        }
-        const auto it = meta_->find(name);
-        if (it != meta_->end()) {
-          arg.required = arg.required && it->second.required;
-          arg.required_is_known = true;
-        }
+    }
+    if constexpr (Peel::is_deprecated) {
+      _arg.deprecation = std::string(Peel::deprecation_message);
+    }
+    if constexpr (Peel::has_outermost_default_val) {
+      if (_default_ptr != nullptr) {
+        _arg.required = false;
       }
-      auto child_default = std::optional<Generic>();
-      const auto* obj = _defaults
-                            ? std::get_if<Generic::Object>(&_defaults->variant())
-                            : nullptr;
-      if (obj) {
-        if (auto res = obj->get(name)) {
-          child_default = std::move(*res);
-        }
+    }
+    if constexpr (Peel::has_nullable) {
+      if (!optionals_are_required_) {
+        _arg.required = false;
       }
-      add(type, std::move(arg), child_default, true);
+    }
+    const bool emit = Peel::has_any_default_val ? (_default_ptr != nullptr)
+                                                : _emit_default;
+    const Core* core_ptr = Peel::unwrap_ptr(_default_ptr);
+    walk_core<Core, VisitedType>(std::move(_arg), core_ptr, emit);
+  }
+
+  template <class U, class VisitedType>
+  void walk_core(UsageArg _arg, const U* _default_ptr,
+                 const bool _emit_default) {
+    if constexpr (rfl::internal::is_validator_v<U>) {
+      using Inner = std::remove_cvref_t<typename U::ReflectionType>;
+      using ValidationType = std::remove_cvref_t<typename U::ValidationType>;
+      const auto constraints =
+          usage_constraints(ValidationType::template to_schema<Inner>());
+      _arg.constraints.insert(_arg.constraints.end(), constraints.begin(),
+                              constraints.end());
+      walk_peeled<Inner, VisitedType, /*_outermost=*/false>(
+          std::move(_arg), _default_ptr ? &_default_ptr->value() : nullptr,
+          _emit_default);
+
+    } else if constexpr (rfl::internal::is_literal_v<U>) {
+      add_choices(U::names(), std::move(_arg),
+                  (_emit_default && _default_ptr)
+                      ? format_default_value<ProcessorsType>(*_default_ptr,
+                                                             delimiter_)
+                      : std::nullopt);
+
+    } else if constexpr (std::is_enum_v<U>) {
+      if constexpr (rfl::internal::has_read_reflector<U>) {
+        walk_reflector<U, VisitedType>(std::move(_arg), _default_ptr,
+                                       _emit_default);
+      } else if constexpr (rfl::internal::underlying_enums_v<ProcessorsType> ||
+                           rfl::internal::enums::is_flag_enum<U>) {
+        add_leaf(std::move(_arg),
+                 (_emit_default && _default_ptr)
+                     ? format_default_value<ProcessorsType>(*_default_ptr,
+                                                            delimiter_)
+                     : std::nullopt);
+      } else {
+        constexpr auto enumerators = rfl::get_enumerator_array<U>();
+        std::vector<std::string> values;
+        values.reserve(enumerators.size());
+        for (const auto& [name, val] : enumerators) {
+          values.emplace_back(name);
+        }
+        add_choices(values, std::move(_arg),
+                    (_emit_default && _default_ptr)
+                        ? format_default_value<ProcessorsType>(*_default_ptr,
+                                                               delimiter_)
+                        : std::nullopt);
+      }
+
+    } else if constexpr (std::is_same_v<U, bool>) {
+      _arg.value = "<bool>";
+      add_leaf(std::move(_arg),
+               (_emit_default && _default_ptr)
+                   ? format_default_value<ProcessorsType>(*_default_ptr,
+                                                          delimiter_)
+                   : std::nullopt);
+
+    } else if constexpr (parsing::is_string_map_v<U>) {
+      _arg.name += path_separator;
+      _arg.name += "<key>";
+      add_leaf(std::move(_arg), std::nullopt);
+
+    } else if constexpr (rfl::internal::has_read_reflector<U>) {
+      walk_reflector<U, VisitedType>(std::move(_arg), _default_ptr,
+                                     _emit_default);
+
+    } else if constexpr (rfl::internal::has_reflection_type_v<U>) {
+      if constexpr (VisitedType::template contains<U>) {
+        add_leaf(std::move(_arg), std::nullopt);
+      } else {
+        using Refl = std::remove_cvref_t<typename U::ReflectionType>;
+        using NextVisited = typename VisitedType::template add<U>;
+        if constexpr (rfl::internal::has_reflection_method_v<U> &&
+                      requires(const U& _u) { _u.reflection(); }) {
+          if (_default_ptr) {
+            const auto refl = _default_ptr->reflection();
+            walk_peeled<Refl, NextVisited, /*_outermost=*/false>(
+                std::move(_arg), &refl, _emit_default);
+            return;
+          }
+        }
+        walk_peeled<Refl, NextVisited, /*_outermost=*/false>(
+            std::move(_arg), static_cast<const Refl*>(nullptr), _emit_default);
+      }
+
+    } else if constexpr (is_option_struct_v<U>) {
+      if constexpr (VisitedType::template contains<U>) {
+        add_leaf(std::move(_arg), std::nullopt);
+      } else {
+        walk_struct<U, typename VisitedType::template add<U>>(
+            _arg, _default_ptr, _emit_default);
+      }
+
+    } else {
+      add_leaf(std::move(_arg),
+               (_emit_default && _default_ptr)
+                   ? format_default_value<ProcessorsType>(*_default_ptr,
+                                                          delimiter_)
+                   : std::nullopt);
     }
   }
 
+  template <class U, class VisitedType>
+  void walk_reflector(UsageArg _arg, const U* _default_ptr,
+                      const bool _emit_default) {
+    if constexpr (VisitedType::template contains<U>) {
+      add_leaf(std::move(_arg), std::nullopt);
+    } else {
+      using Refl = std::remove_cvref_t<typename Reflector<U>::ReflType>;
+      using NextVisited = typename VisitedType::template add<U>;
+      if constexpr (rfl::internal::has_write_reflector<U> &&
+                    requires(const U& _u) { Reflector<U>::from(_u); }) {
+        if (_default_ptr) {
+          const auto refl = Reflector<U>::from(*_default_ptr);
+          walk_peeled<Refl, NextVisited, /*_outermost=*/false>(
+              std::move(_arg), &refl, _emit_default);
+          return;
+        }
+      }
+      walk_peeled<Refl, NextVisited, /*_outermost=*/false>(
+          std::move(_arg), static_cast<const Refl*>(nullptr), _emit_default);
+    }
+  }
+
+  template <class S, class VisitedType>
+  void walk_struct(const UsageArg& _parent, const S* _parent_default,
+                   const bool _emit_all_defaults) {
+    using NT = option_fields_t<S, ProcessorsType>;
+    constexpr size_t N = NT::size();
+
+    if constexpr (rfl::internal::is_named_tuple_v<S>) {
+      std::optional<S> local_defaults;
+      if (!_parent_default && _emit_all_defaults) {
+        if constexpr (std::is_default_constructible_v<S>) {
+          try {
+            local_defaults.emplace();
+          } catch (const std::exception&) {
+          }
+        }
+      }
+      const S* def_obj =
+          _parent_default ? _parent_default
+                          : (local_defaults ? &(*local_defaults) : nullptr);
+      [&]<size_t... _is>(std::index_sequence<_is...>) {
+        auto visit = [&]<size_t _i>() {
+          using FieldType = rfl::tuple_element_t<_i, typename S::Fields>;
+          using FieldVal = std::remove_cvref_t<typename FieldType::Type>;
+          if constexpr (!rfl::internal::is_extra_fields_v<FieldVal>) {
+            auto arg = make_child_arg(_parent, FieldType::name());
+            if (options_->is_hidden(arg.name)) {
+              return;
+            }
+            if constexpr (rfl::internal::is_default_val_v<FieldVal>) {
+              arg.required = false;
+            }
+            const FieldVal* ptr = def_obj ? &rfl::get<_i>(*def_obj) : nullptr;
+            walk_peeled<FieldVal, VisitedType, /*_outermost=*/true>(
+                std::move(arg), ptr, _emit_all_defaults);
+          }
+        };
+        (visit.template operator()<_is>(), ...);
+      }(std::make_index_sequence<N>());
+      return;
+    } else {
+      if constexpr (rfl::internal::has_unwrapped_default_val_v<S>) {
+        static_assert(requires { S{}; },
+                      "A struct with rfl::DefaultVal fields must be "
+                      "default-constructible, because the default values come "
+                      "from a default-constructed instance.");
+      }
+
+      std::optional<S> local_defaults;
+      auto no_default = std::array<bool, N>{};
+      const S* def_obj = _parent_default;
+      if (!def_obj) {
+        const bool want_defaults =
+            _emit_all_defaults || rfl::internal::has_default_val_v<S>;
+        if constexpr (std::is_default_constructible_v<S>) {
+          if (want_defaults) {
+            try {
+              local_defaults = try_default_construct<S>();
+            } catch (const std::exception&) {
+              if constexpr (rfl::internal::has_unwrapped_default_val_v<S>) {
+                throw;
+              }
+            }
+            if (local_defaults) {
+              def_obj = &(*local_defaults);
+            }
+          }
+        }
+      }
+
+      if (def_obj) {
+        auto view = ProcessorsType::template process<S>(rfl::to_view(*def_obj));
+        using ViewType = decltype(view);
+        [&]<size_t... _is>(std::index_sequence<_is...>) {
+          auto visit = [&]<size_t _i>() {
+            using FieldType = rfl::tuple_element_t<_i, typename NT::Fields>;
+            using FieldVal = std::remove_cvref_t<typename FieldType::Type>;
+            if constexpr (!rfl::internal::is_extra_fields_v<FieldVal>) {
+              auto arg = make_child_arg(_parent, FieldType::name());
+              if (options_->is_hidden(arg.name)) {
+                return;
+              }
+              const FieldVal* ptr = nullptr;
+              using VFT = typename rfl::tuple_element_t<
+                  _i, typename ViewType::Fields>::Type;
+              if constexpr (std::is_pointer_v<VFT>) {
+                if (!no_default[_i]) {
+                  ptr = rfl::get<_i>(view);
+                }
+              }
+              walk_peeled<FieldVal, VisitedType, /*_outermost=*/true>(
+                  std::move(arg), ptr, _emit_all_defaults);
+            }
+          };
+          (visit.template operator()<_is>(), ...);
+        }(std::make_index_sequence<N>());
+        return;
+      }
+
+      [&]<size_t... _is>(std::index_sequence<_is...>) {
+        auto visit = [&]<size_t _i>() {
+          using FieldType = rfl::tuple_element_t<_i, typename NT::Fields>;
+          using FieldVal = std::remove_cvref_t<typename FieldType::Type>;
+          if constexpr (!rfl::internal::is_extra_fields_v<FieldVal>) {
+            auto arg = make_child_arg(_parent, FieldType::name());
+            if (options_->is_hidden(arg.name)) {
+              return;
+            }
+            walk_peeled<FieldVal, VisitedType, /*_outermost=*/true>(
+                std::move(arg), static_cast<const FieldVal*>(nullptr),
+                _emit_all_defaults);
+          }
+        };
+        (visit.template operator()<_is>(), ...);
+      }(std::make_index_sequence<N>());
+    }
+  }
+
+  UsageArg make_child_arg(const UsageArg& _parent,
+                          const std::string_view _field_name) const {
+    const bool is_root = _parent.name.empty();
+    auto arg = UsageArg{};
+    arg.name = is_root
+                   ? std::string(_field_name)
+                   : _parent.name + path_separator + std::string(_field_name);
+    arg.required = _parent.required;
+    if (is_root) {
+      const auto& positionals = options_->positionals;
+      arg.positional =
+          std::find(positionals.begin(), positionals.end(), arg.name)
+          != positionals.end();
+      const auto short_it = std::lower_bound(
+          short_names_.begin(), short_names_.end(), std::string_view(arg.name),
+          [](const auto& _entry, const std::string_view _key) {
+            return _entry.first < _key;
+          });
+      if (short_it != short_names_.end() && short_it->first == arg.name) {
+        arg.short_name = std::string(short_it->second);
+      }
+    }
+    return arg;
+  }
+
   void add_choices(const std::vector<std::string>& _values, UsageArg _arg,
-                   const std::optional<Generic>& _default) {
+                   std::optional<std::string> _default) {
     _arg.choices = _values;
     _arg.value = "<";
     for (size_t i = 0; i < _values.size(); ++i) {
       _arg.value += (i == 0 ? "" : "|") + _values[i];
     }
     _arg.value += ">";
-    add_leaf(std::move(_arg), _default);
+    add_leaf(std::move(_arg), std::move(_default));
   }
 
-  void add_leaf(UsageArg _arg, const std::optional<Generic>& _default) {
+  void add_leaf(UsageArg _arg, std::optional<std::string> _default) {
     if (_arg.name.empty()) {
       return;
     }
-    // How the parser treats the option, from the table that it uses. A map
-    // key ("labels.<key>") is found through its open prefix.
     const auto option = options_->find_long(_arg.name);
     _arg.kind = option.kind;
     _arg.implicit_value = std::string(option.implicit_value);
@@ -519,15 +910,11 @@ class UsageCollector {
     if (pure_flag) {
       _arg.bare = true;
     }
-    if (_default) {
-      auto def = usage_default_to_string(*_default, delimiter_);
-      if (!(pure_flag && def == "false")) {
-        _arg.default_value = std::move(def);
-      }
+    if (_default && !(pure_flag && *_default == "false")) {
+      _arg.default_value = std::move(_default);
     }
-    if (const auto it = options_->option_groups.find(_arg.name);
-        it != options_->option_groups.end()) {
-      _arg.group = it->second;
+    if (const auto grp = options_->find_group(_arg.name); !grp.empty()) {
+      _arg.group = std::string(grp);
     }
     args_.emplace_back(std::move(_arg));
   }
@@ -545,14 +932,10 @@ class UsageCollector {
   }
 
  private:
-  const parsing::schema::Definition* definition_;
-  const std::map<std::string, UsageFieldMeta>* meta_;
   const Options* options_;
   const bool optionals_are_required_;
   const std::optional<char> delimiter_;
-  /// The rfl::Short aliases, by the path of their field.
-  std::map<std::string, std::string> short_names_;
-  std::set<std::string> visiting_;
+  std::vector<std::pair<std::string_view, std::string_view>> short_names_;
   std::vector<UsageArg> args_;
 };
 
@@ -725,6 +1108,7 @@ inline std::string format_usage(const std::string& _program_name,
   }
 
   auto rows = std::vector<std::pair<std::string, std::string>>();
+  rows.reserve(_args.size());
   size_t width = 0;
   for (const auto& arg : _args) {
     rows.emplace_back(usage_arg_to_string(arg, ", ", _delimiter),
@@ -798,27 +1182,6 @@ inline std::string format_usage(const std::string& _program_name,
   return out;
 }
 
-/// The default values of all fields, if they are known: only with
-/// rfl::DefaultIfMissing (otherwise, plain fields are required and their
-/// default member initializers are never used) and only if T is
-/// default-constructible, which read<T, rfl::DefaultIfMissing> requires, too.
-template <class T, class... Ps>
-std::optional<Generic> usage_defaults() {
-  using ProcessorsType =
-      rfl::internal::flatten_processors_t<SnakeCaseToKebabCase, Ps...>;
-  if constexpr (rfl::internal::default_if_missing_v<ProcessorsType>
-                && std::is_default_constructible_v<T>) {
-    try {
-      return rfl::to_generic<SnakeCaseToKebabCase, Ps...>(T{});
-    } catch (const std::exception&) {
-      // For instance, a default value that does not satisfy its validator.
-      return std::nullopt;
-    }
-  } else {
-    return std::nullopt;
-  }
-}
-
 }  // namespace internal
 
 /// Generates the usage line, and optionally a help text with one row per
@@ -838,7 +1201,7 @@ std::optional<Generic> usage_defaults() {
 /// @tparam T The struct type that the arguments are parsed into
 /// @tparam Ps The processors passed to `rfl::cli::read`
 /// @param _program_name The name shown after "Usage:", usually argv[0]
-/// @param _detailed Whether to add a line for every argument
+/// @param _opts Customization options for the generated help text
 /// @return The usage text, ending with a newline, or an error if no read of
 /// T can succeed: two fields have the same short name, or T has a bare
 /// rfl::DefaultVal and default-constructing it throws.
@@ -847,35 +1210,22 @@ rfl::Result<std::string> usage(const std::string& _program_name,
                                const UsageOptions& _opts) {
   using ProcessorsType =
       rfl::internal::flatten_processors_t<SnakeCaseToKebabCase, Ps...>;
-  using NamedTupleType = rfl::internal::processed_t<T, ProcessorsType>;
   constexpr auto delimiter = internal::list_delimiter_v<ProcessorsType>;
   // The table that read() parses with, so the help shows what the parser
   // accepts, including the options inside nested structs and maps, and the
   // built-in options of rfl::cli::App that read_app handles.
-  auto options =
-      internal::make_options<T, ProcessorsType, /*_all_paths=*/true>();
-  const auto builtin = internal::add_builtin_options<T, ProcessorsType>(&options);
+  const auto& [options, builtin] =
+      internal::cached_app_options<T, ProcessorsType, /*_all_paths=*/true>();
   return internal::check_short_names(options).and_then(
       [&](auto) -> rfl::Result<std::string> {
         try {
-          const auto meta = internal::collect_usage_field_meta<
-              NamedTupleType, ProcessorsType>(
-              internal::usage_default_vals_are_optional<T>(),
-              std::make_index_sequence<NamedTupleType::size()>{});
-          // The schema takes the default values from a default-constructed
-          // T, which can throw.
-          const auto definition =
-              parsing::schema::make<Reader, generic::Writer, T,
-                                    ProcessorsType>();
-          auto collector = internal::UsageCollector(
-              &definition, &meta, &options,
-              rfl::internal::no_optionals_v<ProcessorsType>, delimiter);
+          auto walker =
+              internal::UsageWalker<ProcessorsType>(&options, delimiter);
           auto builtin_args =
               internal::builtin_usage_args(builtin, _opts.help_group);
-          auto fields = collector.collect(
-              rfl::internal::default_if_missing_v<ProcessorsType>,
-              internal::usage_defaults<T, Ps...>());
+          auto fields = walker.template collect<T>();
           auto args = std::vector<internal::UsageArg>();
+          args.reserve(builtin_args.size() + fields.size());
           if (!_opts.help_group.empty() && !builtin_args.empty()) {
             const auto pos = std::find_if(
                 fields.begin(), fields.end(),

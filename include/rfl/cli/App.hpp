@@ -203,19 +203,36 @@ BuiltinOptions add_builtin_options(Options* _options) {
                     "rfl::cli::App no version.");
     }
     if (builtin.help) {
-      _options->long_options[std::string(help_option)] =
-          Option{OptionKind::flag};
+      _options->long_options.emplace_back(std::string(help_option),
+                                          Option{OptionKind::flag});
     }
     if (builtin.help_short) {
-      _options->short_options[std::string(help_short_option)] =
-          std::string(help_option);
+      _options->short_options.emplace_back(std::string(help_short_option),
+                                           std::string(help_option));
     }
     if (builtin.version) {
-      _options->long_options[std::string(version_option)] =
-          Option{OptionKind::flag};
+      _options->long_options.emplace_back(std::string(version_option),
+                                          Option{OptionKind::flag});
     }
+    _options->finalize();
   }
   return builtin;
+}
+
+/// Returns a process-lifetime cached pair of (Options, BuiltinOptions) for
+/// <T, ProcessorsType, _all_paths>, avoiding option-table reconstruction on
+/// every read_app() or usage() call.
+template <class T, class ProcessorsType,
+          bool _all_paths = rfl::internal::no_extra_fields_v<ProcessorsType>
+                            || separate_option_values_v<ProcessorsType>
+                            || allow_abbreviations_v<ProcessorsType>>
+const std::pair<Options, BuiltinOptions>& cached_app_options() {
+  static const auto cached = []() {
+    auto options = make_options<T, ProcessorsType, _all_paths>();
+    const auto builtin = add_builtin_options<T, ProcessorsType>(&options);
+    return std::pair<Options, BuiltinOptions>{std::move(options), builtin};
+  }();
+  return cached;
 }
 
 /// The header of the help: "name version" and the description, each on a
