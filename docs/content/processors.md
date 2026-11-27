@@ -362,6 +362,7 @@ Key details:
 - **Nullable types still decode `null` as empty:** `std::optional<T>`, `std::unique_ptr<T>`, `std::shared_ptr<T>`, raw pointers, and `rfl::Generic` always decode an explicit `null` as `std::nullopt` / `nullptr` / `rfl::Generic::Null` — even if the field has a non-null in-class initializer such as `std::optional<int> x = 5`.
 - **Missing fields remain required unless combined with `rfl::DefaultIfMissing`:** `rfl::DefaultIfNull` only applies to null/empty values that are present (or a null root document). Combine `rfl::DefaultIfMissing, rfl::DefaultIfNull` when you want both missing fields and null values to fall back to defaults.
 - **Non-default-constructible types:** If a type is not default-constructible, encountering `null` falls back to normal error reporting rather than failing to compile.
+- **Default-constructible structs are default-constructed before reading:** To preserve in-class member initializers, default-constructible structs are default-constructed before their fields are read. Every field of such a struct therefore needs a valid default value (for example, a `rfl::Validator` whose default constructor throws will cause reading to return an error, even if the field is present in the input). This is explained in the documentation on `rfl::DefaultVal`.
 
 ### `rfl::DurationsAsCount`
 

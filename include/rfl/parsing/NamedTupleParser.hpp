@@ -75,6 +75,7 @@
 #include "ViewReaderWithStrippedFieldNames.hpp"
 #include "call_destructors_where_necessary.hpp"
 #include "is_empty.hpp"
+#include "is_nullable.hpp"
 #include "is_required.hpp"
 #include "schema/Type.hpp"
 #include "to_single_error_message.hpp"
@@ -828,31 +829,79 @@ struct NamedTupleParser {
 
       if constexpr (!is_required_field && !is_default_val_field) {
         if (defaults_constructed) {
+          if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                        !internal::default_if_missing_v<ProcessorsType> &&
+                        !internal::has_default_val_v<NamedTupleType> &&
+                        is_nullable_v<ValueType>) {
+            using NonConstT = std::remove_const_t<ValueType>;
+            if constexpr (std::is_default_constructible_v<NonConstT>) {
+              auto* const ptr = const_cast<NonConstT*>(rfl::get<_i>(_view));
+              const auto reset = [&]() {
+                if constexpr (std::is_const_v<ValueType> ||
+                              !std::is_move_assignable_v<NonConstT>) {
+                  std::destroy_at(ptr);
+                  ::new (ptr) NonConstT{};
+                } else {
+                  *ptr = NonConstT{};
+                }
+              };
+              if constexpr (std::is_nothrow_default_constructible_v<NonConstT> &&
+                            (std::is_const_v<ValueType> ||
+                             !std::is_move_assignable_v<NonConstT> ||
+                             std::is_nothrow_move_assignable_v<NonConstT>)) {
+                reset();
+              } else {
+                try {
+                  reset();
+                } catch (std::exception& e) {
+                  constexpr auto current_name =
+                      internal::nth_element_t<_i, FieldTypes...>::name();
+                  _errors->emplace_back(make_nested_error(
+                      std::string(current_name),
+                      "Field named '" + std::string(current_name) +
+                          "' not found, and its default value could not be "
+                          "constructed: " +
+                          e.what()));
+                }
+              }
+            }
+          }
           return;
         }
         using NonConstT = std::remove_const_t<ValueType>;
-        const auto ptr = const_cast<NonConstT*>(rfl::get<_i>(_view));
-        if constexpr (std::is_nothrow_default_constructible_v<NonConstT>) {
-          ::new (ptr) NonConstT();
+        if constexpr (!std::is_default_constructible_v<NonConstT>) {
+          constexpr auto current_name =
+              internal::nth_element_t<_i, FieldTypes...>::name();
+          std::stringstream stream;
+          stream << "Field named '" << std::string(current_name)
+                 << "' not found.";
+          _errors->emplace_back(make_nested_error(
+              std::string(current_name), stream.str(), ErrorKind::missing_field));
+          return;
         } else {
-          // The default value can throw, for instance a Validator whose
-          // default value is invalid.
-          try {
+          const auto ptr = const_cast<NonConstT*>(rfl::get<_i>(_view));
+          if constexpr (std::is_nothrow_default_constructible_v<NonConstT>) {
             ::new (ptr) NonConstT();
-          } catch (std::exception& e) {
-            constexpr auto current_name =
-                internal::nth_element_t<_i, FieldTypes...>::name();
-            _errors->emplace_back(make_nested_error(
-                std::string(current_name),
-                "Field named '" + std::string(current_name) +
-                    "' not found, and its default value could not be "
-                    "constructed: " +
-                    e.what(),
-                ErrorKind::missing_field));
-            return;
+          } else {
+            // The default value can throw, for instance a Validator whose
+            // default value is invalid.
+            try {
+              ::new (ptr) NonConstT();
+            } catch (std::exception& e) {
+              constexpr auto current_name =
+                  internal::nth_element_t<_i, FieldTypes...>::name();
+              _errors->emplace_back(make_nested_error(
+                  std::string(current_name),
+                  "Field named '" + std::string(current_name) +
+                      "' not found, and its default value could not be "
+                      "constructed: " +
+                      e.what(),
+                  ErrorKind::missing_field));
+              return;
+            }
           }
+          std::get<_i>(*_set) = true;
         }
-        std::get<_i>(*_set) = true;
       }
     }
   }
