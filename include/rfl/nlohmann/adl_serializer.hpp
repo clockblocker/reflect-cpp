@@ -22,7 +22,9 @@ inline constexpr bool enable_adl_serializer_v =
 
 }  // namespace rfl::nlohmann
 
-#if defined(__cpp_exceptions)
+#if (defined(__cpp_exceptions) || defined(__EXCEPTIONS) || \
+     defined(_CPPUNWIND)) &&                               \
+    !defined(JSON_NOEXCEPTION)
 
 NLOHMANN_JSON_NAMESPACE_BEGIN
 

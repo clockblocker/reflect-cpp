@@ -32,9 +32,11 @@ const rfl::Result<Person> res =
 const nlohmann::ordered_json oj = rfl::nlohmann::write<nlohmann::ordered_json>(src);
 ```
 
+Note that `nlohmann::ordered_json` uses `nlohmann::ordered_map` (backed by a contiguous sequence), so key lookup and insertion are $O(N)$ per field rather than $O(\log N)$ as with `nlohmann::json`.
+
 ## Opt-in `nlohmann::adl_serializer`
 
-When C++ exceptions are enabled, `<rfl/nlohmann.hpp>` includes `<rfl/nlohmann/adl_serializer.hpp>`. Specialize `rfl::nlohmann::enable_adl_serializer<T>` to `std::true_type` to opt specific types into `nlohmann::json` conversions without affecting any other types:
+`<rfl/nlohmann.hpp>` always declares `rfl::nlohmann::enable_adl_serializer<T>`. When C++ exceptions are enabled and `JSON_NOEXCEPTION` is not defined, it also defines the opt-in `nlohmann::adl_serializer` specialization. Specialize `rfl::nlohmann::enable_adl_serializer<T>` to `std::true_type` to opt specific types into `nlohmann::json` conversions without affecting any other types:
 
 ```cpp
 struct User {
@@ -64,4 +66,6 @@ struct Event {
 ```
 
 - `rfl::Bytestring` and `rfl::Vectorstring` serialize as RFC 4648 Base64 strings and accept either Base64 strings or native `nlohmann::json::binary_t` values on read.
+- When writing `nlohmann::basic_json` values containing `binary_t` to other formats, binary formats (CBOR, msgpack, flexbuffers, UBJSON, BSON, etc.) receive native `rfl::Bytestring` values, `rfl::json` Base64-encodes `rfl::Bytestring`, and text/generic formats without `Bytestring` support fall back to Base64 strings.
 - Cross-`basic_json` conversions (`nlohmann::json` ↔ `nlohmann::ordered_json`) preserve exact integer signedness (`uint64_t`/`int64_t`), booleans, strings, binary payloads, and key order.
+- Mirroring `rfl::Generic` in `rfl/xml/Parser.hpp`, writing `nlohmann::basic_json` fields to XML is supported, while reading XML into `nlohmann::basic_json` is rejected at compile time because XML is untyped without a schema.

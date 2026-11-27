@@ -149,18 +149,9 @@ struct Writer {
   static BasicJson& emplace_in_object(BasicJson& _obj,
                                       const std::string_view _name,
                                       MakeValue&& _make_value) {
-    if constexpr (requires(BasicJson& j, typename BasicJson::string_t k) {
-                    j.emplace(std::move(k), _make_value());
-                  }) {
-      auto [it, inserted] =
-          _obj.emplace(typename BasicJson::string_t(_name), _make_value());
-      if (!inserted) {
-        it.value() = _make_value();
-      }
-      return it.value();
-    } else {
-      return _obj[typename BasicJson::string_t(_name)] = _make_value();
-    }
+    auto& slot = _obj[typename BasicJson::string_t(_name)];
+    slot = std::forward<MakeValue>(_make_value)();
+    return slot;
   }
 
   static void reserve_array(BasicJson& _arr, const size_t _size) {

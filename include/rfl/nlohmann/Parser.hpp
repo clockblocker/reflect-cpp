@@ -15,6 +15,7 @@
 #include "../Bytestring.hpp"
 #include "../Generic.hpp"
 #include "../Result.hpp"
+#include "../always_false.hpp"
 #include "../internal/base64.hpp"
 #include "../parsing/AreReaderAndWriter.hpp"
 #include "../parsing/Parent.hpp"
@@ -65,10 +66,7 @@ void emplace_field(BasicJson& _obj, typename BasicJson::string_t _key,
       return;
     }
   }
-  auto [it, inserted] = _obj.emplace(std::move(_key), std::move(_val));
-  if (!inserted) {
-    it.value() = std::move(_val);
-  }
+  _obj[std::move(_key)] = std::move(_val);
 }
 
 /// Lossless conversion between distinct nlohmann::basic_json instantiations
@@ -149,6 +147,27 @@ concept IsYYJSONReader = requires(const typename R::InputVarType& v) {
   { yyjson_get_uint(v.val_) } -> std::convertible_to<uint64_t>;
   { yyjson_get_sint(v.val_) } -> std::convertible_to<int64_t>;
 };
+
+// Detects rfl::xml::Reader without including <rfl/xml/Reader.hpp> or pugixml.
+template <class R>
+concept IsXMLReader = requires(const typename R::InputVarType& v) {
+  v.node_or_attribute_;
+};
+
+// Detects writers whose add_value_to_* rejects rfl::Bytestring via
+// static_assert instead of encoding or storing bytes natively.
+template <class W>
+concept IsNonBytestringWriter =
+    std::is_same_v<typename std::remove_cvref_t<W>::OutputVarType,
+                   rfl::Generic> ||
+    requires { typename std::remove_cvref_t<W>::YAMLVar; } ||
+    requires { typename std::remove_cvref_t<W>::XMLOutputVar; } ||
+    requires { typename std::remove_cvref_t<W>::TOMLVar; } ||
+    requires { typename std::remove_cvref_t<W>::BoostOutputVar; } ||
+    requires(const typename std::remove_cvref_t<W>::OutputObjectType& o) {
+      o.prefix;
+      o.fields;
+    };
 
 template <class BasicJson, class ValPtr>
 Result<BasicJson> read_from_yyjson(ValPtr _val) {
@@ -253,7 +272,8 @@ Result<BasicJson> read_from_generic_reader(
   if (auto b = _r.template to_basic_type<bool>(_var))
     return BasicJson(static_cast<typename BasicJson::boolean_t>(*b));
   // Preserve native unsigned 64-bit integers in readers that distinguish them
-  // (e.g., jsoncons-based CBOR/UBJSON) so values > INT64_MAX do not wrap.
+  // (jsoncons CBOR/UBJSON, msgpack-c, flexbuffers) so values > INT64_MAX do
+  // not wrap to negative signed integers.
   if constexpr (requires(const typename R::InputVarType& v) {
                   { v.val_->is_uint64() } -> std::convertible_to<bool>;
                 }) {
@@ -261,6 +281,33 @@ Result<BasicJson> read_from_generic_reader(
       if (auto u = _r.template to_basic_type<uint64_t>(_var))
         return BasicJson(
             static_cast<typename BasicJson::number_unsigned_t>(*u));
+    }
+  }
+  if constexpr (requires(const typename R::InputVarType& v) {
+                  { v.type } -> std::convertible_to<int>;
+                  { v.via.u64 } -> std::convertible_to<uint64_t>;
+                  { v.via.i64 } -> std::convertible_to<int64_t>;
+                  { v.via.boolean } -> std::convertible_to<bool>;
+                }) {
+    // MSGPACK_OBJECT_POSITIVE_INTEGER == 0x02 in msgpack-c's ABI.
+    if (static_cast<int>(_var.type) == 0x02) {
+      return BasicJson(
+          static_cast<typename BasicJson::number_unsigned_t>(_var.via.u64));
+    }
+  }
+  if constexpr (requires(const typename R::InputVarType& v) {
+                  { v.IsUInt() } -> std::convertible_to<bool>;
+                }) {
+    if (_var.IsUInt()) {
+      if constexpr (requires(const typename R::InputVarType& v) {
+                      { v.AsUInt64() } -> std::convertible_to<uint64_t>;
+                    }) {
+        return BasicJson(static_cast<typename BasicJson::number_unsigned_t>(
+            _var.AsUInt64()));
+      } else if (auto u = _r.template to_basic_type<uint64_t>(_var)) {
+        return BasicJson(
+            static_cast<typename BasicJson::number_unsigned_t>(*u));
+      }
     }
   }
   if (auto i = _r.template to_basic_type<int64_t>(_var)) {
@@ -306,7 +353,11 @@ void write_to_writer(const W& _w, const BasicJson& _val, const P& _parent) {
     for (const auto b : bin) {
       bytes.push_back(static_cast<std::byte>(b));
     }
-    ParentType::add_value(_w, ::rfl::internal::encode_base64(bytes), _parent);
+    if constexpr (IsNonBytestringWriter<W>) {
+      ParentType::add_value(_w, ::rfl::internal::encode_base64(bytes), _parent);
+    } else {
+      ParentType::add_value(_w, bytes, _parent);
+    }
   } else if (_val.is_array()) {
     auto arr = ParentType::add_array(_w, _val.size(), _parent);
     const auto elem_parent = typename ParentType::Array{&arr};
@@ -372,6 +423,13 @@ struct Parser<
                  : BasicJson(nullptr);
     } else if constexpr (rfl::nlohmann::internal::IsYYJSONReader<R>) {
       return rfl::nlohmann::internal::read_from_yyjson<BasicJson>(_var.val_);
+    } else if constexpr (rfl::nlohmann::internal::IsXMLReader<R>) {
+      (void)_r;
+      (void)_var;
+      static_assert(
+          rfl::always_false_v<R>,
+          "XML does not support reading into nlohmann::basic_json.");
+      return error("XML does not support reading into nlohmann::basic_json.");
     } else {
       return rfl::nlohmann::internal::read_from_generic_reader<BasicJson>(_r,
                                                                           _var);

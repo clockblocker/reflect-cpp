@@ -370,6 +370,211 @@ TEST(nlohmann, bridge2_yaml_quoted_tag_not_coerced) {
   EXPECT_EQ(*unquoted_bool, true);
 }
 
+struct MockMsgpackObject {
+  enum Type {
+    NIL = 0x00,
+    BOOLEAN = 0x01,
+    POSITIVE_INTEGER = 0x02,
+    NEGATIVE_INTEGER = 0x03,
+  } type = NIL;
+  union {
+    bool boolean;
+    uint64_t u64;
+    int64_t i64;
+  } via{};
+};
+
+struct MockMsgpackReader {
+  using InputArrayType = int;
+  using InputObjectType = int;
+  using InputVarType = MockMsgpackObject;
+  bool is_empty(const InputVarType& _v) const {
+    return _v.type == MockMsgpackObject::NIL;
+  }
+  rfl::Result<InputObjectType> to_object(const InputVarType&) const {
+    return rfl::error("not object");
+  }
+  rfl::Result<InputArrayType> to_array(const InputVarType&) const {
+    return rfl::error("not array");
+  }
+  template <class ArrayReader>
+  std::optional<rfl::Error> read_array(const ArrayReader&,
+                                       const InputArrayType&) const {
+    return std::nullopt;
+  }
+  template <class ObjectReader>
+  std::optional<rfl::Error> read_object(const ObjectReader&,
+                                        const InputObjectType&) const {
+    return std::nullopt;
+  }
+  template <class T>
+  rfl::Result<T> to_basic_type(const InputVarType& _v) const {
+    if constexpr (std::is_same_v<T, bool>) {
+      if (_v.type == MockMsgpackObject::BOOLEAN) return _v.via.boolean;
+      return rfl::error("not bool");
+    } else if constexpr (std::is_integral_v<T>) {
+      if (_v.type == MockMsgpackObject::POSITIVE_INTEGER) {
+        return static_cast<T>(_v.via.u64);
+      }
+      if (_v.type == MockMsgpackObject::NEGATIVE_INTEGER) {
+        return static_cast<T>(_v.via.i64);
+      }
+      return rfl::error("not int");
+    } else {
+      return rfl::error("unsupported");
+    }
+  }
+};
+
+struct MockFlexbufVar {
+  bool is_uint_ = false;
+  uint64_t u64_ = 0;
+  int64_t i64_ = 0;
+  bool IsUInt() const { return is_uint_; }
+  uint64_t AsUInt64() const { return u64_; }
+};
+
+struct MockFlexbufReader {
+  using InputArrayType = int;
+  using InputObjectType = int;
+  using InputVarType = MockFlexbufVar;
+  bool is_empty(const InputVarType&) const { return false; }
+  rfl::Result<InputObjectType> to_object(const InputVarType&) const {
+    return rfl::error("not object");
+  }
+  rfl::Result<InputArrayType> to_array(const InputVarType&) const {
+    return rfl::error("not array");
+  }
+  template <class ArrayReader>
+  std::optional<rfl::Error> read_array(const ArrayReader&,
+                                       const InputArrayType&) const {
+    return std::nullopt;
+  }
+  template <class ObjectReader>
+  std::optional<rfl::Error> read_object(const ObjectReader&,
+                                        const InputObjectType&) const {
+    return std::nullopt;
+  }
+  template <class T>
+  rfl::Result<T> to_basic_type(const InputVarType& _v) const {
+    if constexpr (std::is_same_v<T, bool>) {
+      return rfl::error("not bool");
+    } else if constexpr (std::is_integral_v<T>) {
+      // Mirrors flexbuf::Reader casting via AsInt64().
+      const int64_t as_i64 =
+          _v.is_uint_ ? static_cast<int64_t>(_v.u64_) : _v.i64_;
+      return static_cast<T>(as_i64);
+    } else {
+      return rfl::error("unsupported");
+    }
+  }
+};
+
+TEST(nlohmann, bridge2_msgpack_and_flexbuf_uint64_max_preserved) {
+  constexpr uint64_t kMaxU64 = std::numeric_limits<uint64_t>::max();
+  constexpr int64_t kMinI64 = std::numeric_limits<int64_t>::min();
+
+  const MockMsgpackReader mp_reader;
+  MockMsgpackObject mp_max;
+  mp_max.type = MockMsgpackObject::POSITIVE_INTEGER;
+  mp_max.via.u64 = kMaxU64;
+  const auto mp_u =
+      rfl::nlohmann::internal::read_from_generic_reader<nlohmann::json>(
+          mp_reader, mp_max);
+  ASSERT_TRUE(mp_u.has_value());
+  EXPECT_TRUE(mp_u->is_number_unsigned());
+  EXPECT_EQ(mp_u->get<uint64_t>(), kMaxU64);
+
+  MockMsgpackObject mp_neg;
+  mp_neg.type = MockMsgpackObject::NEGATIVE_INTEGER;
+  mp_neg.via.i64 = kMinI64;
+  const auto mp_i =
+      rfl::nlohmann::internal::read_from_generic_reader<nlohmann::json>(
+          mp_reader, mp_neg);
+  ASSERT_TRUE(mp_i.has_value());
+  EXPECT_TRUE(mp_i->is_number_integer());
+  EXPECT_FALSE(mp_i->is_number_unsigned());
+  EXPECT_EQ(mp_i->get<int64_t>(), kMinI64);
+
+  const MockFlexbufReader fb_reader;
+  const auto fb_u =
+      rfl::nlohmann::internal::read_from_generic_reader<nlohmann::json>(
+          fb_reader, MockFlexbufVar{.is_uint_ = true, .u64_ = kMaxU64});
+  ASSERT_TRUE(fb_u.has_value());
+  EXPECT_TRUE(fb_u->is_number_unsigned());
+  EXPECT_EQ(fb_u->get<uint64_t>(), kMaxU64);
+
+  const auto fb_i =
+      rfl::nlohmann::internal::read_from_generic_reader<nlohmann::json>(
+          fb_reader, MockFlexbufVar{.is_uint_ = false, .i64_ = kMinI64});
+  ASSERT_TRUE(fb_i.has_value());
+  EXPECT_TRUE(fb_i->is_number_integer());
+  EXPECT_FALSE(fb_i->is_number_unsigned());
+  EXPECT_EQ(fb_i->get<int64_t>(), kMinI64);
+}
+
+struct MockBinaryWriter {
+  struct OutputArrayType {};
+  struct OutputObjectType {};
+  struct OutputVarType {};
+
+  mutable bool saw_bytestring = false;
+  mutable rfl::Bytestring captured_bytes;
+
+  OutputArrayType array_as_root(const size_t) const { return {}; }
+  OutputObjectType object_as_root(const size_t) const { return {}; }
+  OutputVarType null_as_root() const { return {}; }
+  template <class T>
+  OutputVarType value_as_root(const T& _v) const {
+    if constexpr (std::is_same_v<std::remove_cvref_t<T>, rfl::Bytestring>) {
+      saw_bytestring = true;
+      captured_bytes = _v;
+    }
+    return {};
+  }
+  OutputArrayType add_array_to_array(const size_t, OutputArrayType*) const {
+    return {};
+  }
+  OutputArrayType add_array_to_object(const std::string_view&, const size_t,
+                                      OutputObjectType*) const {
+    return {};
+  }
+  OutputObjectType add_object_to_array(const size_t, OutputArrayType*) const {
+    return {};
+  }
+  OutputObjectType add_object_to_object(const std::string_view&, const size_t,
+                                        OutputObjectType*) const {
+    return {};
+  }
+  template <class T>
+  OutputVarType add_value_to_array(const T& _v, OutputArrayType*) const {
+    return value_as_root(_v);
+  }
+  template <class T>
+  OutputVarType add_value_to_object(const std::string_view&, const T& _v,
+                                    OutputObjectType*) const {
+    return value_as_root(_v);
+  }
+  OutputVarType add_null_to_array(OutputArrayType*) const { return {}; }
+  OutputVarType add_null_to_object(const std::string_view&,
+                                   OutputObjectType*) const {
+    return {};
+  }
+  void end_array(OutputArrayType*) const noexcept {}
+  void end_object(OutputObjectType*) const noexcept {}
+};
+
+TEST(nlohmann, bridge2_binary_t_passes_bytestring_to_binary_writers) {
+  const auto bin = nlohmann::json::binary({0xDE, 0xAD, 0xBE, 0xEF});
+  const MockBinaryWriter w;
+  rfl::nlohmann::internal::write_to_writer(
+      w, bin, typename rfl::parsing::Parent<MockBinaryWriter>::Root{});
+  EXPECT_TRUE(w.saw_bytestring);
+  EXPECT_EQ(w.captured_bytes,
+            (rfl::Bytestring{std::byte{0xDE}, std::byte{0xAD},
+                             std::byte{0xBE}, std::byte{0xEF}}));
+}
+
 #ifdef REFLECTCPP_HAS_JSON
 TEST(nlohmann, bridge2_dynamic_fields_rfl_json_and_schema) {
   constexpr uint64_t kHugeU64 = std::numeric_limits<uint64_t>::max();
