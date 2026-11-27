@@ -1,18 +1,16 @@
 #ifndef RFL_ENUMNAMES_HPP_
 #define RFL_ENUMNAMES_HPP_
 
-#include <array>
-#include <cctype>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
-#include <optional>
+#include <iterator>
 #include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 #include "Literal.hpp"
 #include "Processors.hpp"
@@ -31,7 +29,19 @@ enum class EnumNameTransform : uint8_t {
   to_upper,
 };
 
-/// Applies a built-in `EnumNameTransform` to an enumerator identifier.
+namespace internal {
+
+constexpr char ascii_to_upper(const char _ch) noexcept {
+  return (_ch >= 'a' && _ch <= 'z') ? static_cast<char>(_ch - ('a' - 'A')) : _ch;
+}
+
+constexpr char ascii_to_lower(const char _ch) noexcept {
+  return (_ch >= 'A' && _ch <= 'Z') ? static_cast<char>(_ch + ('a' - 'A')) : _ch;
+}
+
+}  // namespace internal
+
+/// Applies a built-in ASCII `EnumNameTransform` to an enumerator identifier.
 inline std::string apply_enum_name_transform(
     const std::string_view _name, const EnumNameTransform _transform) {
   switch (_transform) {
@@ -53,9 +63,10 @@ inline std::string apply_enum_name_transform(
           if (!out.empty()) {
             cap_next = true;
           }
+        } else if (out.empty()) {
+          out.push_back(internal::ascii_to_lower(ch));
         } else if (cap_next) {
-          out.push_back(
-              static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
+          out.push_back(internal::ascii_to_upper(ch));
           cap_next = false;
         } else {
           out.push_back(ch);
@@ -71,8 +82,7 @@ inline std::string apply_enum_name_transform(
         if (ch == '_') {
           cap_next = true;
         } else if (cap_next) {
-          out.push_back(
-              static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
+          out.push_back(internal::ascii_to_upper(ch));
           cap_next = false;
         } else {
           out.push_back(ch);
@@ -84,8 +94,7 @@ inline std::string apply_enum_name_transform(
       std::string out;
       out.reserve(_name.size());
       for (const char ch : _name) {
-        out.push_back(
-            static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+        out.push_back(internal::ascii_to_lower(ch));
       }
       return out;
     }
@@ -93,8 +102,7 @@ inline std::string apply_enum_name_transform(
       std::string out;
       out.reserve(_name.size());
       for (const char ch : _name) {
-        out.push_back(
-            static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
+        out.push_back(internal::ascii_to_upper(ch));
       }
       return out;
     }
@@ -114,13 +122,17 @@ using EnumOverride = std::pair<EnumType, std::string_view>;
 /// Supported members (individually or combined; `overrides` takes precedence):
 /// - `static constexpr EnumNameTransform transform = EnumNameTransform::snake_to_kebab;`
 ///   OR `static std::string transform(std::string_view _raw_name);`
+///   (any return type convertible or explicitly constructible into `std::string`,
+///   such as `std::string_view`, is accepted)
 /// - `static constexpr std::array<rfl::EnumOverride<E>, N> overrides = {{ ... }};`
 ///   OR `static std::span<const rfl::EnumOverride<E>> overrides();`
 template <class EnumType>
 struct EnumNames {};
 
 /// Processor that applies a whole-enum wire-name transform to all enums without
-/// an explicit `rfl::EnumNames<E>` override/transform.
+/// an explicit `rfl::EnumNames<E>::transform`. If `rfl::EnumNames<E>` only
+/// defines `overrides`, non-overridden enumerators still receive this processor
+/// transform.
 template <EnumNameTransform _transform>
 struct TransformEnumNames {
   static constexpr EnumNameTransform value = _transform;
@@ -165,6 +177,8 @@ struct literal_from_table;
 
 template <const auto& _table, size_t... _is>
 struct literal_from_table<_table, std::index_sequence<_is...>> {
+  static_assert(std::size(_table) > 0,
+                "rfl::literal_from_table_t requires a non-empty table.");
   using type = Literal<internal::string_literal_from_table_entry<_table, _is>()...>;
 };
 
@@ -178,20 +192,30 @@ struct enum_name_transform_from_processors {
   static constexpr EnumNameTransform value = EnumNameTransform::none;
 };
 
+template <EnumNameTransform _t>
+struct enum_name_transform_from_processors<TransformEnumNames<_t>> {
+  static constexpr EnumNameTransform value = _t;
+};
+
 template <>
 struct enum_name_transform_from_processors<Processors<>> {
   static constexpr EnumNameTransform value = EnumNameTransform::none;
 };
 
-template <EnumNameTransform _t, class... Tail>
-struct enum_name_transform_from_processors<
-    Processors<TransformEnumNames<_t>, Tail...>> {
-  static constexpr EnumNameTransform value = _t;
-};
-
 template <class Head, class... Tail>
-struct enum_name_transform_from_processors<Processors<Head, Tail...>>
-    : enum_name_transform_from_processors<Processors<Tail...>> {};
+struct enum_name_transform_from_processors<Processors<Head, Tail...>> {
+  static constexpr EnumNameTransform head_val =
+      enum_name_transform_from_processors<std::remove_cvref_t<Head>>::value;
+  static constexpr EnumNameTransform tail_val =
+      enum_name_transform_from_processors<Processors<Tail...>>::value;
+  static_assert(head_val == EnumNameTransform::none ||
+                    tail_val == EnumNameTransform::none ||
+                    head_val == tail_val,
+                "Conflicting rfl::TransformEnumNames processors cannot be "
+                "combined.");
+  static constexpr EnumNameTransform value =
+      head_val != EnumNameTransform::none ? head_val : tail_val;
+};
 
 template <class ProcessorsType>
 constexpr EnumNameTransform enum_name_transform_v =
@@ -226,16 +250,22 @@ concept HasEnumTransformConst = requires {
 
 template <class E>
 concept HasEnumTransformFn = requires(std::string_view _s) {
-  { EnumNames<E>::transform(_s) } -> std::convertible_to<std::string>;
+  requires std::constructible_from<std::string,
+                                   decltype(EnumNames<E>::transform(_s))>;
 };
 
-template <class E, class ProcessorsType = Processors<>>
-constexpr bool has_custom_enum_names_v =
+template <class E, EnumNameTransform _transform = EnumNameTransform::none>
+constexpr bool has_custom_enum_names_for_transform_v =
     HasEnumOverridesVar<std::remove_cvref_t<E>> ||
     HasAnyEnumOverridesFn<std::remove_cvref_t<E>> ||
     HasEnumTransformConst<std::remove_cvref_t<E>> ||
     HasEnumTransformFn<std::remove_cvref_t<E>> ||
-    (enum_name_transform_v<ProcessorsType> != EnumNameTransform::none);
+    (_transform != EnumNameTransform::none);
+
+template <class E, class ProcessorsType = Processors<>>
+constexpr bool has_custom_enum_names_v =
+    has_custom_enum_names_for_transform_v<
+        E, enum_name_transform_v<ProcessorsType>>;
 
 template <class E>
 inline std::span<const EnumOverride<std::remove_cvref_t<E>>>
@@ -258,9 +288,9 @@ get_enum_overrides() {
   }
 }
 
-template <class E, class ProcessorsType = Processors<>>
-inline std::string resolve_enum_wire_name(const E _val,
-                                          const std::string_view _raw_name) {
+template <class E, EnumNameTransform _transform = EnumNameTransform::none>
+inline std::string resolve_enum_wire_name_for_transform(
+    const E _val, const std::string_view _raw_name) {
   using U = std::remove_cvref_t<E>;
   for (const auto& [e, wire] : get_enum_overrides<U>()) {
     if (e == _val) {
@@ -271,13 +301,18 @@ inline std::string resolve_enum_wire_name(const E _val,
     return std::string(EnumNames<U>::transform(_raw_name));
   } else if constexpr (HasEnumTransformConst<U>) {
     return apply_enum_name_transform(_raw_name, EnumNames<U>::transform);
-  } else if constexpr (enum_name_transform_v<ProcessorsType> !=
-                       EnumNameTransform::none) {
-    return apply_enum_name_transform(_raw_name,
-                                     enum_name_transform_v<ProcessorsType>);
+  } else if constexpr (_transform != EnumNameTransform::none) {
+    return apply_enum_name_transform(_raw_name, _transform);
   } else {
     return std::string(_raw_name);
   }
+}
+
+template <class E, class ProcessorsType = Processors<>>
+inline std::string resolve_enum_wire_name(const E _val,
+                                          const std::string_view _raw_name) {
+  return resolve_enum_wire_name_for_transform<
+      E, enum_name_transform_v<ProcessorsType>>(_val, _raw_name);
 }
 
 }  // namespace internal

@@ -60,12 +60,13 @@ struct ParserEnum {
       return _r.template to_basic_type<std::underlying_type_t<T>>(_var)
           .transform([](const auto _val) { return static_cast<T>(_val); });
     } else {
+      constexpr auto transform =
+          internal::enum_name_transform_v<ProcessorsType>;
+      constexpr bool enum_names_only =
+          internal::enum_names_only_v<ProcessorsType>;
       return _r.template to_basic_type<std::string>(_var).and_then(
-          [](const std::string& _s) {
-            return rfl::string_to_enum<
-                T, internal::enum_names_only_v<ProcessorsType>,
-                ProcessorsType>(_s);
-          });
+          &internal::string_to_enum_with_transform_noexcept<
+              T, enum_names_only, transform>);
     }
   }
 
@@ -87,7 +88,10 @@ struct ParserEnum {
       const auto val = static_cast<std::underlying_type_t<T>>(_var);
       ParentType::add_value(_w, val, _parent);
     } else {
-      const auto str = rfl::enum_to_string<T, ProcessorsType>(_var);
+      constexpr auto transform =
+          internal::enum_name_transform_v<ProcessorsType>;
+      const auto str =
+          internal::enum_to_string_with_transform<T, transform>(_var);
       ParentType::add_value(_w, str, _parent);
     }
   }
@@ -121,19 +125,12 @@ struct ParserEnum {
       return Type{Type::String{}};
     } else if constexpr (config::enum_descriptions<U>::has_descriptions) {
       // Generate DescribedLiteral for enums with descriptions
+      constexpr auto transform =
+          internal::enum_name_transform_v<ProcessorsType>;
       auto described = Type::DescribedLiteral{};
       for (const auto& [wire, value] :
-           get_enum_wire_names<U, ProcessorsType>()) {
-        bool dup = false;
-        for (const auto& existing : described.values_) {
-          if (existing.value_ == wire) {
-            dup = true;
-            break;
-          }
-        }
-        if (dup) {
-          continue;
-        }
+           internal::get_unique_enum_wire_names_with_transform<U,
+                                                               transform>()) {
         auto desc = config::enum_descriptions<U>::get(value);
         described.values_.push_back(
             Type::DescribedLiteral::ValueWithDescription{
@@ -141,18 +138,13 @@ struct ParserEnum {
       }
       return Type{std::move(described)};
     } else if constexpr (internal::has_custom_enum_names_v<U, ProcessorsType>) {
+      constexpr auto transform =
+          internal::enum_name_transform_v<ProcessorsType>;
       std::vector<std::string> vals;
-      for (const auto& [wire, _v] : get_enum_wire_names<U, ProcessorsType>()) {
-        bool dup = false;
-        for (const auto& existing : vals) {
-          if (existing == wire) {
-            dup = true;
-            break;
-          }
-        }
-        if (!dup) {
-          vals.push_back(wire);
-        }
+      for (auto& [wire, _v] :
+           internal::get_unique_enum_wire_names_with_transform<U,
+                                                               transform>()) {
+        vals.push_back(std::move(wire));
       }
       return Type{Type::Literal{.values_ = std::move(vals)}};
     } else {

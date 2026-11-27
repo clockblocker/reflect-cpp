@@ -1,8 +1,11 @@
 #ifndef RFL_ENUMS_HPP_
 #define RFL_ENUMS_HPP_
 
+#include <exception>
 #include <sstream>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "EnumNames.hpp"
 #include "Result.hpp"
@@ -53,20 +56,23 @@ constexpr auto get_enum_range() {
   return internal::enums::get_enum_range<EnumType>();
 }
 
-// Converts an enum value to its wire string representation, honoring
-// `rfl::EnumNames<EnumType>` and any `rfl::TransformEnumNames<...>` processor.
-template <class EnumType, class ProcessorsType = Processors<>>
-std::string enum_to_string(const EnumType _enum) {
+namespace internal {
+
+// Normalized implementations keyed only by EnumNameTransform so unrelated
+// ProcessorsType packs share a single template instantiation per enum.
+
+template <class EnumType, EnumNameTransform _transform>
+std::string enum_to_string_with_transform(const EnumType _enum) {
   const auto one_to_wire = [](const EnumType _e) -> std::string {
-    if constexpr (internal::has_custom_enum_names_v<EnumType, ProcessorsType>) {
+    if constexpr (has_custom_enum_names_for_transform_v<EnumType, _transform>) {
       for (const auto& [raw_name, val] : get_enumerator_array<EnumType>()) {
         if (val == _e) {
-          return internal::resolve_enum_wire_name<EnumType, ProcessorsType>(
+          return resolve_enum_wire_name_for_transform<EnumType, _transform>(
               val, raw_name);
         }
       }
       // Also check explicit overrides even for enumerators outside magic range.
-      for (const auto& [val, wire] : internal::get_enum_overrides<EnumType>()) {
+      for (const auto& [val, wire] : get_enum_overrides<EnumType>()) {
         if (val == _e) {
           return std::string(wire);
         }
@@ -100,22 +106,20 @@ std::string enum_to_string(const EnumType _enum) {
   }
 }
 
-// Returns all declared enumerators (plus any explicit `rfl::EnumNames<E>`
-// overrides for values outside the reflected range) paired with their resolved
-// wire names.
-template <class EnumType, class ProcessorsType = Processors<>>
-std::vector<std::pair<std::string, EnumType>> get_enum_wire_names() {
+template <class EnumType, EnumNameTransform _transform>
+std::vector<std::pair<std::string, EnumType>>
+get_enum_wire_names_with_transform() {
   std::vector<std::pair<std::string, EnumType>> out;
   constexpr auto enumerators = get_enumerator_array<EnumType>();
   out.reserve(enumerators.size());
   for (const auto& [raw_name, val] : enumerators) {
     out.emplace_back(
-        internal::resolve_enum_wire_name<EnumType, ProcessorsType>(val,
+        resolve_enum_wire_name_for_transform<EnumType, _transform>(val,
                                                                    raw_name),
         val);
   }
-  if constexpr (internal::has_custom_enum_names_v<EnumType, ProcessorsType>) {
-    for (const auto& [val, wire] : internal::get_enum_overrides<EnumType>()) {
+  if constexpr (has_custom_enum_names_for_transform_v<EnumType, _transform>) {
+    for (const auto& [val, wire] : get_enum_overrides<EnumType>()) {
       bool already_present = false;
       for (const auto& [_w, existing_val] : out) {
         if (existing_val == val) {
@@ -131,37 +135,35 @@ std::vector<std::pair<std::string, EnumType>> get_enum_wire_names() {
   return out;
 }
 
-// Converts a string to a value of the given enum type.
-//
-// By default, numeric values are accepted in addition to the declared
-// enumerator names, even when they do not correspond to a declared
-// enumerator (for instance, reading "4" into an enum with values 1, 2 and 3
-// will produce the cast value 4). Pass enum_names_only = true (or use the
-// EnumNamesOnly processor with a parser) to accept only the declared
-// enumerator names instead.
-template <class EnumType, bool enum_names_only = false,
-          class ProcessorsType = Processors<>>
-Result<EnumType> string_to_enum(const std::string& _str) {
+template <class EnumType, EnumNameTransform _transform>
+std::vector<std::pair<std::string, EnumType>>
+get_unique_enum_wire_names_with_transform() {
+  std::vector<std::pair<std::string, EnumType>> unique;
+  for (auto& entry : get_enum_wire_names_with_transform<EnumType, _transform>()) {
+    bool dup = false;
+    for (const auto& existing : unique) {
+      if (existing.first == entry.first) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup) {
+      unique.emplace_back(std::move(entry));
+    }
+  }
+  return unique;
+}
+
+template <class EnumType, bool enum_names_only, EnumNameTransform _transform>
+Result<EnumType> string_to_enum_with_transform(const std::string& _str) {
   const auto make_error_msg = [&](const auto& name) {
     std::string msg = "Invalid enum value: '";
     msg += name;
     msg += "'. Must be one of [";
     const char* sep = "";
-    if constexpr (internal::has_custom_enum_names_v<EnumType, ProcessorsType>) {
-      std::vector<std::string> seen;
+    if constexpr (has_custom_enum_names_for_transform_v<EnumType, _transform>) {
       for (const auto& [wire, _v] :
-           get_enum_wire_names<EnumType, ProcessorsType>()) {
-        bool dup = false;
-        for (const auto& prev : seen) {
-          if (prev == wire) {
-            dup = true;
-            break;
-          }
-        }
-        if (dup) {
-          continue;
-        }
-        seen.push_back(wire);
+           get_unique_enum_wire_names_with_transform<EnumType, _transform>()) {
         msg += sep;
         msg += wire;
         sep = ", ";
@@ -179,14 +181,9 @@ Result<EnumType> string_to_enum(const std::string& _str) {
 
   const auto cast_numbers_or_names =
       [&](const std::string& name) -> Result<EnumType> {
-    if constexpr (internal::has_custom_enum_names_v<EnumType, ProcessorsType>) {
-      for (const auto& [raw_name, val] : get_enumerator_array<EnumType>()) {
-        if (internal::resolve_enum_wire_name<EnumType, ProcessorsType>(
-                val, raw_name) == name) {
-          return val;
-        }
-      }
-      for (const auto& [val, wire] : internal::get_enum_overrides<EnumType>()) {
+    if constexpr (has_custom_enum_names_for_transform_v<EnumType, _transform>) {
+      for (const auto& [wire, val] :
+           get_enum_wire_names_with_transform<EnumType, _transform>()) {
         if (wire == name) {
           return val;
         }
@@ -225,6 +222,52 @@ Result<EnumType> string_to_enum(const std::string& _str) {
   } else {
     return cast_numbers_or_names(_str);
   }
+}
+
+template <class EnumType, bool enum_names_only, EnumNameTransform _transform>
+Result<EnumType> string_to_enum_with_transform_noexcept(
+    const std::string& _str) noexcept {
+  try {
+    return string_to_enum_with_transform<EnumType, enum_names_only, _transform>(
+        _str);
+  } catch (const std::exception& e) {
+    return error(e.what());
+  }
+}
+
+}  // namespace internal
+
+// Converts an enum value to its wire string representation, honoring
+// `rfl::EnumNames<EnumType>` and any `rfl::TransformEnumNames<...>` processor.
+template <class EnumType, class ProcessorsType = Processors<>>
+std::string enum_to_string(const EnumType _enum) {
+  return internal::enum_to_string_with_transform<
+      EnumType, internal::enum_name_transform_v<ProcessorsType>>(_enum);
+}
+
+// Returns all declared enumerators (plus any explicit `rfl::EnumNames<E>`
+// overrides for values outside the reflected range) paired with their resolved
+// wire names.
+template <class EnumType, class ProcessorsType = Processors<>>
+std::vector<std::pair<std::string, EnumType>> get_enum_wire_names() {
+  return internal::get_enum_wire_names_with_transform<
+      EnumType, internal::enum_name_transform_v<ProcessorsType>>();
+}
+
+// Converts a string to a value of the given enum type.
+//
+// By default, numeric values are accepted in addition to the declared
+// enumerator names, even when they do not correspond to a declared
+// enumerator (for instance, reading "4" into an enum with values 1, 2 and 3
+// will produce the cast value 4). Pass enum_names_only = true (or use the
+// EnumNamesOnly processor with a parser) to accept only the declared
+// enumerator names instead.
+template <class EnumType, bool enum_names_only = false,
+          class ProcessorsType = Processors<>>
+Result<EnumType> string_to_enum(const std::string& _str) {
+  return internal::string_to_enum_with_transform<
+      EnumType, enum_names_only,
+      internal::enum_name_transform_v<ProcessorsType>>(_str);
 }
 
 }  // namespace rfl

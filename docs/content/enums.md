@@ -215,3 +215,26 @@ constexpr auto enumerator_array = rfl::get_enumerator_array<Color>();
 
 In case it's more convenient to get the enumerator values as values of the enum's underlying type rather than values of the enum type itself,
 there is also `rfl::get_underlying_enumerators<EnumType>()` and `rfl::get_underlying_enumerator_array<EnumType>()`.
+
+## Custom wire names (`rfl::EnumNames` and `rfl::TransformEnumNames`)
+
+To customize serialized enum wire names across JSON, CLI, Generic, XML, YAML, and JSON Schema without duplicating enumerators as `rfl::Literal<...>`, specialize `rfl::EnumNames<E>` and/or pass a `rfl::TransformEnumNames<...>` processor (`rfl::EnumSnakeCaseToKebabCase`, `rfl::EnumSnakeCaseToCamelCase`, `rfl::EnumSnakeCaseToPascalCase`, `rfl::EnumToLowerCase`, `rfl::EnumToUpperCase`):
+
+```cpp
+enum class OptimizationLevel { no_opt, size_opt, speed_opt, cxx_standard };
+
+template <>
+struct rfl::EnumNames<OptimizationLevel> {
+  static constexpr rfl::EnumNameTransform transform =
+      rfl::EnumNameTransform::snake_to_kebab;
+  static constexpr std::array<rfl::EnumOverride<OptimizationLevel>, 1>
+      overrides = {{
+          {OptimizationLevel::cxx_standard, "c++20"},
+      }};
+};
+```
+
+- `overrides` (either a static contiguous range or a static `overrides()` returning a borrowed contiguous range such as `std::span<const rfl::EnumOverride<E>>`) takes precedence over `transform`, and also supports enumerators outside the default reflected range.
+- `transform` can be either a `rfl::EnumNameTransform` constant or a static callable `transform(std::string_view)` returning `std::string` or `std::string_view`.
+- If `rfl::EnumNames<E>` only defines `overrides` (without `transform`), non-overridden enumerators still receive any `rfl::TransformEnumNames<...>` processor passed to `read`, `write`, or `to_schema`.
+- Use `rfl::get_enum_wire_names<E, Processors...>()` to inspect resolved `(wire_name, enumerator)` pairs, and `rfl::literal_from_table_t<kTable>` to derive an `rfl::Literal<...>` type directly from a non-empty `constexpr` string table.
