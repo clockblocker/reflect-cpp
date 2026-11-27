@@ -2,6 +2,7 @@
 #define RFL_PARSING_NAMEDTUPLEPARSER_HPP_
 
 #include <array>
+#include <cstdint>
 #include <exception>
 #include <limits>
 #include <map>
@@ -84,6 +85,8 @@ concept CanEmitDefault =
 
 namespace rfl::parsing {
 
+namespace detail {
+
 template <class T>
 struct is_std_optional_for_default : std::false_type {};
 
@@ -127,7 +130,7 @@ inline Generic to_default_generic(const U& _val) {
     return Generic(std::move(arr));
   } else if constexpr (is_std_optional_for_default<T>::value) {
     if (_val.has_value()) {
-      return to_default_generic<ProcessorsType>(*_val);
+      return detail::to_default_generic<ProcessorsType>(*_val);
     }
     return Generic();
   } else {
@@ -138,12 +141,9 @@ inline Generic to_default_generic(const U& _val) {
 /// Sets the default value of the DefaultVal node in `_schema`.
 inline void set_schema_default_value(Generic _default, schema::Type* _schema) {
   _schema->variant_.visit([&](auto& _s) {
-    using S = std::remove_cvref_t<decltype(_s)>;
-    if constexpr (std::is_same_v<S, schema::Type::DefaultVal>) {
+    if constexpr (std::is_same_v<std::remove_cvref_t<decltype(_s)>,
+                                 schema::Type::DefaultVal>) {
       _s.default_value_ = std::move(_default);
-    } else if constexpr (std::is_same_v<S, schema::Type::Description> ||
-                         std::is_same_v<S, schema::Type::Deprecated>) {
-      set_schema_default_value(std::move(_default), &*_s.type_);
     }
   });
 }
@@ -153,10 +153,9 @@ inline void set_schema_default_value(Generic _default, schema::Type* _schema) {
 template <class R, class W, bool _ignore_empty_containers, bool _all_required,
           bool _no_field_names, class ProcessorsType, class ValueType,
           class OutputObjectOrArrayType>
-RFL_ALWAYS_INLINE void write_named_tuple_field(const W& _w,
-                                               const std::string_view _name,
-                                               const ValueType& _value,
-                                               OutputObjectOrArrayType* _ptr) {
+void write_named_tuple_field(const W& _w, const std::string_view _name,
+                             const ValueType& _value,
+                             OutputObjectOrArrayType* _ptr) {
   using ParentType = Parent<W>;
   const auto make_parent = [](const std::string_view _n,
                               OutputObjectOrArrayType* _p) {
@@ -225,8 +224,8 @@ void build_named_tuple_field_schema(
                   !std::is_same_v<PtrT, std::nullptr_t> &&
                   internal::CanEmitDefault<U>) {
       if (_field_val != nullptr) {
-        set_schema_default_value(
-            to_default_generic<ProcessorsType>(
+        detail::set_schema_default_value(
+            detail::to_default_generic<ProcessorsType>(
                 internal::get_default_val(*_field_val).get()),
             &s);
       }
@@ -251,6 +250,8 @@ constexpr bool can_value_initialize_default_val() {
 
 /// Free per-field missing-field handler parameterized only by FieldSlotType
 /// (never the enclosing NamedTuple's FieldTypes... pack).
+/// Precondition: `_is_set_ptr` is non-null whenever `_defaults_constructed` is
+/// false (the uninitialized-memory read path).
 template <bool _ignore_empty_containers, bool _all_required,
           bool _defaults_constructed, class ProcessorsType, class FieldSlotType>
 RFL_ALWAYS_INLINE void handle_missing_named_tuple_field(
@@ -274,7 +275,7 @@ RFL_ALWAYS_INLINE void handle_missing_named_tuple_field(
     if (!_is_found) {
       if constexpr (std::is_pointer_v<SlotT> && !_defaults_constructed &&
                     is_default_val_field) {
-        if constexpr (can_value_initialize_default_val<ValueType>()) {
+        if constexpr (detail::can_value_initialize_default_val<ValueType>()) {
           if (_value_initialize_default_vals) {
             // The value's constructor can throw, for instance a Validator
             // whose zero value is invalid.
@@ -330,6 +331,8 @@ RFL_ALWAYS_INLINE void handle_missing_named_tuple_field(
     }
   }
 }
+
+}  // namespace detail
 
 template <class R, class W, bool _ignore_empty_containers, bool _all_required,
           bool _no_field_names, class ProcessorsType, class... FieldTypes>
@@ -503,8 +506,9 @@ struct NamedTupleParser {
   static void build_object(const W& _w, const NamedTuple<FieldTypes...>& _tup,
                            OutputObjectOrArrayType* _ptr,
                            std::integer_sequence<int, _is...>) {
-    (write_named_tuple_field<R, W, _ignore_empty_containers, _all_required,
-                             _no_field_names, ProcessorsType>(
+    (detail::write_named_tuple_field<R, W, _ignore_empty_containers,
+                                     _all_required, _no_field_names,
+                                     ProcessorsType>(
          _w, internal::nth_element_t<_is, FieldTypes...>::name_.string_view(),
          rfl::get<_is>(_tup), _ptr),
      ...);
@@ -515,16 +519,17 @@ struct NamedTupleParser {
                            SchemaType* _schema, View* _view,
                            std::integer_sequence<int, _is...>) noexcept {
     if constexpr (!std::is_same_v<View, void>) {
-      (build_named_tuple_field_schema<
+      (detail::build_named_tuple_field_schema<
            R, W, _no_field_names, ProcessorsType,
            std::remove_cvref_t<
                typename internal::nth_element_t<_is, FieldTypes...>::Type>>(
            _definitions, _schema,
            internal::nth_element_t<_is, FieldTypes...>::name(),
-           _view ? extract_schema_field_ptr(rfl::get<_is>(*_view)) : nullptr),
+           _view ? detail::extract_schema_field_ptr(rfl::get<_is>(*_view))
+                 : nullptr),
        ...);
     } else {
-      (build_named_tuple_field_schema<
+      (detail::build_named_tuple_field_schema<
            R, W, _no_field_names, ProcessorsType,
            std::remove_cvref_t<
                typename internal::nth_element_t<_is, FieldTypes...>::Type>>(
@@ -553,8 +558,9 @@ struct NamedTupleParser {
       std::array<bool, size_>* _set, FieldErrors<ProcessorsType>* _errors,
       const bool _value_initialize_default_vals,
       std::integer_sequence<int, _is...>) noexcept {
-    (handle_missing_named_tuple_field<_ignore_empty_containers, _all_required,
-                                      _defaults_constructed, ProcessorsType>(
+    (detail::handle_missing_named_tuple_field<
+         _ignore_empty_containers, _all_required, _defaults_constructed,
+         ProcessorsType>(
          internal::nth_element_t<_is, FieldTypes...>::name(),
          std::get<_is>(_found), rfl::get<_is>(_view),
          _set ? &std::get<_is>(*_set) : nullptr, _errors,

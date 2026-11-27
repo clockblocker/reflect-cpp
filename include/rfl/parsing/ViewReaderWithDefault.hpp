@@ -4,6 +4,7 @@
 #include <array>
 #include <memory>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -15,9 +16,12 @@
 #include "../internal/no_extra_fields_v.hpp"
 #include "FieldErrors.hpp"
 #include "Parser_base.hpp"
+#include "find_field_index.hpp"
 #include "wrap_error.hpp"
 
 namespace rfl::parsing {
+
+namespace detail {
 
 /// Move-assigns a parsed field value into an already-constructed struct field.
 /// Free function parameterized only by (Target, Source)—never ViewType—so
@@ -42,11 +46,11 @@ void move_assign_field(Target* _t, Source* _s) {
   } else if constexpr (rfl::internal::is_array_v<Source>) {
     static_assert(std::is_array_v<Target>, "Expected target to be a c-array.");
     for (size_t i = 0; i < _s->arr_.size(); ++i) {
-      move_assign_field(&((*_t)[i]), &(_s->arr_[i]));
+      detail::move_assign_field(&((*_t)[i]), &(_s->arr_[i]));
     }
   } else {
     for (size_t i = 0; i < _s->size(); ++i) {
-      move_assign_field(&((*_t)[i]), &((*_s)[i]));
+      detail::move_assign_field(&((*_t)[i]), &((*_s)[i]));
     }
   }
 }
@@ -67,7 +71,7 @@ RFL_ALWAYS_INLINE void assign_default_view_field(
     return;
   }
   if constexpr (std::is_pointer_v<OriginalType>) {
-    move_assign_field(_slot, &(*res));
+    detail::move_assign_field(_slot, &(*res));
   } else {
     _slot = std::move(*res);
   }
@@ -90,6 +94,8 @@ void assign_extra_default_field(const R& _r,
   }
   _extra_fields->emplace(std::string(_current_name), std::move(*res));
 }
+
+}  // namespace detail
 
 template <class R, class W, class _ViewType, class ProcessorsType>
 class ViewReaderWithDefault {
@@ -141,51 +147,6 @@ class ViewReaderWithDefault {
   static constexpr size_t size() { return size_; }
 
  private:
-  struct NameEntry {
-    std::string_view name;
-    int field_idx;
-  };
-
-  static constexpr auto make_sorted_name_table() {
-    return []<int... _is>(std::integer_sequence<int, _is...>) {
-      using Fields = typename ViewType::Fields;
-      std::array<NameEntry, size_> table{
-          NameEntry{tuple_element_t<_is, Fields>::name(), _is}...};
-      for (size_t i = 1; i < table.size(); ++i) {
-        const auto key = table[i];
-        size_t j = i;
-        while (j > 0 && key.name < table[j - 1].name) {
-          table[j] = table[j - 1];
-          --j;
-        }
-        table[j] = key;
-      }
-      return table;
-    }(std::make_integer_sequence<int, size_>());
-  }
-
-  static int find_field_index(const std::string_view _name) noexcept {
-    if constexpr (size_ == 0) {
-      return -1;
-    } else {
-      static constexpr auto table = make_sorted_name_table();
-      size_t lo = 0;
-      size_t hi = table.size();
-      while (lo < hi) {
-        const size_t mid = lo + (hi - lo) / 2;
-        if (table[mid].name < _name) {
-          lo = mid + 1;
-        } else {
-          hi = mid;
-        }
-      }
-      if (lo < table.size() && table[lo].name == _name) {
-        return table[lo].field_idx;
-      }
-      return -1;
-    }
-  }
-
   template <int... is>
   static void assign_to_matching_field(const R& _r,
                                        const std::string_view& _current_name,
@@ -196,20 +157,25 @@ class ViewReaderWithDefault {
                                        std::integer_sequence<int, is...>) {
     using Fields = typename ViewType::Fields;
     bool already_assigned = false;
-    if (const int idx = find_field_index(_current_name); idx >= 0) {
-      if (!(*_found)[static_cast<size_t>(idx)]) {
-        (*_found)[static_cast<size_t>(idx)] = true;
-        already_assigned = true;
-        static_cast<void>(
-            ((idx == is
-                  ? (assign_default_view_field<
-                         R, W, typename tuple_element_t<is, Fields>::Type,
-                         ProcessorsType>(_r, _var,
-                                         tuple_element_t<is, Fields>::name(),
-                                         rfl::get<is>(*_view), _errors),
-                     true)
-                  : false) ||
-             ...));
+    if constexpr (size_ > 0) {
+      if (const int idx =
+              detail::FieldNameLookup<typename ViewType::Names>::find(
+                  _current_name);
+          idx >= 0) {
+        if (!(*_found)[static_cast<size_t>(idx)]) {
+          (*_found)[static_cast<size_t>(idx)] = true;
+          already_assigned = true;
+          static_cast<void>(
+              ((idx == is
+                    ? (detail::assign_default_view_field<
+                           R, W, typename tuple_element_t<is, Fields>::Type,
+                           ProcessorsType>(_r, _var,
+                                           tuple_element_t<is, Fields>::name(),
+                                           rfl::get<is>(*_view), _errors),
+                       true)
+                    : false) ||
+               ...));
+        }
       }
     }
 
@@ -219,7 +185,8 @@ class ViewReaderWithDefault {
         auto* extra_fields = _view->template get<pos>();
         using ExtraFieldsType =
             std::remove_cvref_t<std::remove_pointer_t<decltype(extra_fields)>>;
-        assign_extra_default_field<R, W, ExtraFieldsType, ProcessorsType>(
+        detail::assign_extra_default_field<R, W, ExtraFieldsType,
+                                           ProcessorsType>(
             _r, _current_name, _var, extra_fields, _errors);
       }
     } else if constexpr (internal::no_extra_fields_v<ProcessorsType>) {

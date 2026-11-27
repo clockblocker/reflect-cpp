@@ -2,10 +2,11 @@
 #define RFL_PARSING_CALL_DESTRUCTORS_WHERE_NECESSARY_HPP_
 
 #include <array>
+#include <cstddef>
 #include <type_traits>
+#include <utility>
 
 #include "../get.hpp"
-#include "../internal/always_inline.hpp"
 
 namespace rfl::parsing {
 
@@ -29,6 +30,8 @@ void call_destructor_on_array(const size_t _size, T* _ptr) {
   }
 }
 
+namespace detail {
+
 /**
  * @brief Calls the destructor on a single field pointer if it was set.
  * Free function parameterized only by the field's pointer type (never
@@ -36,8 +39,8 @@ void call_destructor_on_array(const size_t _size, T* _ptr) {
  * mangled symbol name or DWARF debug info.
  */
 template <class OriginalType>
-RFL_ALWAYS_INLINE void destroy_field_if_set(
-    const bool _is_set, const OriginalType& _slot) noexcept {
+inline void destroy_field_if_set(const bool _is_set,
+                                 const OriginalType& _slot) noexcept {
   using CleanOriginal = std::remove_cvref_t<OriginalType>;
   using ValueType =
       std::remove_cvref_t<std::remove_pointer_t<CleanOriginal>>;
@@ -58,6 +61,8 @@ RFL_ALWAYS_INLINE void destroy_field_if_set(
   }
 }
 
+}  // namespace detail
+
 /**
  * @brief Calls the destructors on the elements of a view, if necessary.
  *
@@ -70,7 +75,8 @@ template <class ViewType, auto _size>
 void call_destructors_where_necessary(const std::array<bool, _size>& _set,
                                       ViewType* _view) {
   [&]<int... is>(std::integer_sequence<int, is...>) {
-    (destroy_field_if_set(std::get<is>(_set), rfl::get<is>(*_view)), ...);
+    (detail::destroy_field_if_set(std::get<is>(_set), rfl::get<is>(*_view)),
+     ...);
   }(std::make_integer_sequence<int, _size>());
 }
 

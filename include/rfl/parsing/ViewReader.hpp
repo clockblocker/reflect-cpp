@@ -14,10 +14,13 @@
 #include "../internal/no_extra_fields_v.hpp"
 #include "FieldErrors.hpp"
 #include "Parser_base.hpp"
+#include "find_field_index.hpp"
 #include "schemaful/IsSchemafulReader.hpp"
 #include "wrap_error.hpp"
 
 namespace rfl::parsing {
+
+namespace detail {
 
 /// Placement-moves a parsed field value into uninitialized struct storage.
 /// Free function parameterized only by (Target, Source)—never ViewType—so
@@ -26,18 +29,19 @@ namespace rfl::parsing {
 template <class Target, class Source>
 void placement_move_field(Target* _t, Source* _s) {
   if constexpr (std::is_const_v<Target>) {
-    placement_move_field(const_cast<std::remove_const_t<Target>*>(_t), _s);
+    detail::placement_move_field(const_cast<std::remove_const_t<Target>*>(_t),
+                                 _s);
   } else if constexpr (!rfl::internal::is_array_v<Source> &&
                        !std::is_array_v<Target>) {
     ::new (_t) Target(std::move(*_s));
   } else if constexpr (rfl::internal::is_array_v<Source>) {
     static_assert(std::is_array_v<Target>, "Expected target to be a c-array.");
     for (size_t i = 0; i < _s->arr_.size(); ++i) {
-      placement_move_field(&((*_t)[i]), &(_s->arr_[i]));
+      detail::placement_move_field(&((*_t)[i]), &(_s->arr_[i]));
     }
   } else {
     for (size_t i = 0; i < _s->size(); ++i) {
-      placement_move_field(&((*_t)[i]), &((*_s)[i]));
+      detail::placement_move_field(&((*_t)[i]), &((*_s)[i]));
     }
   }
 }
@@ -61,7 +65,7 @@ RFL_ALWAYS_INLINE void assign_uninitialized_view_field(
     return;
   }
   if constexpr (std::is_pointer_v<OriginalType>) {
-    placement_move_field(_slot, &(*res));
+    detail::placement_move_field(_slot, &(*res));
   } else {
     _slot = std::move(*res);
   }
@@ -89,6 +93,8 @@ void assign_extra_uninitialized_field(
   }
   _extra_fields->emplace(std::string(_current_name), std::move(*res));
 }
+
+}  // namespace detail
 
 template <class R, class W, class _ViewType, class ProcessorsType>
 class ViewReader {
@@ -142,22 +148,35 @@ class ViewReader {
   template <int i>
   void read(std::integral_constant<int, i>, const InputVarType& _var) const {
     if (should_stop_on_field_error<ProcessorsType>(*errors_)) return;
+    bool already_assigned = false;
     using FieldType = tuple_element_t<i, typename ViewType::Fields>;
     if (!std::get<i>(*found_)) {
       std::get<i>(*found_) = true;
-      assign_uninitialized_view_field<R, W, typename FieldType::Type,
-                                      ProcessorsType>(
+      already_assigned = true;
+      detail::assign_uninitialized_view_field<R, W, typename FieldType::Type,
+                                              ProcessorsType>(
           *r_, _var, FieldType::name(), rfl::get<i>(*view_), std::get<i>(*set_),
           errors_, size_);
+    }
+
+    if constexpr (ViewType::pos_extra_fields() != -1) {
+      static_assert(!schemaful::IsSchemafulReader<R>,
+                    "rfl::ExtraFields are not supported for schemaful formats, "
+                    "because schemaful formats cannot have extra fields.");
+      static_assert(
+          ViewType::pos_extra_fields() == -1,
+          "rfl::ExtraFields are not supported for positional reads.");
     } else if constexpr (internal::no_extra_fields_v<ProcessorsType>) {
       static_assert(
           !schemaful::IsSchemafulReader<R>,
           "Passing rfl::NoExtraFields to a schemaful format does not make "
           "sense, because schemaful formats cannot have extra fields.");
-      std::stringstream stream;
-      stream << "Value named '" << i << "' not used.";
-      errors_->emplace_back(
-          make_nested_error(static_cast<size_t>(i), stream.str()));
+      if (!already_assigned) {
+        std::stringstream stream;
+        stream << "Value named '" << i << "' not used.";
+        errors_->emplace_back(
+            make_nested_error(static_cast<size_t>(i), stream.str()));
+      }
     }
   }
 
@@ -169,51 +188,6 @@ class ViewReader {
   static constexpr size_t size() { return size_; }
 
  private:
-  struct NameEntry {
-    std::string_view name;
-    int field_idx;
-  };
-
-  static constexpr auto make_sorted_name_table() {
-    return []<int... _is>(std::integer_sequence<int, _is...>) {
-      using Fields = typename ViewType::Fields;
-      std::array<NameEntry, size_> table{
-          NameEntry{tuple_element_t<_is, Fields>::name(), _is}...};
-      for (size_t i = 1; i < table.size(); ++i) {
-        const auto key = table[i];
-        size_t j = i;
-        while (j > 0 && key.name < table[j - 1].name) {
-          table[j] = table[j - 1];
-          --j;
-        }
-        table[j] = key;
-      }
-      return table;
-    }(std::make_integer_sequence<int, size_>());
-  }
-
-  static int find_field_index(const std::string_view _name) noexcept {
-    if constexpr (size_ == 0) {
-      return -1;
-    } else {
-      static constexpr auto table = make_sorted_name_table();
-      size_t lo = 0;
-      size_t hi = table.size();
-      while (lo < hi) {
-        const size_t mid = lo + (hi - lo) / 2;
-        if (table[mid].name < _name) {
-          lo = mid + 1;
-        } else {
-          hi = mid;
-        }
-      }
-      if (lo < table.size() && table[lo].name == _name) {
-        return table[lo].field_idx;
-      }
-      return -1;
-    }
-  }
-
   template <int... is>
   static void assign_by_index(const R& _r, const int _idx,
                               const InputVarType& _var, ViewType* _view,
@@ -223,7 +197,7 @@ class ViewReader {
     using Fields = typename ViewType::Fields;
     static_cast<void>(
         ((_idx == is
-              ? (assign_uninitialized_view_field<
+              ? (detail::assign_uninitialized_view_field<
                      R, W, typename tuple_element_t<is, Fields>::Type,
                      ProcessorsType>(_r, _var,
                                      tuple_element_t<is, Fields>::name(),
@@ -243,11 +217,16 @@ class ViewReader {
                                       std::array<bool, size_>* _set,
                                       std::integer_sequence<int, is...> _seq) {
     bool already_assigned = false;
-    if (const int idx = find_field_index(_current_name); idx >= 0) {
-      if (!(*_found)[static_cast<size_t>(idx)]) {
-        (*_found)[static_cast<size_t>(idx)] = true;
-        already_assigned = true;
-        assign_by_index(_r, idx, _var, _view, _errors, _set, _seq);
+    if constexpr (size_ > 0) {
+      if (const int idx =
+              detail::FieldNameLookup<typename ViewType::Names>::find(
+                  _current_name);
+          idx >= 0) {
+        if (!(*_found)[static_cast<size_t>(idx)]) {
+          (*_found)[static_cast<size_t>(idx)] = true;
+          already_assigned = true;
+          assign_by_index(_r, idx, _var, _view, _errors, _set, _seq);
+        }
       }
     }
 
@@ -260,7 +239,8 @@ class ViewReader {
         auto* extra_fields = _view->template get<pos>();
         using ExtraFieldsType =
             std::remove_cvref_t<std::remove_pointer_t<decltype(extra_fields)>>;
-        assign_extra_uninitialized_field<R, W, ExtraFieldsType, ProcessorsType>(
+        detail::assign_extra_uninitialized_field<R, W, ExtraFieldsType,
+                                                 ProcessorsType>(
             _r, _current_name, _var, extra_fields, std::get<pos>(*_found),
             std::get<pos>(*_set), _errors);
       }
@@ -287,14 +267,23 @@ class ViewReader {
                                        std::array<bool, size_>* _set,
                                        std::integer_sequence<int, is...> _seq) {
     bool already_assigned = false;
-    if (_index >= 0 && static_cast<size_t>(_index) < size_ &&
-        !(*_found)[static_cast<size_t>(_index)]) {
-      (*_found)[static_cast<size_t>(_index)] = true;
-      already_assigned = true;
-      assign_by_index(_r, _index, _var, _view, _errors, _set, _seq);
+    if constexpr (size_ > 0) {
+      if (_index >= 0 && static_cast<size_t>(_index) < size_ &&
+          !(*_found)[static_cast<size_t>(_index)]) {
+        (*_found)[static_cast<size_t>(_index)] = true;
+        already_assigned = true;
+        assign_by_index(_r, _index, _var, _view, _errors, _set, _seq);
+      }
     }
 
-    if constexpr (internal::no_extra_fields_v<ProcessorsType>) {
+    if constexpr (ViewType::pos_extra_fields() != -1) {
+      static_assert(!schemaful::IsSchemafulReader<R>,
+                    "rfl::ExtraFields are not supported for schemaful formats, "
+                    "because schemaful formats cannot have extra fields.");
+      static_assert(
+          ViewType::pos_extra_fields() == -1,
+          "rfl::ExtraFields are not supported for positional reads.");
+    } else if constexpr (internal::no_extra_fields_v<ProcessorsType>) {
       static_assert(
           !schemaful::IsSchemafulReader<R>,
           "Passing rfl::NoExtraFields to a schemaful format does not make "

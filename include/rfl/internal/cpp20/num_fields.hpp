@@ -99,7 +99,6 @@ struct CountFieldsHelper {
 
   template <std::size_t n = 0>
   static consteval std::size_t find_first_constructible() {
-    static_assert(n <= static_cast<std::size_t>(sizeof(T)));
     if constexpr (constructible<n>()) {
       return n;
     } else if constexpr (n < static_cast<std::size_t>(sizeof(T))) {
