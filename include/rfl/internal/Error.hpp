@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -183,6 +184,86 @@ class Error {
     return std::move(*details_);
   }
 
+  /// Combines multiple errors into a single Error, preserving every error's
+  /// details (path, message, and kind).
+  RFL_COLD static Error combine(std::vector<Error> _errors) {
+    if (_errors.empty()) {
+      return Error("");
+    }
+    if (_errors.size() == 1) {
+      return std::move(_errors[0]);
+    }
+    constexpr size_t kErrLimit = 10;
+    std::string what = "Found " + std::to_string(_errors.size()) + " errors:";
+    std::vector<ErrorDetail> all_details;
+    all_details.reserve(_errors.size());
+    for (size_t i = 0; i < _errors.size(); ++i) {
+      if (i < kErrLimit) {
+        what += "\n" + std::to_string(i + 1) + ") ";
+        for (const char ch : _errors[i].what()) {
+          if (ch == '\n') {
+            what += "\n    ";
+          } else {
+            what.push_back(ch);
+          }
+        }
+      }
+      for (auto& detail : std::move(_errors[i]).details()) {
+        all_details.emplace_back(std::move(detail));
+      }
+    }
+    if (_errors.size() > kErrLimit) {
+      const auto limit_str = std::to_string(kErrLimit);
+      what += "\n...\nMore than " + limit_str +
+              " errors occurred, but I am only showing the first " + limit_str +
+              ".";
+    }
+    return Error(std::move(what), std::move(all_details));
+  }
+
+  /// Prepends field segment _name to every detail's path and prefixes what().
+  RFL_COLD Error in_field(const std::string_view _name) const& {
+    auto name = std::string(_name);
+    auto what = "Failed to parse field '" + name + "': " + what_;
+    return wrap_with_segment(std::move(what), std::move(name), details());
+  }
+
+  RFL_COLD Error in_field(const std::string_view _name) && {
+    auto name = std::string(_name);
+    auto what = "Failed to parse field '" + name + "': " + what_;
+    auto d = std::move(*this).details();
+    return wrap_with_segment(std::move(what), std::move(name), std::move(d));
+  }
+
+  /// Prepends index segment _index to every detail's path and prefixes what().
+  RFL_COLD Error at(const size_t _index) const& {
+    auto what =
+        "Failed to parse element " + std::to_string(_index) + ": " + what_;
+    return wrap_with_segment(std::move(what), _index, details());
+  }
+
+  RFL_COLD Error at(const size_t _index) && {
+    auto what =
+        "Failed to parse element " + std::to_string(_index) + ": " + what_;
+    auto d = std::move(*this).details();
+    return wrap_with_segment(std::move(what), _index, std::move(d));
+  }
+
+  /// Prepends _segment (field name or array index) to every detail's path.
+  RFL_COLD Error at(ErrorDetail::PathSegment _segment) const& {
+    if (const auto* name = std::get_if<std::string>(&_segment)) {
+      return in_field(*name);
+    }
+    return at(std::get<size_t>(_segment));
+  }
+
+  RFL_COLD Error at(ErrorDetail::PathSegment _segment) && {
+    if (const auto* name = std::get_if<std::string>(&_segment)) {
+      return std::move(*this).in_field(*name);
+    }
+    return std::move(*this).at(std::get<size_t>(_segment));
+  }
+
  private:
   friend bool has_allocated_details(const Error& _err) noexcept {
     return _err.details_.has_value();
@@ -206,6 +287,14 @@ class Error {
     }
   }
 
+  RFL_COLD static Error wrap_with_segment(
+      std::string _what, const ErrorDetail::PathSegment& _segment,
+      std::vector<ErrorDetail> _details) {
+    for (auto& detail : _details) {
+      detail.path.insert(detail.path.begin(), _segment);
+    }
+    return Error(std::move(_what), std::move(_details));
+  }
   /// Either nothing or a heap-allocated vector of details, deep-copied along
   /// with the Error. Holding nothing is the common case: it means that the
   /// Error is just its message, and it does not allocate.
