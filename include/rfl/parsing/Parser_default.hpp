@@ -19,6 +19,7 @@
 #include "../internal/has_reflection_method_v.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/has_reflector.hpp"
+#include "../internal/is_alias.hpp"
 #include "../internal/is_attribute.hpp"
 #include "../internal/is_basic_type.hpp"
 #include "../internal/is_deprecated.hpp"
@@ -160,7 +161,7 @@ struct Parser {
     } else if constexpr (is_rename_v<T>) {
       return ParserRename<R, W, T, ProcessorsType>::read(_r, _var);
 
-    } else if constexpr (is_alias_v<T>) {
+    } else if constexpr (internal::is_alias<std::remove_cvref_t<T>>::value) {
       return ParserAlias<R, W, T, ProcessorsType>::read(_r, _var);
 
     } else if constexpr (is_result_v<T>) {
@@ -409,7 +410,7 @@ struct Parser {
       return ParserRename<R, W, T, ProcessorsType>::read_into(_r, _var,
                                                               std::move(_base));
 
-    } else if constexpr (is_alias_v<T>) {
+    } else if constexpr (internal::is_alias<std::remove_cvref_t<T>>::value) {
       return ParserAlias<R, W, T, ProcessorsType>::read_into(_r, _var,
                                                              std::move(_base));
 
@@ -553,7 +554,8 @@ struct Parser {
                   (schemaful::IsSchemafulReader<R> &&
                    internal::is_literal_v<T>) ||
                   R::template has_custom_constructor<T> ||
-                  internal::has_reflection_type_v<T>) {
+                  internal::has_reflection_type_v<T> ||
+                  internal::has_flattened_tagged_union_v<T>) {
       return false;
     } else if constexpr (is_optional_v<T>) {
       return !schemaful::IsSchemafulReader<R>;
@@ -567,9 +569,10 @@ struct Parser {
           Parser<R, W, Inner, ProcessorsType>::read_into_in_place(_r, _var, _p);
         };
       }
-    } else if constexpr (is_rename_v<T> || is_default_val_v<T> ||
-                         is_short_v<T> || is_positional_v<T> ||
-                         is_commented_v<T>) {
+    } else if constexpr (is_rename_v<T> ||
+                         internal::is_alias<std::remove_cvref_t<T>>::value ||
+                         is_default_val_v<T> || is_short_v<T> ||
+                         is_positional_v<T> || is_commented_v<T>) {
       using Inner = std::remove_cvref_t<typename std::remove_cvref_t<T>::Type>;
       return requires(const R& _r, const InputVarType& _var, Inner* _p) {
         Parser<R, W, Inner, ProcessorsType>::read_into_in_place(_r, _var, _p);
@@ -602,9 +605,10 @@ struct Parser {
         return Parser<R, W, Inner, ProcessorsType>::read_into_in_place(
             _r, _var, &_base->value());
       }
-    } else if constexpr (is_rename_v<T> || is_default_val_v<T> ||
-                         is_short_v<T> || is_positional_v<T> ||
-                         is_commented_v<T>) {
+    } else if constexpr (is_rename_v<T> ||
+                         internal::is_alias<std::remove_cvref_t<T>>::value ||
+                         is_default_val_v<T> || is_short_v<T> ||
+                         is_positional_v<T> || is_commented_v<T>) {
       using Inner = std::remove_cvref_t<typename std::remove_cvref_t<T>::Type>;
       return Parser<R, W, Inner, ProcessorsType>::read_into_in_place(
           _r, _var, &_base->value());
@@ -687,7 +691,7 @@ struct Parser {
     } else if constexpr (is_rename_v<T>) {
       ParserRename<R, W, T, ProcessorsType>::write(_w, _var, _parent);
 
-    } else if constexpr (is_alias_v<T>) {
+    } else if constexpr (internal::is_alias<std::remove_cvref_t<T>>::value) {
       ParserAlias<R, W, T, ProcessorsType>::write(_w, _var, _parent);
 
     } else if constexpr (is_duration_v<T>) {
@@ -863,7 +867,7 @@ struct Parser {
     } else if constexpr (is_rename_v<U>) {
       return ParserRename<R, W, U, ProcessorsType>::to_schema(_definitions);
 
-    } else if constexpr (is_alias_v<U>) {
+    } else if constexpr (internal::is_alias<std::remove_cvref_t<U>>::value) {
       return ParserAlias<R, W, U, ProcessorsType>::to_schema(_definitions);
 
     } else if constexpr (is_result_v<U>) {

@@ -67,7 +67,7 @@ struct Config {
 struct CliConfig {
   rfl::Alias<"download_dir", rfl::Alias<"downloadDir", std::string>>
       download_dir;
-  rfl::Short<"v", rfl::Alias<"debug", rfl::DefaultVal<bool>>> verbose = false;
+  rfl::Alias<"debug", rfl::DefaultVal<rfl::Short<"v", bool>>> verbose = false;
 };
 
 // Accepts --download-dir=/dl, --download_dir=/dl, or --downloadDir=/dl

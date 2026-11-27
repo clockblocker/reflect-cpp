@@ -9,22 +9,11 @@
 #include "../Alias.hpp"
 #include "../Result.hpp"
 #include "../internal/StringLiteral.hpp"
+#include "../internal/is_alias.hpp"
 #include "Parser_base.hpp"
 #include "schema/Type.hpp"
 
 namespace rfl::parsing {
-
-template <class T>
-struct is_alias : std::false_type {};
-
-template <internal::StringLiteral _name, class T>
-struct is_alias<Alias<_name, T>> : std::true_type {
-  using element_type = T;
-  static constexpr auto name = _name;
-};
-
-template <class T>
-constexpr bool is_alias_v = is_alias<std::remove_cvref_t<T>>::value;
 
 template <class R, class W, class T, class ProcessorsType>
 struct ParserAlias;
@@ -52,12 +41,18 @@ struct ParserAlias<R, W, Alias<_name, T>, ProcessorsType> {
   static Result<Alias<_name, T>> read_into(const R& _r,
                                            const InputVarType& _var,
                                            Alias<_name, T> _base) noexcept {
-    const auto to_alias = [](auto&& _t) {
-      return Alias<_name, T>(std::forward<decltype(_t)>(_t));
-    };
-    return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
-               _r, _var, std::move(_base.value()))
-        .transform(to_alias);
+    try {
+      auto res =
+          read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
+              _r, _var, std::move(_base.value()));
+      if (!res) {
+        return error(std::move(res).error());
+      }
+      return make_result_safe<Result<Alias<_name, T>>>(
+          Alias<_name, T>(std::move(*res)));
+    } catch (std::exception& e) {
+      return error(e.what());
+    }
   }
 
   /**

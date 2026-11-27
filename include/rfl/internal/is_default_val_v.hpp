@@ -51,7 +51,6 @@ template <internal::StringLiteral _deprecation_message,
           internal::StringLiteral _description, class T>
 class is_default_val<Deprecated<_deprecation_message, _description, T>>
     : public is_default_val<T> {};
-
 template <class T>
 constexpr bool is_default_val_v =
     is_default_val<std::remove_cvref_t<std::remove_pointer_t<T>>>::value;

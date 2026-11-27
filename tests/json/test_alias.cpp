@@ -303,4 +303,48 @@ TEST(json, test_alias_ergonomics_and_traits) {
   EXPECT_TRUE(set.contains(rfl::Alias<"old", std::string>("hello")));
 }
 
+struct WithSkipAndAlias {
+  int visible = 1;
+  rfl::Alias<"old_skip", rfl::Skip<int>> skipped_inner = 99;
+  rfl::Skip<rfl::Alias<"old_skip2", int>> skipped_outer = 100;
+};
+
+struct WithValidatorAndPointerWrappers {
+  rfl::Validator<rfl::Alias<"old_v", int>, rfl::Minimum<1>> val;
+  rfl::Box<rfl::Alias<"old_box", int>> boxed;
+  rfl::Ref<rfl::Alias<"old_ref", int>> refed;
+  std::unique_ptr<rfl::Alias<"old_uptr", int>> uptr;
+  std::shared_ptr<rfl::Alias<"old_sptr", int>> sptr;
+};
+
+TEST(json, test_alias_with_skip_validator_and_pointer_wrappers) {
+  // Alias wrapping Skip must NOT leak into JSON output or JSON Schema.
+  const WithSkipAndAlias ws;
+  EXPECT_EQ(rfl::json::write(ws), R"({"visible":1})");
+  const auto schema = rfl::json::to_schema<WithSkipAndAlias>();
+  EXPECT_NE(schema.find(R"("visible")"), std::string::npos) << schema;
+  EXPECT_EQ(schema.find(R"("skipped_inner")"), std::string::npos) << schema;
+  EXPECT_EQ(schema.find(R"("skipped_outer")"), std::string::npos) << schema;
+  EXPECT_EQ(schema.find(R"("old_skip")"), std::string::npos) << schema;
+
+  // Aliases inside Validator, Box, Ref, unique_ptr, shared_ptr must work.
+  const auto parsed =
+      rfl::json::read<WithValidatorAndPointerWrappers, rfl::NoExtraFields>(
+          R"({"old_v":5,"old_box":10,"old_ref":20,"old_uptr":30,"old_sptr":40})");
+  ASSERT_TRUE(parsed) << parsed.error().what();
+  EXPECT_EQ(parsed->val.value().value(), 5);
+  EXPECT_EQ(parsed->boxed->value(), 10);
+  EXPECT_EQ(parsed->refed->value(), 20);
+  ASSERT_NE(parsed->uptr, nullptr);
+  EXPECT_EQ(parsed->uptr->value(), 30);
+  ASSERT_NE(parsed->sptr, nullptr);
+  EXPECT_EQ(parsed->sptr->value(), 40);
+
+  // Validator constraint still enforced when supplied via inner alias.
+  EXPECT_FALSE(
+      (rfl::json::read<WithValidatorAndPointerWrappers>(
+           R"({"old_v":0,"old_box":10,"old_ref":20,"old_uptr":30,"old_sptr":40})"))
+          .has_value());
+}
+
 }  // namespace test_alias

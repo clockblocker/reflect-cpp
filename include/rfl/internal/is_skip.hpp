@@ -8,6 +8,8 @@
 
 namespace rfl {
 
+template <internal::StringLiteral _name, class T>
+struct Alias;
 template <class T>
 struct Attribute;
 template <class T>
@@ -39,6 +41,9 @@ class is_skip : public std::false_type {};
 template <class T, bool _skip_serialization, bool _skip_deserialization>
 class is_skip<Skip<T, _skip_serialization, _skip_deserialization>>
     : public std::true_type {};
+
+template <StringLiteral _name, class T>
+class is_skip<Alias<_name, T>> : public is_skip<std::remove_cvref_t<T>> {};
 
 template <class T>
 constexpr bool is_skip_v =
@@ -79,6 +84,9 @@ struct skip_traits<Skip<T, _skip_serialization, _skip_deserialization>> {
 };
 
 template <StringLiteral _name, class T>
+struct skip_traits<Alias<_name, T>> : skip_traits<T> {};
+
+template <StringLiteral _name, class T>
 struct skip_traits<Rename<_name, T>> : skip_traits<T> {};
 
 template <StringLiteral _name, class T>
@@ -116,7 +124,6 @@ constexpr bool skip_deserialization_v = skip_traits<T>::skip_deserialization;
 template <class T>
 constexpr bool is_fully_skipped_v =
     skip_serialization_v<T> && skip_deserialization_v<T>;
-
 }  // namespace internal
 }  // namespace rfl
 
