@@ -156,19 +156,29 @@ TEST(json, test_view_reader_duplicate_keys_small_and_wide) {
 
 TEST(json, test_to_default_generic_edge_values_and_add_struct_name) {
   const auto schema = rfl::json::to_schema<DefaultValEdgeScalars>();
-  EXPECT_NE(schema.find("\"default\":90"), std::string::npos);
-  EXPECT_NE(schema.find("\"default\":true"), std::string::npos);
-  EXPECT_NE(schema.find("\"default\":1.5"), std::string::npos);
-  EXPECT_NE(schema.find("\"default\":\"hello\""), std::string::npos);
-  EXPECT_NE(schema.find("\"default\":[\"a\",\"b\"]"), std::string::npos);
-  EXPECT_NE(schema.find("\"default\":9"), std::string::npos);
-  EXPECT_NE(schema.find("\"default\":null"), std::string::npos);
-  EXPECT_NE(schema.find("\"renamedCount\":{\"type\":\"integer\",\"default\":7}"),
-            std::string::npos);
+  const auto root =
+      rfl::json::read<rfl::Generic>(schema).value().to_object().value();
+  const auto defs = root.get("$defs").value().to_object().value();
+  ASSERT_EQ(defs.size(), 1u);
+  const auto def_obj = defs.begin()->second.to_object().value();
+  const auto props = def_obj.get("properties").value().to_object().value();
+  const auto default_json = [&](const std::string& _field) {
+    const auto f = props.get(_field).value().to_object().value();
+    return rfl::json::write(f.get("default").value());
+  };
+
+  EXPECT_EQ(default_json("tag_char"), "90");
+  EXPECT_EQ(default_json("flag"), "true");
+  EXPECT_EQ(default_json("ratio"), "1.5");
+  EXPECT_EQ(default_json("label"), "\"hello\"");
+  EXPECT_EQ(default_json("tags"), "[\"a\",\"b\"]");
+  EXPECT_EQ(default_json("opt_set"), "9");
+  EXPECT_EQ(default_json("opt_empty"), "null");
+  EXPECT_EQ(default_json("renamedCount"), "7");
   // uint64_t > INT64_MAX must match rfl::to_generic fallback:
   const auto expected_u64 = rfl::json::write(rfl::to_generic(
       static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) + 42ULL));
-  EXPECT_NE(schema.find("\"default\":" + expected_u64), std::string::npos);
+  EXPECT_EQ(default_json("big_u64"), expected_u64);
 
   const auto asn_schema =
       rfl::json::to_schema<AddStructNameWithDefault,
