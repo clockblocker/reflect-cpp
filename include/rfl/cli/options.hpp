@@ -1340,18 +1340,20 @@ inline bool token_consumes_next_arg(const std::string_view _tok,
            !(_s[1] >= '0' && _s[1] <= '9') && _s[1] != '.';
   };
   const auto resolve_long_opt = [&](const std::string_view _raw) -> Option {
-    if (const auto* pfx = _options.find_prefix_option(_raw)) {
-      return pfx->second;
-    }
     std::string_view key = _raw;
     if (const auto* canonical = _options.find_long_alias(key)) {
       key = *canonical;
     }
     auto opt = _options.find_long(key);
-    if (opt.kind == OptionKind::unknown && _options.allow_abbreviations) {
-      const auto matches = _options.find_abbreviations(_raw);
-      if (matches.size() == 1) {
-        opt = _options.find_long(matches.front());
+    if (opt.kind == OptionKind::unknown) {
+      if (const auto* pfx = _options.find_prefix_option(_raw)) {
+        return pfx->second;
+      }
+      if (_options.allow_abbreviations) {
+        const auto matches = _options.find_abbreviations(_raw);
+        if (matches.size() == 1) {
+          opt = _options.find_long(matches.front());
+        }
       }
     }
     return opt;
@@ -1360,8 +1362,8 @@ inline bool token_consumes_next_arg(const std::string_view _tok,
     if (_opt.kind == OptionKind::value) {
       return _options.separate_values;
     }
-    if (_opt.kind == OptionKind::flag && _options.bool_value_tokens &&
-        is_bool_literal(_next)) {
+    if (_opt.kind == OptionKind::flag && !_opt.is_counter &&
+        _options.bool_value_tokens && is_bool_literal(_next)) {
       return true;
     }
     return false;
@@ -1376,11 +1378,6 @@ inline bool token_consumes_next_arg(const std::string_view _tok,
     return long_consumes(resolve_long_opt(body));
   }
 
-  // Prefix option on single dash (e.g. `-debugi-V3Options 3`).
-  if (const auto* pfx = _options.find_prefix_option(body)) {
-    return pfx->second.kind == OptionKind::value;
-  }
-
   // Exact short option (handles both 1-char `-o` and multi-char `-rp`).
   const auto exact = _options.find_short(body);
   if (exact.kind != OptionKind::unknown) {
@@ -1388,7 +1385,7 @@ inline bool token_consumes_next_arg(const std::string_view _tok,
       return true;
     }
     if (exact.kind == OptionKind::flag) {
-      return !_options.pure_flags && is_bool_literal(_next);
+      return !exact.is_counter && !_options.pure_flags && is_bool_literal(_next);
     }
     if (exact.kind == OptionKind::other) {
       return !next_looks_like_option(_next);
@@ -1396,11 +1393,18 @@ inline bool token_consumes_next_arg(const std::string_view _tok,
     return false;
   }
 
+  // Prefix option on single dash (e.g. `-debugi-V3Options 3`).
+  if (const auto* pfx = _options.find_prefix_option(body)) {
+    return pfx->second.kind == OptionKind::value;
+  }
+
   // Grouped short cluster (e.g. `-vf val` consumes `val`; `-qfcsv` does not).
   if (_options.group_short_options && body.size() > 1) {
+    bool last_is_counter = false;
     for (size_t i = 0; i < body.size(); ++i) {
       const auto ch_opt = _options.find_short(body.substr(i, 1));
       if (ch_opt.kind == OptionKind::flag) {
+        last_is_counter = ch_opt.is_counter;
         continue;
       }
       if (ch_opt.kind == OptionKind::value) {
@@ -1411,8 +1415,7 @@ inline bool token_consumes_next_arg(const std::string_view _tok,
       }
       return false;
     }
-    // Cluster of pure flags: check if last flag takes a bool literal when !pure_flags.
-    return !_options.pure_flags && is_bool_literal(_next);
+    return !last_is_counter && !_options.pure_flags && is_bool_literal(_next);
   }
   return false;
 }

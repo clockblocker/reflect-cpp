@@ -42,8 +42,9 @@ struct CommandDispatchResult {
   /// move-only `T` (e.g. structs holding `std::unique_ptr` or `rfl::Box`).
   template <class T>
   const T* as() const noexcept {
+    using CleanT = std::remove_cv_t<T>;
     if (const auto* ptr =
-            std::any_cast<const std::shared_ptr<T>>(&typed_storage_)) {
+            std::any_cast<const std::shared_ptr<CleanT>>(&typed_storage_)) {
       return ptr->get();
     }
     return nullptr;
@@ -51,7 +52,8 @@ struct CommandDispatchResult {
 
   template <class T>
   T* as() noexcept {
-    if (auto* ptr = std::any_cast<std::shared_ptr<T>>(&typed_storage_)) {
+    using CleanT = std::remove_cv_t<T>;
+    if (auto* ptr = std::any_cast<std::shared_ptr<CleanT>>(&typed_storage_)) {
       return ptr->get();
     }
     return nullptr;

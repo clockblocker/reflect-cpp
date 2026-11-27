@@ -412,12 +412,18 @@ rfl::Result<ReadIntoResult> parse_and_read_into_with_settings(
         const auto r = Reader(_settings.list_delimiter,
                               _settings.keep_empty_items,
                               std::move(_args.verbatim_list));
-        return overlay_into_struct<T, ProcessorsType>(_target, r, _args, "")
-            .transform([&](bool) {
-              return ReadIntoResult{std::move(provided),
-                                    std::move(_args.occurrences),
-                                    std::move(_args.detailed_occurrences)};
-            });
+        auto res =
+            options.reject_unknown
+                ? overlay_into_struct<T, add_no_extra_fields_t<ProcessorsType>>(
+                      _target, r, _args, "")
+                : overlay_into_struct<
+                      T, strip_no_extra_fields_t<ProcessorsType>>(_target, r,
+                                                                  _args, "");
+        return std::move(res).transform([&](bool) {
+          return ReadIntoResult{std::move(provided),
+                                std::move(_args.occurrences),
+                                std::move(_args.detailed_occurrences)};
+        });
       });
 }
 
