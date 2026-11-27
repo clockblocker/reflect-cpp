@@ -9,6 +9,7 @@
 
 #include "../Result.hpp"
 #include "../internal/bitset.hpp"
+#include "../internal/default_if_null_v.hpp"
 #include "Parser_base.hpp"
 #include "schema/Type.hpp"
 
@@ -24,6 +25,11 @@ struct ParserBitset {
 
   static Result<Type> read(const R& _r,
                            const typename R::InputVarType& _var) noexcept {
+    if constexpr (internal::default_if_null_v<ProcessorsType>) {
+      if (_r.is_empty(_var)) {
+        return Type{};
+      }
+    }
     return ReprParser::read(_r, _var).and_then([](const auto& _value) {
       if constexpr (std::is_same_v<Representation, std::string>) {
         return internal::bitset_from_string<N>(_value);

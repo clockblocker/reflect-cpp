@@ -25,6 +25,7 @@
 #include "../../get.hpp"
 #include "../../internal/add_tags_to_variants_v.hpp"
 #include "../../internal/default_if_missing_v.hpp"
+#include "../../internal/default_if_null_v.hpp"
 #include "../../internal/no_extra_fields_v.hpp"
 #include "../../internal/no_field_names_v.hpp"
 #include "../../internal/no_optionals_v.hpp"
@@ -48,6 +49,8 @@ class ArrowWriter {
                 "rfl::NoOptionals cannot be used for tabular data.");
   static_assert(!internal::default_if_missing_v<Processors<Ps...>>,
                 "rfl::DefaultIfMissing cannot be used for tabular data.");
+  static_assert(!internal::default_if_null_v<Processors<Ps...>>,
+                "rfl::DefaultIfNull cannot be used for tabular data.");
   static_assert(!internal::no_extra_fields_v<Processors<Ps...>>,
                 "rfl::NoExtraFields cannot be used for tabular data (neither "
                 "can rfl::ExtraFields).");

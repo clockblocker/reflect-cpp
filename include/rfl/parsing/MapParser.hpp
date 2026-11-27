@@ -8,6 +8,7 @@
 #include "../Ref.hpp"
 #include "../Result.hpp"
 #include "../always_false.hpp"
+#include "../internal/default_if_null_v.hpp"
 #include "MapReader.hpp"
 #include "Parent.hpp"
 #include "Parser_base.hpp"
@@ -43,6 +44,11 @@ struct MapParser {
    * @return A Result containing the parsed map or an error.
    */
   static Result<MapType> read(const R& _r, const InputVarType& _var) noexcept {
+    if constexpr (internal::default_if_null_v<ProcessorsType>) {
+      if (_r.is_empty(_var)) {
+        return MapType{};
+      }
+    }
     const auto to_map = [&](auto obj) -> Result<MapType> {
       return make_map(_r, obj);
     };
