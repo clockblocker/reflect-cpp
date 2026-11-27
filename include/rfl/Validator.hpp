@@ -199,15 +199,12 @@ struct Validator {
 
   /// Wraps the result of a validation without throwing if it failed.
   static Result<Validator> wrap_validated(Result<T>&& _res) {
-    return std::move(_res)
-        .transform([](T&& _v) {
-          return Validator(AlreadyValidated{}, std::move(_v));
-        })
-        .transform_error([](Error&& _err) -> Error {
-          internal::set_error_kind_if_other(_err,
-                                            ErrorKind::constraint_violation);
-          return std::move(_err);
-        });
+    if (!_res) {
+      Error err = std::move(_res).error();
+      internal::set_error_kind_if_other(err, ErrorKind::constraint_violation);
+      return error(std::move(err));
+    }
+    return Validator(AlreadyValidated{}, std::move(*_res));
   }
 
  private:

@@ -52,7 +52,8 @@ struct ParserWString {
     auto outStr = internal::strings::utf8_to_wstring(inStr.value());
     if (!outStr) {
       return Result<std::wstring>(
-          error("Could not parse the string: it is not valid UTF-8."));
+          error("Could not parse the string: it is not valid UTF-8.",
+                ErrorKind::invalid_value));
     }
 
     return Result<std::wstring>(std::move(*outStr));

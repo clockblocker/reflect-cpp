@@ -86,7 +86,8 @@ class FieldVariantReader {
         std::stringstream stream;
         stream << "Could not parse rfl::Variant with field '"
                << std::string(_disc_value) << "': ";
-        return wrap_error(stream.str(), std::move(_e));
+        return wrap_error(stream.str(), std::string(_disc_value),
+                          std::move(_e));
       };
       *field_variant_ = Parser<R, W, ValueType, ProcessorsType>::read(*r_, _var)
                             .transform(to_variant)

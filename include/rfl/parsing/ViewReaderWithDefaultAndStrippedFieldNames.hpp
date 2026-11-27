@@ -62,7 +62,7 @@ class ViewReaderWithDefaultAndStrippedFieldNames {
       std::stringstream stream;
       stream << "Expected a maximum of " << std::to_string(size_)
              << " fields, but got at least one more.";
-      return Error(stream.str(), ErrorKind::unknown_field);
+      return Error(stream.str(), ErrorKind::invalid_length);
     }
     assign_to_field_i(_var, std::make_integer_sequence<int, size_>());
     ++i_;

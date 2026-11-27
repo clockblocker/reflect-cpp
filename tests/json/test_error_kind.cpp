@@ -288,6 +288,21 @@ TEST(json, test_error_kind_variant_field_variant_array_tuple_and_map) {
   const auto fv_inner_missing = rfl::json::read<FV>(R"({"circle": {}})");
   ASSERT_FALSE(fv_inner_missing);
   EXPECT_EQ(fv_inner_missing.error().kind(), rfl::ErrorKind::missing_field);
+  ASSERT_EQ(fv_inner_missing.error().details().size(), 1u);
+  EXPECT_EQ(fv_inner_missing.error().details()[0].path,
+            (Path{"circle", "radius"}));
+
+  // NoFieldNames overflow -> invalid_length
+  const auto nfn_overflow =
+      rfl::json::read<Item, rfl::NoFieldNames>(R"(["ok", 1, "extra"])");
+  ASSERT_FALSE(nfn_overflow);
+  EXPECT_EQ(nfn_overflow.error().kind(), rfl::ErrorKind::invalid_length);
+
+  // Bad rfl::Timestamp -> invalid_value
+  const auto bad_ts =
+      rfl::json::read<rfl::Timestamp<"%Y-%m-%d">>(R"("not-a-date")");
+  ASSERT_FALSE(bad_ts);
+  EXPECT_EQ(bad_ts.error().kind(), rfl::ErrorKind::invalid_value);
 
   // Tuple & Array alignment: missing tuple slot -> missing_field;
   // tuple overflow & std::array size mismatch -> invalid_length.

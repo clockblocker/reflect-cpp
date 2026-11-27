@@ -220,12 +220,10 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
       std::stringstream stream;
       stream << "Could not parse tagged union: Could not find field '"
              << _discriminator.str() << "' or type of field was not a string.";
-      const auto kind = _e.kind() != ErrorKind::other ? _e.kind()
-                                                      : ErrorKind::invalid_value;
       const ErrorDetail::PathSegment seg =
           no_field_names_ ? ErrorDetail::PathSegment(size_t{0})
                           : ErrorDetail::PathSegment(_discriminator.str());
-      return make_nested_error(seg, stream.str(), kind);
+      return make_nested_error(seg, stream.str(), _e.kind());
     };
 
     if constexpr (no_field_names_) {

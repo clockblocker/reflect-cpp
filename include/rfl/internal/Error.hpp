@@ -42,7 +42,7 @@ enum class ErrorKind : std::uint8_t {
   unknown_field,
 
   /// A key or non-repeatable option appeared more than once where repeats
-  /// are forbidden (NoDuplicateKeys, duplicate scalar CLI option).
+  /// are forbidden (e.g. duplicate mapping key or scalar option).
   duplicate_field,
 
   /// Element or value count violates a count fixed by the C++ type or option
