@@ -19,7 +19,8 @@ Generic write(const auto& _t) {
   using T = std::remove_cvref_t<decltype(_t)>;
   using ParentType = parsing::Parent<Writer>;
   auto w = Writer();
-  Parser<T, Processors<Ps...>>::write(w, _t, typename ParentType::Root{});
+  Parser<T, rfl::internal::flatten_processors_t<Ps...>>::write(
+      w, _t, typename ParentType::Root{});
   return w.root();
 }
 

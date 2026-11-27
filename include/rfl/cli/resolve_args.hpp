@@ -227,7 +227,8 @@ rfl::Result<std::map<std::string, std::string>> resolve_args(
     return rfl::error("Duplicate argument: --"
                       + _parsed.later_occurrences.begin()->first);
   }
-  const auto options = internal::make_options<T, ProcessorsType>();
+  using FlatProcessors = rfl::internal::flatten_processors_t<ProcessorsType>;
+  const auto options = internal::make_options<T, FlatProcessors>();
   const auto short_names = internal::check_short_names(options);
   if (!short_names) {
     return rfl::error(short_names.error().what());

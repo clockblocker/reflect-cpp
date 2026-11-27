@@ -52,7 +52,8 @@ template <class T, class... Ps, class ParseFn>
 rfl::Result<std::variant<T, HelpOrVersion>> parse_and_read_app(
     const std::string& _program_name, const ParseFn& _parse,
     const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
-  using ProcessorsType = Processors<SnakeCaseToKebabCase, Ps...>;
+  using ProcessorsType =
+      rfl::internal::flatten_processors_t<SnakeCaseToKebabCase, Ps...>;
   using ResultType = std::variant<T, HelpOrVersion>;
   auto options = make_options<T, ProcessorsType>();
   const auto builtin = add_builtin_options<T, ProcessorsType>(&options);
@@ -202,7 +203,8 @@ template <class T, class... Ps,
 rfl::Result<std::variant<T, HelpOrVersion>> read_app(
     R&& _args,
     const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
-  using ProcessorsType = Processors<SnakeCaseToKebabCase, Ps...>;
+  using ProcessorsType =
+      rfl::internal::flatten_processors_t<SnakeCaseToKebabCase, Ps...>;
   return read_app<T, Ps...>(internal::app_settings_t<ProcessorsType>::name,
                             std::forward<R>(_args), _usage_opts);
 }

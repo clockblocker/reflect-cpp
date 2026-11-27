@@ -42,6 +42,32 @@ struct Processors<Head, Tail...> {
   }
 };
 
+namespace internal {
+
+template <class... Ps>
+struct flatten_processors;
+
+template <class... Acc>
+struct flatten_processors<Processors<Acc...>> {
+  using type = Processors<Acc...>;
+};
+
+template <class... Acc, class... Inner, class... Rest>
+struct flatten_processors<Processors<Acc...>, Processors<Inner...>, Rest...>
+    : flatten_processors<Processors<Acc...>, Inner..., Rest...> {};
+
+template <class... Acc, class Head, class... Rest>
+struct flatten_processors<Processors<Acc...>, Head, Rest...>
+    : flatten_processors<Processors<Acc..., Head>, Rest...> {};
+
+/// Flattens arbitrarily nested rfl::Processors<...> bundles into a single
+/// flat rfl::Processors<...> list, preserving left-to-right order.
+template <class... Ps>
+using flatten_processors_t =
+    typename flatten_processors<Processors<>, Ps...>::type;
+
+}  // namespace internal
+
 }  // namespace rfl
 
 #endif
