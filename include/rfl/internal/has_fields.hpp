@@ -8,8 +8,9 @@
 //#include "all_fields.hpp"
 #include "is_field.hpp"
 #include "is_flatten_field.hpp"
-#include "ptr_tuple_t.hpp"
 #include "is_named_tuple.hpp"
+#include "is_tagged_union.hpp"
+#include "ptr_tuple_t.hpp"
 
 
 namespace rfl {
@@ -21,8 +22,12 @@ constexpr bool all_fields_or_flatten() {
       []<int _i>(std::integral_constant<int, _i>) -> bool {
     using T = std::remove_cvref_t<tuple_element_t<_i, TupleType>>;
     if constexpr (is_flatten_field_v<T>) {
-      return all_fields_or_flatten<
-          ptr_tuple_t<typename std::remove_pointer_t<T>::Type>>();
+      using Inner = remove_all_ptrs_t<typename std::remove_pointer_t<T>::Type>;
+      if constexpr (is_tagged_union_based<Inner> || is_named_tuple_v<Inner>) {
+        return true;
+      } else {
+        return all_fields_or_flatten<ptr_tuple_t<Inner>>();
+      }
     } else {
       return is_field_v<T>;
     }
@@ -40,8 +45,14 @@ constexpr bool some_fields_or_flatten() {
       []<int _i>(std::integral_constant<int, _i>) -> bool {
     using T = std::remove_cvref_t<tuple_element_t<_i, TupleType>>;
     if constexpr (is_flatten_field_v<T>) {
-      return some_fields_or_flatten<
-          ptr_tuple_t<typename std::remove_pointer_t<T>::Type>>();
+      using Inner = remove_all_ptrs_t<typename std::remove_pointer_t<T>::Type>;
+      if constexpr (is_tagged_union_based<Inner>) {
+        return false;
+      } else if constexpr (is_named_tuple_v<Inner>) {
+        return true;
+      } else {
+        return some_fields_or_flatten<ptr_tuple_t<Inner>>();
+      }
     } else {
       return is_field_v<T>;
     }
@@ -56,10 +67,13 @@ constexpr bool some_fields_or_flatten() {
 
 template <class T>
 constexpr bool has_fields() {
-  if constexpr (is_named_tuple_v<T>) {
+  using U = remove_all_ptrs_t<T>;
+  if constexpr (is_tagged_union_based<U>) {
+    return false;
+  } else if constexpr (is_named_tuple_v<U>) {
     return true;
   } else {
-    using TupleType = ptr_tuple_t<T>;
+    using TupleType = ptr_tuple_t<U>;
     if constexpr (some_fields_or_flatten<TupleType>()) {
       static_assert(
           all_fields_or_flatten<TupleType>(),

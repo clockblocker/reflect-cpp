@@ -16,6 +16,7 @@
 #include "../is_alias.hpp"
 #include "../is_flatten_field.hpp"
 #include "../is_rename.hpp"
+#include "../is_tagged_union.hpp"
 #include "bind_to_tuple.hpp"
 #include "get_members.hpp"
 
@@ -32,7 +33,12 @@ consteval auto get_field_names_impl() {
     using Name = typename UnwrappedType::Name;
     return Name();
   } else if constexpr (is_flatten_field_v<Type>) {
-    return get_field_names<std::remove_cvref_t<typename Type::Type>>();
+    using Inner = remove_all_ptrs_t<typename Type::Type>;
+    if constexpr (is_tagged_union_based<Inner>) {
+      return rfl::Literal<>();
+    } else {
+      return get_field_names<std::remove_cvref_t<typename Type::Type>>();
+    }
   } else {
     return FieldName();
   }
