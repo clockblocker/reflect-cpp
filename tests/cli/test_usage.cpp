@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
 
+#include <array>
 #include <map>
+#include <memory>
 #include <optional>
 #include <rfl.hpp>
 #include <rfl/cli.hpp>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace test_usage {
@@ -312,6 +315,95 @@ struct Empty {};
 TEST(cli, test_usage_empty) {
   EXPECT_EQ(rfl::cli::usage<Empty>("app").value(), "Usage: app\n");
   EXPECT_EQ(rfl::cli::usage<Empty>("app", true).value(), "Usage: app\n");
+}
+
+struct CountingDefault {
+  static inline int ctor_count = 0;
+  static std::string make_host() {
+    ++ctor_count;
+    return "localhost";
+  }
+  std::string host = make_host();
+};
+
+TEST(cli, test_usage_does_not_default_construct_without_default_val) {
+  CountingDefault::ctor_count = 0;
+  EXPECT_EQ(rfl::cli::usage<CountingDefault>("app").value(),
+            "Usage: app --host=<value>\n");
+  EXPECT_EQ(CountingDefault::ctor_count, 0);
+}
+
+TEST(cli, test_usage_named_tuple_and_reflection_type) {
+  using NT = rfl::NamedTuple<rfl::Field<"my_opt", rfl::DefaultVal<int>>,
+                             rfl::Field<"my_req", std::string>,
+                             rfl::Field<"my_flag", bool>>;
+  EXPECT_EQ(rfl::cli::usage<NT>("app").value(),
+            "Usage: app [--my_opt=<value>] --my_req=<value> "
+            "--my_flag[=<bool>]\n");
+  const char* nt_args[] = {"app", "--my_req=hi", "--my_flag"};
+  const auto nt_res = rfl::cli::read<NT>(3, const_cast<char**>(nt_args));
+  ASSERT_TRUE(nt_res) << nt_res.error().what();
+  EXPECT_EQ(nt_res.value().get<"my_opt">().get(), 0);
+
+  class WrappedRoot {
+   public:
+    struct Impl {
+      std::string host_name;
+      std::optional<int> port;
+    };
+    using ReflectionType = Impl;
+    WrappedRoot(Impl _impl) : impl_(std::move(_impl)) {}
+    const Impl& reflection() const { return impl_; }
+
+   private:
+    Impl impl_;
+  };
+  EXPECT_EQ(rfl::cli::usage<WrappedRoot>("app").value(),
+            "Usage: app --host-name=<value> [--port=<value>]\n");
+}
+
+struct RichMapsAndTypes {
+  std::map<std::string, Database> dbs;
+  std::map<std::string, bool> flags;
+  std::map<std::string, LogLevel> levels;
+  rfl::Short<"l", std::map<std::string, std::string>> labels;
+  rfl::Literal<"fast", "slow"> mode;
+  std::array<int, 2> coords;
+  std::tuple<std::string, int> pair;
+};
+
+struct RecursiveNode {
+  std::string name;
+  std::unique_ptr<RecursiveNode> next;
+};
+
+struct TrailingNewlineDesc {
+  rfl::Description<"Line 1\n\nLine 2\n", std::string> note;
+};
+
+TEST(cli, test_usage_maps_recursive_literals_and_formatting) {
+  EXPECT_EQ(rfl::cli::usage<RichMapsAndTypes>("app").value(),
+            "Usage: app --dbs.<key>.host=<value> --dbs.<key>.port=<value> "
+            "--flags.<key>[=<bool>] --levels.<key>=<debug|info|warn> "
+            "--labels.<key>=<value> --mode=<fast|slow> "
+            "--coords=<v1,v2,...> --pair=<v1,v2,...>\n");
+
+  EXPECT_EQ(rfl::cli::usage<RecursiveNode>("app").value(),
+            "Usage: app --name=<value> [--next=<value>]\n");
+
+  EXPECT_EQ(
+      (rfl::cli::usage<Config, rfl::UnderlyingEnums>("app").value()),
+      "Usage: app <input-file> --host-name=<value> --verbose[=<bool>] "
+      "--tags=<v1,v2,...> -p|--port=<value> --database.host=<value> "
+      "--database.port=<value> [--log-level=<value>]\n");
+
+  EXPECT_EQ(rfl::cli::usage<TrailingNewlineDesc>("app", true).value(),
+            "Usage: app --note=<value>\n"
+            "\n"
+            "Arguments:\n"
+            "  --note=<value>  Line 1\n"
+            "\n"
+            "                  Line 2. Required.\n");
 }
 
 }  // namespace test_usage

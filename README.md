@@ -379,6 +379,8 @@ struct Config {
 if (argc > 1 && std::string_view(argv[1]) == "--help") {
   std::cout << rfl::cli::usage<Config>(argv[0], true).value();
   // Usage: ./app <input-file> -o|--output-dir=<value> -v|--verbose[=<bool>] --count=<value>
+  //
+  // Arguments: ...
 }
 ```
 

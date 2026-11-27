@@ -62,19 +62,35 @@ struct UsageArg {
   std::string description;
 };
 
-template <class NamedTupleType, class ProcessorsType, size_t _i>
-void add_usage_field_meta(const bool _default_vals_are_optional,
-                          std::map<std::string, UsageFieldMeta>* _meta) {
+/// Whether a missing field of type `ValueType` inside root type `U` is filled
+/// in by the parser's default-value path. Mirrors
+/// `NamedTupleParser::handle_one_missing_field` without invoking `T{}` at
+/// runtime (for structs, `schema::make` already constructs `T{}` once if and
+/// only if `has_default_val_v<T>` is true).
+template <class U, class ValueType>
+constexpr bool usage_default_val_is_optional() {
+  if constexpr (!rfl::internal::is_default_val_v<ValueType>) {
+    return false;
+  } else if constexpr (rfl::internal::is_named_tuple_v<U>) {
+    using Inner = typename rfl::internal::default_val_t<ValueType>::Type;
+    return !std::is_const_v<ValueType> &&
+           std::is_default_constructible_v<Inner> &&
+           std::is_default_constructible_v<ValueType>;
+  } else {
+    return std::is_default_constructible_v<U>;
+  }
+}
+
+template <class U, class NamedTupleType, class ProcessorsType, size_t _i>
+void add_usage_field_meta(std::map<std::string, UsageFieldMeta>* _meta) {
   using Info = field_info<NamedTupleType, _i>;
   using ValueType = std::remove_cvref_t<typename Info::InnerType>;
   auto& meta = (*_meta)[std::string(Info::name())];
   // The same condition as in NamedTupleParser::handle_one_missing_field.
   // The schema cannot tell on its own, because it marks a DefaultVal field as
-  // optional even where the parser requires it (see
-  // usage_default_vals_are_optional).
+  // optional even where the parser requires it.
   meta.required =
-      !(rfl::internal::is_default_val_v<ValueType>
-        && _default_vals_are_optional)
+      !usage_default_val_is_optional<U, ValueType>()
       && !rfl::internal::is_extra_fields_v<ValueType>
       && (rfl::internal::no_optionals_v<ProcessorsType>
           || parsing::is_required<ValueType, false>());
@@ -84,38 +100,12 @@ void add_usage_field_meta(const bool _default_vals_are_optional,
 /// compile-time traits that the parser uses, so the help matches what the
 /// parser accepts. Positional, Short and flags come from the parser's option
 /// table (make_options).
-template <class NamedTupleType, class ProcessorsType, size_t... _is>
+template <class U, class NamedTupleType, class ProcessorsType, size_t... _is>
 std::map<std::string, UsageFieldMeta> collect_usage_field_meta(
-    const bool _default_vals_are_optional, std::index_sequence<_is...>) {
+    std::index_sequence<_is...>) {
   std::map<std::string, UsageFieldMeta> meta;
-  (add_usage_field_meta<NamedTupleType, ProcessorsType, _is>(
-       _default_vals_are_optional, &meta),
-   ...);
+  (add_usage_field_meta<U, NamedTupleType, ProcessorsType, _is>(&meta), ...);
   return meta;
-}
-
-/// Whether the parser fills in the rfl::DefaultVal fields of T that are
-/// missing. It does so by default-constructing T before reading it. If T is
-/// not default-constructible (only possible if all of them are wrapped in
-/// another type), or T{} throws (for instance because a validator rejects
-/// another field's default value), they are required, or the read fails if
-/// one of them is not wrapped in another type. An
-/// rfl::NamedTuple has no in-class initializers, so it is never
-/// default-constructed for its defaults.
-template <class T>
-bool usage_default_vals_are_optional() {
-  if constexpr (rfl::internal::is_named_tuple_v<T>) {
-    return true;
-  } else if constexpr (std::is_default_constructible_v<T>) {
-    try {
-      static_cast<void>(T{});
-      return true;
-    } catch (const std::exception&) {
-      return false;
-    }
-  } else {
-    return false;
-  }
 }
 
 /// Walks the format-agnostic schema of the struct and collects one UsageArg
@@ -152,9 +142,8 @@ class UsageCollector {
   void add(const Type& _type, UsageArg _arg, const bool _outermost) {
     _type.variant_.visit([&](const auto& _t) {
       using T = std::remove_cvref_t<decltype(_t)>;
-      // Description and Deprecated do not change how a field is read, so a
-      // DefaultVal inside them still makes the field optional
-      // (is_default_val_v). Short, Positional and Rename leave no node.
+      // Description and Deprecated wrap the inner schema node without changing
+      // how the field is read. Short, Positional and Rename leave no node.
       if constexpr (std::is_same_v<T, Type::Description>
                     || std::is_same_v<T, Type::Deprecated>) {
         if (_arg.description.empty()) {
@@ -169,10 +158,8 @@ class UsageCollector {
         add(*_t.type_, std::move(_arg), false);
 
       } else if constexpr (std::is_same_v<T, Type::DefaultVal>) {
-        // Like the parser (is_default_val_v), only count a DefaultVal that
-        // wraps the field, possibly inside Description or Deprecated. The
-        // schema has its default value only if the struct around it could be
-        // default-constructed, which is when the parser fills it in.
+        // The schema populates `default_value_` only when the parser recognizes
+        // the DefaultVal field and default-constructed its enclosing struct.
         if (!_arg.required_is_known && _outermost && _t.default_value_) {
           _arg.required = false;
         }
@@ -198,7 +185,9 @@ class UsageCollector {
       } else if constexpr (std::is_same_v<T, Type::StringMap>) {
         _arg.name += path_separator;
         _arg.name += "<key>";
-        add_leaf(std::move(_arg));
+        _arg.short_name.clear();
+        _arg.positional = false;
+        add(*_t.value_type_, std::move(_arg), false);
 
       } else if constexpr (std::is_same_v<T, Type::Boolean>) {
         _arg.value = "<bool>";
@@ -338,6 +327,11 @@ inline std::string usage_help_text(const UsageArg& _arg) {
     sentences.push_back("Required");
   }
   auto text = _arg.description;
+  while (!text.empty()
+         && (text.back() == ' ' || text.back() == '\t' || text.back() == '\r'
+             || text.back() == '\n')) {
+    text.pop_back();
+  }
   for (const auto& s : sentences) {
     if (!text.empty()) {
       text += usage_ends_sentence(text) ? " " : ". ";
@@ -378,9 +372,14 @@ inline std::string format_usage(const std::string& _program_name,
     out += std::string(indent, ' ') + left;
     if (!right.empty()) {
       out += std::string(width - left.size() + gap, ' ');
-      for (const char c : right) {
+      for (size_t i = 0; i < right.size(); ++i) {
+        const char c = right[i];
         if (c == '\n') {
-          out += continuation;
+          if (i + 1 < right.size() && right[i + 1] != '\n') {
+            out += continuation;
+          } else {
+            out += '\n';
+          }
         } else {
           out += c;
         }
@@ -411,17 +410,21 @@ template <class T, class... Ps>
 rfl::Result<std::string> usage(const std::string& _program_name,
                                const bool _detailed = false) {
   using ProcessorsType = Processors<SnakeCaseToKebabCase, Ps...>;
-  using NamedTupleType = rfl::internal::processed_t<T, ProcessorsType>;
+  using U = internal::unwrapped_option_t<T, ProcessorsType>;
   // The table that read() parses with, so the help shows what the parser
   // accepts.
   const auto options = internal::make_options<T, ProcessorsType>();
   return internal::check_short_names(options).and_then(
       [&](auto) -> rfl::Result<std::string> {
         try {
-          const auto meta = internal::collect_usage_field_meta<
-              NamedTupleType, ProcessorsType>(
-              internal::usage_default_vals_are_optional<T>(),
-              std::make_index_sequence<NamedTupleType::size()>{});
+          std::map<std::string, internal::UsageFieldMeta> meta;
+          if constexpr (internal::is_option_struct_v<U>) {
+            using NamedTupleType =
+                internal::option_fields_t<U, ProcessorsType>;
+            meta = internal::collect_usage_field_meta<U, NamedTupleType,
+                                                      ProcessorsType>(
+                std::make_index_sequence<NamedTupleType::size()>{});
+          }
           // The schema takes the default values from a default-constructed
           // T, which can throw.
           const auto definition =
@@ -433,7 +436,7 @@ rfl::Result<std::string> usage(const std::string& _program_name,
           const auto args = collector.collect(
               rfl::internal::default_if_missing_v<ProcessorsType>);
           return internal::format_usage(_program_name, args, _detailed);
-        } catch (std::exception& e) {
+        } catch (const std::exception& e) {
           return error(e.what());
         }
       });
