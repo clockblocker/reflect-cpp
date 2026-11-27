@@ -23,24 +23,9 @@ struct Size {
   static rfl::Result<T> validate(T _t) {
     auto res = V::validate(_t.size());
     if (!res) {
-      auto inner_err = std::move(res).error();
-      internal::set_error_code_if_empty(inner_err,
-                                        internal::validator_code<V>());
-      const auto msg = "Size validation failed: " + inner_err.what();
-      const auto inner_builtin = internal::builtin_error_code_of(inner_err);
-      if (inner_builtin != internal::BuiltinErrorCode::none) {
-        const auto composed = internal::compose_size_code(inner_builtin);
-        if (composed != internal::BuiltinErrorCode::none) {
-          return error(Error(msg, ErrorKind::constraint_violation, composed));
-        }
-      }
-      const auto inner_code = inner_err.code();
-      if (inner_code.empty()) {
-        return error(Error(msg, ErrorKind::constraint_violation,
-                           internal::BuiltinErrorCode::size));
-      }
-      return error(Error(msg, ErrorKind::constraint_violation,
-                         "size." + std::string(inner_code)));
+      return error(internal::compose_prefixed_validator_error<V>(
+          std::move(res).error(), "Size validation failed: ", "size.",
+          internal::BuiltinErrorCode::size, internal::compose_size_code));
     }
     return std::move(_t);
   }

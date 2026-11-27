@@ -400,6 +400,8 @@ class Error {
   /// Returns the machine-readable error code of this error, or an empty view
   /// when none is set. For multi-error results, returns the code of the first
   /// detail.
+  /// Note: For custom (non-built-in) codes, the returned string_view refers to
+  /// storage owned by this Error and must not outlive it.
   std::string_view code() const noexcept {
     if (details_.has_value() && !(*details_).empty()) {
       return (*details_).front().code;
