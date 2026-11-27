@@ -2,6 +2,7 @@
 #define RFL_PARSING_VIEWREADERWITHDEFAULT_HPP_
 
 #include <array>
+#include <exception>
 #include <memory>
 #include <sstream>
 #include <string_view>
@@ -96,12 +97,15 @@ class ViewReaderWithDefault {
             }
             move_to(rfl::get<i>(*_view), &(*res));
           } else if constexpr (std::is_const_v<Target>) {
-            auto res = [&]() {
-              if constexpr (std::is_copy_constructible_v<T>) {
+            static_assert(
+                std::is_copy_constructible_v<T>,
+                "read_into requires const fields to be copy-constructible.");
+            auto res = [&]() -> Result<T> {
+              try {
                 return read_into_or_read<R, W, T, ProcessorsType>(
                     _r, _var, T(*rfl::get<i>(*_view)));
-              } else {
-                return Parser<R, W, T, ProcessorsType>::read(_r, _var);
+              } catch (std::exception& e) {
+                return error(e.what());
               }
             }();
             if (!res) {
@@ -121,14 +125,34 @@ class ViewReaderWithDefault {
             move_to(rfl::get<i>(*_view), &(*res));
           }
         } else {
-          auto res = read_into_or_read<R, W, T, ProcessorsType>(
-              _r, _var, std::move(rfl::get<i>(*_view)));
-          if (!res) {
-            _errors->emplace_back(
-                wrap_field_error(name, std::move(res).error()));
-            return;
+          if constexpr (std::is_const_v<OriginalType>) {
+            static_assert(
+                std::is_copy_constructible_v<T>,
+                "read_into requires const fields to be copy-constructible.");
+            auto res = [&]() -> Result<T> {
+              try {
+                return read_into_or_read<R, W, T, ProcessorsType>(
+                    _r, _var, T(rfl::get<i>(*_view)));
+              } catch (std::exception& e) {
+                return error(e.what());
+              }
+            }();
+            if (!res) {
+              _errors->emplace_back(
+                  wrap_field_error(name, std::move(res).error()));
+              return;
+            }
+            move_to(&rfl::get<i>(*_view), &(*res));
+          } else {
+            auto res = read_into_or_read<R, W, T, ProcessorsType>(
+                _r, _var, std::move(rfl::get<i>(*_view)));
+            if (!res) {
+              _errors->emplace_back(
+                  wrap_field_error(name, std::move(res).error()));
+              return;
+            }
+            move_to(&rfl::get<i>(*_view), &(*res));
           }
-          rfl::get<i>(*_view) = std::move(*res);
         }
       } else {
         auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
@@ -212,11 +236,13 @@ class ViewReaderWithDefault {
   static void move_to(Target* _t, Source* _s) {
     if constexpr (!rfl::internal::is_array_v<Source> &&
                   !std::is_array_v<Target>) {
-      if constexpr (std::is_const_v<Target>) {
-        // The struct was default-constructed, so *_t is a live const object
-        // and must not be assigned to. Re-create it in place instead. If the
-        // constructor throws, we are inside a noexcept function, so it cannot
-        // be destroyed twice.
+      if constexpr (std::is_const_v<Target> ||
+                    !std::is_move_assignable_v<Target>) {
+        // The struct was default-constructed (or overlaid), so *_t is a live
+        // const / non-move-assignable object (e.g. a nested struct with a
+        // const member) and must not be assigned to. Re-create it in place
+        // instead. If the constructor throws, we are inside a noexcept
+        // function, so it cannot be destroyed twice.
         using NonConstTarget = std::remove_const_t<Target>;
         auto* const ptr = const_cast<NonConstTarget*>(_t);
         std::destroy_at(ptr);

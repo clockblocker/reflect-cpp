@@ -1,6 +1,7 @@
 #ifndef RFL_PARSING_PARSER_REF_HPP_
 #define RFL_PARSING_PARSER_REF_HPP_
 
+#include <exception>
 #include <map>
 #include <type_traits>
 
@@ -83,9 +84,14 @@ struct ParserRef {
         return Ref<T>::make(std::forward<decltype(_t)>(_t));
       };
       if constexpr (std::is_copy_constructible_v<std::remove_cvref_t<T>>) {
-        return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
-                   _r, _var, std::remove_cvref_t<T>(*_base))
-            .transform(to_ref);
+        try {
+          return read_into_or_read<R, W, std::remove_cvref_t<T>,
+                                   ProcessorsType>(
+                     _r, _var, std::remove_cvref_t<T>(*_base))
+              .transform(to_ref);
+        } catch (std::exception& e) {
+          return error(e.what());
+        }
       } else {
         return Parser<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(_r,
                                                                           _var)

@@ -1,6 +1,7 @@
 #ifndef RFL_PARSING_PARSER_SHARED_PTR_HPP_
 #define RFL_PARSING_PARSER_SHARED_PTR_HPP_
 
+#include <exception>
 #include <map>
 #include <memory>
 #include <type_traits>
@@ -105,10 +106,14 @@ struct ParserSharedPtr {
       };
       if constexpr (std::is_copy_constructible_v<std::remove_cvref_t<T>>) {
         if (_base) {
-          return read_into_or_read<R, W, std::remove_cvref_t<T>,
-                                   ProcessorsType>(
-                     _r, _var, std::remove_cvref_t<T>(*_base))
-              .transform(to_shared);
+          try {
+            return read_into_or_read<R, W, std::remove_cvref_t<T>,
+                                     ProcessorsType>(
+                       _r, _var, std::remove_cvref_t<T>(*_base))
+                .transform(to_shared);
+          } catch (std::exception& e) {
+            return error(e.what());
+          }
         }
       }
       return Parser<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(_r,

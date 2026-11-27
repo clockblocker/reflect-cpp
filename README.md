@@ -614,6 +614,12 @@ const auto c = C{.f1 = "C++", .f2 = "is", .f4 = "great"};
 const auto c2 = rfl::replace(c, a);
 ```
 
+For layered configuration, you can also overlay partial JSON, YAML, TOML, or `rfl::Generic` documents directly onto an existing struct with `rfl::json::read_into` / `load_into`, `rfl::yaml::read_into` / `load_into`, `rfl::toml::read_into` / `load_into`, and `rfl::from_generic_into`:
+
+```cpp
+const auto merged = rfl::json::read_into(base_config, R"({"port": 9090})");
+```
+
 ### Support for containers
 
 #### C++ standard library

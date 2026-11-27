@@ -91,9 +91,10 @@ const auto config =
 
 - Fields absent from the JSON preserve their values from the base struct.
 - Nested structs (including inside `std::optional<T>` when engaged) are overlaid recursively; an explicit `null` clears `std::optional<T>` to `std::nullopt`.
-- Leaf values and containers (`std::vector`, `std::map`, etc.) replace the base value when present.
+- Leaf values and containers (`std::vector`, `std::map`, `std::unordered_map`, etc.) replace the base value wholesale when present (so `{}` clears a map); use a struct or `rfl::ExtraFields` when key-level merging is desired.
 - Processors such as `rfl::NoExtraFields` and `rfl::SnakeCaseToCamelCase` are supported as template arguments (`rfl::json::read_into<rfl::NoExtraFields>(base, json_str)`).
 - Atomic on error: `_base` is taken by value and returned inside `rfl::Result<T>`, so an lvalue base is never mutated if parsing or validation fails.
+- `const` fields are supported as long as their value type is copy-constructible (checked at compile time).
 
 ## Custom constructors
 

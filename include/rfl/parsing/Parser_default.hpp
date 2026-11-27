@@ -1,10 +1,12 @@
 #ifndef RFL_PARSING_PARSER_DEFAULT_HPP_
 #define RFL_PARSING_PARSER_DEFAULT_HPP_
 
+#include <exception>
 #include <map>
 #include <string>
 #include <type_traits>
 
+#include "../Generic.hpp"
 #include "../Result.hpp"
 #include "../always_false.hpp"
 #include "../internal/HasFromReflectionMethod.hpp"
@@ -290,13 +292,15 @@ struct Parser {
    * @param _base The base value to overlay onto.
    * @return A Result containing the overlaid value or an error.
    */
-  static RFL_ALWAYS_INLINE auto read_into(const R& _r, const InputVarType& _var,
-                                          [[maybe_unused]] T _base)
+  static RFL_ALWAYS_INLINE Result<T> read_into(const R& _r,
+                                               const InputVarType& _var,
+                                               [[maybe_unused]] T _base)
     requires(!std::is_array_v<T>)
   {
     if constexpr (internal::is_basic_type_v<T> || is_bytestring_v<T> ||
                   is_vectorstring_v<T> || is_string_map_v<T> ||
-                  is_vector_like_v<T>) {
+                  is_vector_like_v<T> ||
+                  std::is_same_v<std::remove_cvref_t<T>, Generic>) {
       return read(_r, _var);
 
     } else if constexpr (is_shared_ptr_v<T>) {
@@ -383,9 +387,10 @@ struct Parser {
           }
         };
         try {
-          return read_into_or_read<R, W, typename Reflector<T>::ReflType,
-                                   ProcessorsType>(_r, _var,
-                                                   Reflector<T>::from(_base))
+          using ReflType =
+              std::remove_cvref_t<typename Reflector<T>::ReflType>;
+          return read_into_or_read<R, W, ReflType, ProcessorsType>(
+                     _r, _var, ReflType(Reflector<T>::from(_base)))
               .and_then(wrap_in_t);
         } catch (std::exception& e) {
           return error(e.what());
@@ -429,9 +434,13 @@ struct Parser {
                              std::is_constructible_v<
                                  ReflectionType,
                                  decltype(_base.reflection())>) {
-          return read_into_or_read<R, W, ReflectionType, ProcessorsType>(
-                     _r, _var, ReflectionType(_base.reflection()))
-              .and_then(wrap_in_t);
+          try {
+            return read_into_or_read<R, W, ReflectionType, ProcessorsType>(
+                       _r, _var, ReflectionType(_base.reflection()))
+                .and_then(wrap_in_t);
+          } catch (std::exception& e) {
+            return error(e.what());
+          }
         } else {
           return read(_r, _var);
         }
@@ -935,7 +944,12 @@ struct Parser {
       if (err) [[unlikely]] {
         return error(std::move(*err));
       }
-      return _base;
+      if constexpr (!std::is_nothrow_move_constructible_v<T> &&
+                    std::is_copy_constructible_v<T>) {
+        return Result<T>(static_cast<const T&>(_base));
+      } else {
+        return _base;
+      }
     } catch (std::exception& e) {
       return error(e.what());
     }

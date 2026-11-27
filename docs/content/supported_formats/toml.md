@@ -63,6 +63,19 @@ Note that `std::cout` is also an ostream, so this works as well:
 rfl::toml::write(person, std::cout) << std::endl;
 ```
 
+## Overlaying onto an existing struct (`read_into` / `load_into`)
+
+For layered configuration, you can overlay partial TOML onto an existing base struct with `rfl::toml::read_into` and `rfl::toml::load_into`:
+
+```cpp
+const auto config =
+    rfl::toml::load_into(Config{}, "workspace.toml")
+        .and_then([](Config c) { return rfl::toml::load_into(std::move(c), "user.toml"); })
+        .and_then([](Config c) { return rfl::toml::load_into(std::move(c), "local.toml"); });
+```
+
+Missing fields (including empty or comment-only `.toml` files) preserve their values from the base struct, nested structs and `rfl::ExtraFields` merge keys recursively while containers (`std::vector`, `std::map`, etc.) replace the base value wholesale when present, processors (such as `rfl::NoExtraFields` or `rfl::SnakeCaseToCamelCase`) work as template parameters, `const` fields require copy-constructible types, and errors leave an lvalue base untouched. Note that TOML has no `null` value, so an engaged `std::optional<T>` cannot be cleared back to `std::nullopt` via a TOML overlay.
+
 ## Custom constructors
 
 One of the great things about C++ is that it gives you control over
