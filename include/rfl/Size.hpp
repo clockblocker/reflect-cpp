@@ -6,6 +6,7 @@
 
 #include "Ref.hpp"
 #include "Result.hpp"
+#include "internal/validator_code.hpp"
 #include "parsing/schema/ValidationType.hpp"
 
 namespace rfl {
@@ -22,7 +23,9 @@ struct Size {
   static rfl::Result<T> validate(T _t) {
     auto res = V::validate(_t.size());
     if (!res) {
-      return error("Size validation failed: " + res.error().what());
+      return error(internal::compose_prefixed_validator_error<V>(
+          std::move(res).error(), "Size validation failed: ", "size.",
+          internal::BuiltinErrorCode::size, internal::compose_size_code));
     }
     return std::move(_t);
   }

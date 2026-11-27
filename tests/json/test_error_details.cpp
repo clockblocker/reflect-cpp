@@ -37,7 +37,8 @@ TEST(json, test_error_details_of_top_level_fields) {
       {{.path = {"input_file"},
         .message = "Size validation failed: Value expected to be greater "
                    "than or equal to 5, but got 4.",
-        .kind = rfl::ErrorKind::constraint_violation},
+        .kind = rfl::ErrorKind::constraint_violation,
+        .code = "size.minimum"},
        {.path = {"output_file"},
         .message = "Field named 'output_file' not found.",
         .kind = rfl::ErrorKind::missing_field}});

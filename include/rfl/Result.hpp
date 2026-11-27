@@ -7,6 +7,11 @@
 #include "internal/cpp20/Result.hpp"
 #endif
 
+#include <concepts>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+
 #include "internal/Error.hpp"
 
 namespace rfl {
@@ -80,6 +85,51 @@ inline Unexpected<Error> error(std::string _what, const ErrorKind _kind,
       .path = std::move(_path),
       .message = _what,
       .kind = _kind,
+  });
+  return Unexpected<Error>(Error(std::move(_what), std::move(details)));
+}
+
+/// Shorthand for a classified unexpected error with a machine-readable code.
+/// Constrained template so braced-init path calls such as
+/// `rfl::error("msg", kind, {"field"})` and `rfl::error("msg", kind, {})`
+/// remain unambiguously resolved to the path overload above.
+template <class Code>
+  requires(std::convertible_to<Code, std::string_view> &&
+           !std::is_null_pointer_v<std::remove_cvref_t<Code>>)
+inline Unexpected<Error> error(std::string _what, const ErrorKind _kind,
+                               Code&& _code) {
+  std::string_view code_view;
+  if constexpr (std::is_pointer_v<std::remove_cvref_t<Code>>) {
+    code_view = _code ? std::string_view(_code) : std::string_view{};
+  } else {
+    code_view = std::string_view(std::forward<Code>(_code));
+  }
+  return Unexpected<Error>(Error(std::move(_what), _kind, code_view));
+}
+
+/// Shorthand for a classified unexpected error at a nested path with a
+/// machine-readable code.
+template <class Code>
+  requires(std::convertible_to<Code, std::string_view> &&
+           !std::is_null_pointer_v<std::remove_cvref_t<Code>>)
+inline Unexpected<Error> error(std::string _what, const ErrorKind _kind,
+                               std::vector<ErrorDetail::PathSegment> _path,
+                               Code&& _code) {
+  std::string_view code_view;
+  if constexpr (std::is_pointer_v<std::remove_cvref_t<Code>>) {
+    code_view = _code ? std::string_view(_code) : std::string_view{};
+  } else {
+    code_view = std::string_view(std::forward<Code>(_code));
+  }
+  if (_path.empty()) {
+    return Unexpected<Error>(Error(std::move(_what), _kind, code_view));
+  }
+  std::vector<ErrorDetail> details;
+  details.push_back(ErrorDetail{
+      .path = std::move(_path),
+      .message = _what,
+      .kind = _kind,
+      .code = std::string(code_view),
   });
   return Unexpected<Error>(Error(std::move(_what), std::move(details)));
 }

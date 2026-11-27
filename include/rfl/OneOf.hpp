@@ -52,27 +52,20 @@ struct OneOf {
   template <class T, class Head, class... Tail>
   static rfl::Result<T> validate_impl(const T& _value,
                                       std::vector<Error> _errors) {
-    return Head::validate(_value)
-        .and_then([&](auto&&) -> rfl::Result<T> {
-          if constexpr (sizeof...(Tail) == 0) {
-            if (_errors.size() == sizeof...(Cs)) {
-              return _value;
-              // The AI suggests  return std::forward<decltype(_result)>(_result);
-              // is it correct in this context?
-            }
-            return error(make_error_message(_errors));
-          } else {
-            return validate_impl<T, Tail...>(_value, std::move(_errors));
-          }
-        })
-        .or_else([&](auto&& _err) -> rfl::Result<T> {
-          _errors.emplace_back(std::move(_err));
-          if constexpr (sizeof...(Tail) == 0) {
-            return error(make_error_message(_errors));
-          } else {
-            return validate_impl<T, Tail...>(_value, std::move(_errors));
-          }
-        });
+    auto res = Head::validate(_value);
+    if (!res) {
+      _errors.emplace_back(std::move(res).error());
+    }
+    if constexpr (sizeof...(Tail) == 0) {
+      if (_errors.size() == sizeof...(Cs)) {
+        return _value;
+      }
+      return error(Error(make_error_message(_errors),
+                         ErrorKind::constraint_violation,
+                         internal::BuiltinErrorCode::one_of));
+    } else {
+      return validate_impl<T, Tail...>(_value, std::move(_errors));
+    }
   }
 };
 

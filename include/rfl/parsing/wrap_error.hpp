@@ -59,7 +59,8 @@ RFL_COLD inline Error wrap_field_error(const std::string_view _name,
 RFL_COLD inline Error wrap_error(const std::string_view _prefix, Error&& _err) {
   auto what = std::string(_prefix) + _err.what();
   if (!internal::has_allocated_details(_err)) {
-    return Error(std::move(what), _err.kind());
+    return Error(std::move(what), _err.kind(),
+                 internal::builtin_error_code_of(_err));
   }
   auto details = std::move(_err).details();
   for (auto& detail : details) {
