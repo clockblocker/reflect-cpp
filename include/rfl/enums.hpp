@@ -152,8 +152,20 @@ Result<EnumType> string_to_enum(const std::string_view _str) {
     msg += "'. Must be one of [";
     const char* sep = "";
     if constexpr (internal::has_custom_enum_names_v<EnumType, ProcessorsType>) {
+      std::vector<std::string> seen;
       for (const auto& [wire, _v] :
            get_enum_wire_names<EnumType, ProcessorsType>()) {
+        bool dup = false;
+        for (const auto& prev : seen) {
+          if (prev == wire) {
+            dup = true;
+            break;
+          }
+        }
+        if (dup) {
+          continue;
+        }
+        seen.push_back(wire);
         msg += sep;
         msg += wire;
         sep = ", ";

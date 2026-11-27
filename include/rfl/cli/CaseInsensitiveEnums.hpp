@@ -1,9 +1,6 @@
 #ifndef RFL_CLI_CASEINSENSITIVEENUMS_HPP_
 #define RFL_CLI_CASEINSENSITIVEENUMS_HPP_
 
-#include <algorithm>
-#include <cctype>
-#include <string>
 #include <string_view>
 
 #include "../CaseInsensitiveEnums.hpp"

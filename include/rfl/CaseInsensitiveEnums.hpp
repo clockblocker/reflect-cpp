@@ -48,11 +48,6 @@ Result<EnumType> parse_enum_icase(const std::string_view _str) {
           return val;
         }
       }
-      for (const auto& [val, wire] : internal::get_enum_overrides<EnumType>()) {
-        if (eq_icase(wire, _tok)) {
-          return val;
-        }
-      }
     } else {
       constexpr auto enumerators = get_enumerator_array<EnumType>();
       for (const auto& [name, val] : enumerators) {
