@@ -704,23 +704,36 @@ void build_named_tuple_field_schema(
               }
             }
           }
-        } else if constexpr ((internal::default_if_missing_v<ProcessorsType> ||
-                              _struct_default_if_missing) &&
-                             internal::CanWriteGeneric<U>) {
-          bool skip_default = false;
-          if constexpr (std::is_pointer_v<U>) {
-            skip_default = (*_field_val == nullptr);
-          } else if constexpr (!is_required<U, false>()) {
-            skip_default = is_empty(*_field_val);
+        } else if constexpr (internal::default_if_missing_v<ProcessorsType> ||
+                             _struct_default_if_missing) {
+          bool emitted_default = false;
+          if constexpr (internal::CanWriteGeneric<U>) {
+            bool skip_default = false;
+            if constexpr (std::is_pointer_v<U>) {
+              skip_default = (*_field_val == nullptr);
+            } else if constexpr (!is_required<U, false>()) {
+              skip_default = is_empty(*_field_val);
+            }
+            if (!skip_default) {
+              try {
+                auto default_val =
+                    to_default_generic<ProcessorsType>(*_field_val);
+                s = schema::Type{schema::Type::DefaultVal{
+                    .type_ = Ref<schema::Type>::make(std::move(s)),
+                    .default_value_ = std::move(default_val)}};
+                emitted_default = true;
+              } catch (...) {
+              }
+            }
           }
-          if (!skip_default) {
-            try {
-              auto default_val =
-                  to_default_generic<ProcessorsType>(*_field_val);
+          if constexpr (_struct_default_if_missing) {
+            // Under per-struct DefaultIfMissing, global no_required is false,
+            // so even fields whose default cannot be serialized (or is empty)
+            // must be marked optional in the schema to match read behavior.
+            if (!emitted_default && is_required<U, false>()) {
               s = schema::Type{schema::Type::DefaultVal{
                   .type_ = Ref<schema::Type>::make(std::move(s)),
-                  .default_value_ = std::move(default_val)}};
-            } catch (...) {
+                  .default_value_ = std::nullopt}};
             }
           }
         }

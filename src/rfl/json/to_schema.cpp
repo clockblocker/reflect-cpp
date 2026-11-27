@@ -406,7 +406,15 @@ schema::Type type_to_json_schema_type(const parsing::schema::Type& _type,
                   type_to_json_schema_type(*_t.type_, _options))}};
 
     } else if constexpr (std::is_same<T, Type::Validated>()) {
-      return handle_validation_type(*_t.type_, _t.validation_, _options);
+      auto validated =
+          handle_validation_type(*_t.type_, _t.validation_, _options);
+      if (rfl::holds_alternative<Type::BoundedInteger>(_t.type_->variant_)) {
+        auto bounded = type_to_json_schema_type(*_t.type_, _options);
+        return schema::Type{
+            .value = schema::Type::AllOf{
+                .allOf = {std::move(bounded), std::move(validated)}}};
+      }
+      return validated;
 
     } else {
       static_assert(rfl::always_false_v<T>, "Not all cases were covered.");

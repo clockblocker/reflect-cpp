@@ -27,7 +27,7 @@ struct CaseInsensitiveEnums {
 /// so numeric strings and error wording match standard enum parsing.
 template <class EnumType, bool _enum_names_only = false,
           class ProcessorsType = Processors<>>
-Result<EnumType> parse_enum_icase(const std::string_view _str) noexcept {
+Result<EnumType> parse_enum_icase(const std::string_view _str) {
   const auto eq_icase = [](std::string_view _a, std::string_view _b) noexcept {
     if (_a.size() != _b.size()) {
       return false;
@@ -40,28 +40,50 @@ Result<EnumType> parse_enum_icase(const std::string_view _str) noexcept {
     }
     return true;
   };
-  if constexpr (internal::has_custom_enum_names_v<EnumType, ProcessorsType>) {
-    for (const auto& [wire, val] :
-         get_enum_wire_names<EnumType, ProcessorsType>()) {
-      if (eq_icase(wire, _str)) {
-        return val;
+  const auto parse_one = [&](const std::string_view _tok) -> Result<EnumType> {
+    if constexpr (internal::has_custom_enum_names_v<EnumType, ProcessorsType>) {
+      for (const auto& [wire, val] :
+           get_enum_wire_names<EnumType, ProcessorsType>()) {
+        if (eq_icase(wire, _tok)) {
+          return val;
+        }
+      }
+      for (const auto& [val, wire] : internal::get_enum_overrides<EnumType>()) {
+        if (eq_icase(wire, _tok)) {
+          return val;
+        }
+      }
+    } else {
+      constexpr auto enumerators = get_enumerator_array<EnumType>();
+      for (const auto& [name, val] : enumerators) {
+        if (eq_icase(name, _tok)) {
+          return val;
+        }
       }
     }
-    for (const auto& [val, wire] : internal::get_enum_overrides<EnumType>()) {
-      if (eq_icase(wire, _str)) {
-        return val;
+    return string_to_enum<EnumType, _enum_names_only, ProcessorsType>(_tok);
+  };
+  if constexpr (internal::enums::is_flag_enum<EnumType>) {
+    using T = std::underlying_type_t<EnumType>;
+    auto res = static_cast<T>(0);
+    std::string_view remaining = _str;
+    while (true) {
+      const auto pos = remaining.find('|');
+      const auto token = remaining.substr(0, pos);
+      const auto r = parse_one(token);
+      if (!r) {
+        return r;
       }
+      res |= static_cast<T>(*r);
+      if (pos == std::string_view::npos) {
+        break;
+      }
+      remaining.remove_prefix(pos + 1);
     }
+    return static_cast<EnumType>(res);
   } else {
-    constexpr auto enumerators = get_enumerator_array<EnumType>();
-    for (const auto& [name, val] : enumerators) {
-      if (eq_icase(name, _str)) {
-        return val;
-      }
-    }
+    return parse_one(_str);
   }
-  return string_to_enum<EnumType, _enum_names_only, ProcessorsType>(
-      std::string(_str));
 }
 
 }  // namespace rfl

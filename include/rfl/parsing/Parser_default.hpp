@@ -887,8 +887,9 @@ struct Parser {
         if (_definitions->find(name) == _definitions->end()) {
           (*_definitions)[name] =
               Type{Type::Integer{}};  // Placeholder to avoid infinite loop.
-          auto def = ParserTaggedUnion<R, W, BaseTU, ProcessorsType>::to_schema(
-              _definitions);
+          auto def =
+              ParserTaggedUnion<R, W, BaseTU, ProcessorsType>::to_schema_body(
+                  _definitions);
           if constexpr (internal::has_struct_description_v<U>) {
             const auto struct_desc = internal::get_struct_description<U>();
             if (!struct_desc.empty()) {
@@ -952,6 +953,14 @@ struct Parser {
       // type itself rather than as a named reference, like rfl::Short.
       auto s = Parser<R, W, typename U::Type, ProcessorsType>::to_schema(
           _definitions);
+      if constexpr (internal::has_struct_description_v<U>) {
+        const auto struct_desc = internal::get_struct_description<U>();
+        if (!struct_desc.empty()) {
+          s = Type{Type::Description{
+              .description_ = std::string(struct_desc),
+              .type_ = Ref<Type>::make(std::move(s))}};
+        }
+      }
       if constexpr (internal::has_schema_annotations_v<U>) {
         apply_schema_annotations(&s, internal::get_schema_annotations<U>());
       }
@@ -1016,6 +1025,14 @@ struct Parser {
                     internal::has_reflection_type_v<U>) {
         auto s = Parser<R, W, typename U::ReflectionType,
                         ProcessorsType>::to_schema(_definitions);
+        if constexpr (internal::has_struct_description_v<U>) {
+          const auto struct_desc = internal::get_struct_description<U>();
+          if (!struct_desc.empty()) {
+            s = Type{Type::Description{
+                .description_ = std::string(struct_desc),
+                .type_ = Ref<Type>::make(std::move(s))}};
+          }
+        }
         if constexpr (internal::has_schema_annotations_v<U>) {
           apply_schema_annotations(&s, internal::get_schema_annotations<U>());
         }
@@ -1025,6 +1042,14 @@ struct Parser {
                             internal::has_write_reflector<U>)) {
         auto s = Parser<R, W, typename Reflector<U>::ReflType,
                         ProcessorsType>::to_schema(_definitions);
+        if constexpr (internal::has_struct_description_v<U>) {
+          const auto struct_desc = internal::get_struct_description<U>();
+          if (!struct_desc.empty()) {
+            s = Type{Type::Description{
+                .description_ = std::string(struct_desc),
+                .type_ = Ref<Type>::make(std::move(s))}};
+          }
+        }
         if constexpr (internal::has_schema_annotations_v<U>) {
           apply_schema_annotations(&s, internal::get_schema_annotations<U>());
         }
@@ -1046,6 +1071,14 @@ struct Parser {
                     internal::has_reflection_type_v<U>) {
         auto s = Parser<R, W, typename U::ReflectionType,
                         ProcessorsType>::to_schema(_definitions);
+        if constexpr (internal::has_struct_description_v<U>) {
+          const auto struct_desc = internal::get_struct_description<U>();
+          if (!struct_desc.empty()) {
+            s = Type{Type::Description{
+                .description_ = std::string(struct_desc),
+                .type_ = Ref<Type>::make(std::move(s))}};
+          }
+        }
         if constexpr (internal::has_schema_annotations_v<U>) {
           apply_schema_annotations(&s, internal::get_schema_annotations<U>());
         }
@@ -1055,6 +1088,14 @@ struct Parser {
                             internal::has_write_reflector<U>)) {
         auto s = Parser<R, W, typename Reflector<U>::ReflType,
                         ProcessorsType>::to_schema(_definitions);
+        if constexpr (internal::has_struct_description_v<U>) {
+          const auto struct_desc = internal::get_struct_description<U>();
+          if (!struct_desc.empty()) {
+            s = Type{Type::Description{
+                .description_ = std::string(struct_desc),
+                .type_ = Ref<Type>::make(std::move(s))}};
+          }
+        }
         if constexpr (internal::has_schema_annotations_v<U>) {
           apply_schema_annotations(&s, internal::get_schema_annotations<U>());
         }

@@ -26,6 +26,8 @@ SOFTWARE.
 
 #include "rfl/capnproto/to_schema.hpp"
 
+#include <cstdint>
+#include <limits>
 #include <map>
 #include <sstream>
 #include <string>
@@ -198,9 +200,30 @@ schema::Type type_to_capnproto_schema_type(
 
     } else if constexpr (std::is_same<T, Type::BoundedInteger>()) {
       if (_t.minimum_ < 0) {
-        return schema::Type{.value = schema::Type::Int64{}};
+        const bool fits_i32 =
+            _t.minimum_ >= std::numeric_limits<int32_t>::min() &&
+            _t.maximum_.visit([](const auto _m) {
+              if constexpr (std::is_signed_v<decltype(_m)>) {
+                return _m <= std::numeric_limits<int32_t>::max();
+              } else {
+                return _m <= static_cast<uint64_t>(
+                                 std::numeric_limits<int32_t>::max());
+              }
+            });
+        return fits_i32 ? schema::Type{.value = schema::Type::Int32{}}
+                        : schema::Type{.value = schema::Type::Int64{}};
       }
-      return schema::Type{.value = schema::Type::UInt64{}};
+      const bool fits_u32 = _t.maximum_.visit([](const auto _m) {
+        if constexpr (std::is_signed_v<decltype(_m)>) {
+          return _m >= 0 &&
+                 static_cast<uint64_t>(_m) <=
+                     std::numeric_limits<uint32_t>::max();
+        } else {
+          return _m <= std::numeric_limits<uint32_t>::max();
+        }
+      });
+      return fits_u32 ? schema::Type{.value = schema::Type::UInt32{}}
+                      : schema::Type{.value = schema::Type::UInt64{}};
 
     } else if constexpr (std::is_same<T, Type::Int64>()) {
       return schema::Type{.value = schema::Type::Int64{}};

@@ -39,6 +39,15 @@ struct CliEnumConfig {
   rfl::DefaultVal<OutputMode> output = OutputMode::json_pretty;
 };
 
+enum class HttpStatus {
+  ok = 200,
+  not_found = 404,
+};
+
+struct StatusPayload {
+  HttpStatus status = HttpStatus::ok;
+};
+
 inline constexpr std::array<std::string_view, 3> kCompressionModes = {
     "none", "fast", "max-compression"};
 using CompressionLiteral = rfl::literal_from_table_t<kCompressionModes>;
@@ -70,6 +79,16 @@ struct EnumNames<test_enum_names::CustomPrefixEnum> {
   static std::string transform(const std::string_view _raw) {
     return "x-" + apply_enum_name_transform(_raw, EnumNameTransform::snake_to_kebab);
   }
+};
+
+// Out-of-range enum overrides (outside default enchantum range).
+template <>
+struct EnumNames<test_enum_names::HttpStatus> {
+  static constexpr std::array<EnumOverride<test_enum_names::HttpStatus>, 2>
+      overrides = {{
+          {test_enum_names::HttpStatus::ok, "ok"},
+          {test_enum_names::HttpStatus::not_found, "not-found"},
+      }};
 };
 
 }  // namespace rfl
@@ -172,6 +191,31 @@ TEST(json, test_enum_names_cli_read_and_usage) {
   EXPECT_NE(help->find("xml-compact"), std::string::npos) << *help;
   EXPECT_NE(help->find("Default: speed-opt."), std::string::npos) << *help;
   EXPECT_NE(help->find("Default: json-pretty."), std::string::npos) << *help;
+}
+
+TEST(json, test_enum_names_out_of_range_overrides_in_schema_and_errors) {
+  const auto names = rfl::get_enum_wire_names<HttpStatus>();
+  ASSERT_EQ(names.size(), 2u);
+  EXPECT_EQ(names[0].first, "ok");
+  EXPECT_EQ(names[1].first, "not-found");
+
+  const auto schema = rfl::json::to_schema<StatusPayload>();
+  EXPECT_NE(schema.find(R"("enum":["ok","not-found"])"), std::string::npos)
+      << schema;
+
+  const auto parsed = rfl::json::read<StatusPayload>(R"({"status":"not-found"})");
+  ASSERT_TRUE(parsed) << parsed.error().what();
+  EXPECT_EQ(parsed->status, HttpStatus::not_found);
+
+  const auto icase =
+      rfl::cli::parse_enum_icase<HttpStatus, true>("NOT-FOUND");
+  ASSERT_TRUE(icase) << icase.error().what();
+  EXPECT_EQ(*icase, HttpStatus::not_found);
+
+  const auto bad = rfl::string_to_enum<HttpStatus, true>("bogus");
+  ASSERT_FALSE(bad);
+  EXPECT_NE(bad.error().what().find("ok, not-found"), std::string::npos)
+      << bad.error().what();
 }
 
 TEST(json, test_literal_from_table_t) {

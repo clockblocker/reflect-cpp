@@ -88,7 +88,9 @@ struct ParserBasicType {
       return Type{Type::Boolean{}};
 
     } else if constexpr (std::is_integral_v<U> &&
-                         internal::integer_bounds_v<ProcessorsType>) {
+                         internal::integer_bounds_v<ProcessorsType> &&
+                         !schemaful::IsSchemafulReader<R> &&
+                         !schemaful::IsSchemafulWriter<W>) {
       if constexpr (std::is_unsigned_v<U>) {
         return Type{Type::BoundedInteger{
             .minimum_ = 0,

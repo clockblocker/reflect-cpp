@@ -138,21 +138,36 @@ struct ParserEnum {
     } else if constexpr (config::enum_descriptions<U>::has_descriptions) {
       // Generate DescribedLiteral for enums with descriptions
       auto described = Type::DescribedLiteral{};
-      constexpr auto enumerators = get_enumerator_array<U>();
-      for (const auto& [name, value] : enumerators) {
+      for (const auto& [wire, value] : get_enum_wire_names<U, ProcessorsType>()) {
+        bool dup = false;
+        for (const auto& existing : described.values_) {
+          if (existing.value_ == wire) {
+            dup = true;
+            break;
+          }
+        }
+        if (dup) {
+          continue;
+        }
         auto desc = config::enum_descriptions<U>::get(value);
-        auto wire =
-            internal::resolve_enum_wire_name<U, ProcessorsType>(value, name);
         described.values_.push_back(
             Type::DescribedLiteral::ValueWithDescription{
-                .value_ = std::move(wire),
-                .description_ = std::string(desc)});
+                .value_ = wire, .description_ = std::string(desc)});
       }
       return Type{std::move(described)};
     } else if constexpr (internal::has_custom_enum_names_v<U, ProcessorsType>) {
       std::vector<std::string> vals;
       for (const auto& [wire, _v] : get_enum_wire_names<U, ProcessorsType>()) {
-        vals.push_back(wire);
+        bool dup = false;
+        for (const auto& existing : vals) {
+          if (existing == wire) {
+            dup = true;
+            break;
+          }
+        }
+        if (!dup) {
+          vals.push_back(wire);
+        }
       }
       return Type{Type::Literal{.values_ = std::move(vals)}};
     } else {

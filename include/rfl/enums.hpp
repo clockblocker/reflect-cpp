@@ -104,7 +104,9 @@ std::string enum_to_string(const EnumType _enum) {
   }
 }
 
-// Returns all declared enumerators paired with their resolved wire names.
+// Returns all declared enumerators (plus any explicit `rfl::EnumNames<E>`
+// overrides for values outside the reflected range) paired with their resolved
+// wire names.
 template <class EnumType, class ProcessorsType = Processors<>>
 std::vector<std::pair<std::string, EnumType>> get_enum_wire_names() {
   std::vector<std::pair<std::string, EnumType>> out;
@@ -115,6 +117,20 @@ std::vector<std::pair<std::string, EnumType>> get_enum_wire_names() {
         internal::resolve_enum_wire_name<EnumType, ProcessorsType>(val,
                                                                    raw_name),
         val);
+  }
+  if constexpr (internal::has_custom_enum_names_v<EnumType, ProcessorsType>) {
+    for (const auto& [val, wire] : internal::get_enum_overrides<EnumType>()) {
+      bool already_present = false;
+      for (const auto& [_w, existing_val] : out) {
+        if (existing_val == val) {
+          already_present = true;
+          break;
+        }
+      }
+      if (!already_present) {
+        out.emplace_back(std::string(wire), val);
+      }
+    }
   }
   return out;
 }

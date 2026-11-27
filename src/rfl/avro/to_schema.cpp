@@ -26,6 +26,9 @@ SOFTWARE.
 
 #include "rfl/avro/to_schema.hpp"
 
+#include <cstdint>
+#include <limits>
+
 #include "rfl/avro/schema/Type.hpp"
 #include "rfl/json.hpp"
 #include "rfl/parsing/schemaful/tuple_to_object.hpp"
@@ -66,8 +69,23 @@ schema::Type type_to_avro_schema_type(
 
     } else if constexpr (std::is_same<T, Type::Int64>() ||
                          std::is_same<T, Type::UInt32>() ||
-                         std::is_same<T, Type::UInt64>() ||
-                         std::is_same<T, Type::BoundedInteger>()) {
+                         std::is_same<T, Type::UInt64>()) {
+      return schema::Type{.value = schema::Type::Long{}};
+
+    } else if constexpr (std::is_same<T, Type::BoundedInteger>()) {
+      const bool fits_i32 =
+          _t.minimum_ >= std::numeric_limits<int32_t>::min() &&
+          _t.maximum_.visit([](const auto _m) {
+            if constexpr (std::is_signed_v<decltype(_m)>) {
+              return _m <= std::numeric_limits<int32_t>::max();
+            } else {
+              return _m <=
+                     static_cast<uint64_t>(std::numeric_limits<int32_t>::max());
+            }
+          });
+      if (fits_i32) {
+        return schema::Type{.value = schema::Type::Int{}};
+      }
       return schema::Type{.value = schema::Type::Long{}};
 
     } else if constexpr (std::is_same<T, Type::Float>()) {

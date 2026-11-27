@@ -232,7 +232,7 @@ concept HasEnumTransformFn = requires(std::string_view _s) {
 template <class E, class ProcessorsType = Processors<>>
 constexpr bool has_custom_enum_names_v =
     HasEnumOverridesVar<std::remove_cvref_t<E>> ||
-    HasEnumOverridesFn<std::remove_cvref_t<E>> ||
+    HasAnyEnumOverridesFn<std::remove_cvref_t<E>> ||
     HasEnumTransformConst<std::remove_cvref_t<E>> ||
     HasEnumTransformFn<std::remove_cvref_t<E>> ||
     (enum_name_transform_v<ProcessorsType> != EnumNameTransform::none);

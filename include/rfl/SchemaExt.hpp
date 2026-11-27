@@ -185,11 +185,11 @@ concept HasMetadataDefaultIfMissing = requires {
 template <class T>
 consteval bool struct_default_if_missing_opt_in() {
   using U = std::remove_cvref_t<T>;
+  bool enabled = DefaultIfMissingFor<U>::value;
   if constexpr (HasMetadataDefaultIfMissing<U>) {
-    return static_cast<bool>(Metadata<U>::default_if_missing);
-  } else {
-    return DefaultIfMissingFor<U>::value;
+    enabled = enabled || static_cast<bool>(Metadata<U>::default_if_missing);
   }
+  return enabled;
 }
 
 template <class T>

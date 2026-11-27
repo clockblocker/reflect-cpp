@@ -207,6 +207,30 @@ struct AstWrapper {
   AstUnion node;
 };
 
+// --- #103: Bare TaggedUnion alias with SchemaName + Metadata description ---
+struct Tri {
+  double base;
+};
+struct Rect {
+  double width;
+};
+using AnnotatedShape = rfl::TaggedUnion<"kind", Tri, Rect>;
+
+// --- #100: Validator + IntegerBounds ---
+struct ValidatedPort {
+  rfl::Validator<uint16_t, rfl::Minimum<1>> port;
+};
+
+// --- #100: Per-struct DefaultIfMissing with read-only / throwing-default field ---
+struct ReadOnlyInner {
+  int v = 7;
+};
+
+struct LooseWithReadOnly {
+  int a = 1;
+  ReadOnlyInner ro;
+};
+
 // --- #103: Non-recursive TaggedUnion (must remain inline) ---
 struct Circle {
   double radius;
@@ -304,6 +328,28 @@ template <>
 struct SchemaName<test_schema_ext_and_recursive_tu::YulExpr> {
   static constexpr std::string_view value = "YulExpression";
 };
+
+template <>
+struct SchemaName<test_schema_ext_and_recursive_tu::AnnotatedShape> {
+  static constexpr std::string_view value = "AnnotatedShape";
+};
+
+template <>
+struct Metadata<test_schema_ext_and_recursive_tu::AnnotatedShape> {
+  static constexpr std::string_view description = "Tagged union of shapes";
+};
+
+template <>
+struct Reflector<test_schema_ext_and_recursive_tu::ReadOnlyInner> {
+  using ReflType = int;
+  static test_schema_ext_and_recursive_tu::ReadOnlyInner to(int _v) {
+    return {_v};
+  }
+};
+
+template <>
+struct DefaultIfMissingFor<test_schema_ext_and_recursive_tu::LooseWithReadOnly>
+    : std::true_type {};
 
 }  // namespace rfl
 
@@ -498,6 +544,37 @@ TEST(json, test_issue_103_non_recursive_tagged_union_stays_inline) {
   const auto schema = rfl::json::to_schema<Drawing>();
   EXPECT_NE(schema.find(R"("primary":{"oneOf":[)"), std::string::npos) << schema;
   EXPECT_EQ(schema.find("TaggedUnion"), std::string::npos) << schema;
+}
+
+TEST(json, test_issue_103_bare_tagged_union_with_schema_name_and_description) {
+  const auto schema = rfl::json::to_schema<AnnotatedShape>();
+  const auto parsed = rfl::json::read<rfl::Generic>(schema);
+  ASSERT_TRUE(parsed) << schema;
+  // Must NOT be a degenerate self-reference; $defs["AnnotatedShape"] must hold oneOf.
+  EXPECT_NE(schema.find(R"("$ref":"#/$defs/AnnotatedShape")"), std::string::npos) << schema;
+  EXPECT_NE(schema.find(R"("AnnotatedShape":{"description":"Tagged union of shapes","oneOf":[)"),
+            std::string::npos)
+      << schema;
+  EXPECT_EQ(schema.find(R"("AnnotatedShape":{"$ref")"), std::string::npos) << schema;
+}
+
+TEST(json, test_issue_100_integer_bounds_preserved_with_validator) {
+  const auto schema = rfl::json::to_schema<ValidatedPort, rfl::IntegerBounds>();
+  // Both uint16_t width bounds (0..65535) and Minimum<1> must be preserved in allOf.
+  EXPECT_NE(schema.find(R"("allOf":[{"type":"integer","minimum":0,"maximum":65535},{"minimum":1,"type":"integer"}])"),
+            std::string::npos)
+      << schema;
+}
+
+TEST(json, test_issue_100_per_struct_default_if_missing_non_writable_not_required) {
+  const auto read_res = rfl::json::read<LooseWithReadOnly>("{}");
+  ASSERT_TRUE(read_res) << read_res.error().what();
+  EXPECT_EQ(read_res->a, 1);
+  EXPECT_EQ(read_res->ro.v, 7);
+
+  const auto schema = rfl::json::to_schema<LooseWithReadOnly>();
+  EXPECT_NE(schema.find(R"("required":[])"), std::string::npos) << schema;
+  EXPECT_EQ(schema.find(R"("required":["ro"])"), std::string::npos) << schema;
 }
 
 }  // namespace test_schema_ext_and_recursive_tu

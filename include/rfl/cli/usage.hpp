@@ -760,7 +760,9 @@ class UsageWalker {
         std::vector<std::string> values;
         values.reserve(wire_names.size());
         for (const auto& [name, val] : wire_names) {
-          values.push_back(name);
+          if (std::find(values.begin(), values.end(), name) == values.end()) {
+            values.push_back(name);
+          }
         }
         add_choices(values, std::move(_arg),
                     (_emit_default && _default_ptr)
