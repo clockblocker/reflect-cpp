@@ -204,7 +204,11 @@ class StreamWriter {
   std::optional<std::string> finish_error_;
 };
 
-namespace detail {
+}  // namespace json
+
+namespace internal::json {
+
+using rfl::json::StreamFormat;
 
 struct YYJsonDocDeleter {
   void operator()(yyjson_doc* _doc) const noexcept { yyjson_doc_free(_doc); }
@@ -265,8 +269,7 @@ class RFL_API StreamReaderEngine {
   void advance_past_newline();
   void resync_to_rs();
 
-  ScanResult scan_value(bool _line_mode, bool _is_seq, bool _check_first_nl,
-                        std::string* _first_nl_err);
+  ScanResult scan_value(bool _line_mode, bool _is_seq);
 
   std::optional<Result<YYJsonDocPtr>> parse_delimited_value(bool _is_seq);
   std::optional<Result<YYJsonDocPtr>> parse_array_value();
@@ -290,7 +293,9 @@ class RFL_API StreamReaderEngine {
   ArrayState array_state_ = ArrayState::before_open;
 };
 
-}  // namespace detail
+}  // namespace internal::json
+
+namespace json {
 
 /// Record-level streaming JSON reader.
 template <class T, class... Ps>
@@ -375,7 +380,7 @@ class StreamReader {
   std::default_sentinel_t end() const noexcept { return std::default_sentinel; }
 
  private:
-  detail::StreamReaderEngine engine_;
+  rfl::internal::json::StreamReaderEngine engine_;
   std::optional<ValueType> current_;
 };
 
