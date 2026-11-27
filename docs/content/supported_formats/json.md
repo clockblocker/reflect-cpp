@@ -78,6 +78,36 @@ Note that `std::cout` is also an ostream, so this works as well:
 rfl::json::write(person, std::cout) << std::endl;
 ```
 
+## Record-level streaming
+
+For large datasets or live streams, `rfl::json::StreamReader` and `rfl::json::StreamWriter` read and write one record at a time without loading the entire document into memory. Three framing formats are supported via `rfl::json::StreamFormat`:
+
+- `StreamFormat::ndjson` — Newline-delimited JSON (`{...}\n{...}\n`, default)
+- `StreamFormat::json_seq` — RFC 7464 JSON Text Sequences (`\x1e{...}\n`)
+- `StreamFormat::json_array` — Top-level JSON array (`[{...},{...}]`)
+
+```cpp
+// Writing records incrementally
+rfl::json::StreamWriter writer(my_ostream, rfl::json::StreamFormat::ndjson);
+for (const auto& person : people) {
+    writer.write(person).value();
+}
+writer.flush().value();
+writer.finish().value();
+
+// Reading records incrementally (C++20 input_range or next())
+rfl::json::StreamReader<Person> reader(my_istream, rfl::json::StreamFormat::ndjson);
+for (auto&& res : reader) {
+    if (res) {
+        process(*res);
+    } else {
+        log_error(res.error().what());
+    }
+}
+```
+
+`StreamReader` also accepts a `std::string_view` directly (zero-copy), supports processors such as `rfl::SnakeCaseToCamelCase` and `rfl::NoExtraFields`, enforces a configurable `max_record_bytes` cap (64 MiB default, `0` for unlimited), and recovers from per-record syntax errors in `ndjson` (advancing to the next line) and `json_seq` (resyncing to the next `\x1e`). `StreamWriter::write()`, `flush()`, and `finish()` return `rfl::Result<rfl::Nothing>`; pretty-printing flags are rejected for `ndjson` and `json_seq`.
+
 ## Custom constructors
 
 One of the great things about C++ is that it gives you control over
