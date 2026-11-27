@@ -607,6 +607,103 @@ TEST(nlohmann, bridge2_dynamic_fields_rfl_json_and_schema) {
   EXPECT_TRUE(def["properties"].contains("payload"));
   EXPECT_TRUE(def["properties"].contains("ordered_payload"));
 }
+
+struct ErrorKindParityStruct {
+  std::string str_val;
+  bool bool_val;
+  double dbl_val;
+  int8_t i8_val;
+  int64_t i64_val;
+  uint8_t u8_val;
+  uint64_t u64_val;
+  std::vector<int> arr_val;
+  rfl::Bytestring bytes_val;
+  rfl::Validator<int, rfl::Minimum<0>> age;
+  rfl::TaggedUnion<"kind", Circle, Square> shape;
+};
+
+TEST(nlohmann, error_kind_parity_with_json) {
+  const nlohmann::json valid = {
+      {"str_val", "ok"},
+      {"bool_val", true},
+      {"dbl_val", 1.5},
+      {"i8_val", 10},
+      {"i64_val", -100},
+      {"u8_val", 42},
+      {"u64_val", 1000ULL},
+      {"arr_val", {1, 2}},
+      {"bytes_val", "AA=="},
+      {"age", 5},
+      {"shape", {{"kind", "Circle"}, {"radius", 1.0}}},
+  };
+  ASSERT_TRUE(rfl::nlohmann::read<ErrorKindParityStruct>(valid).has_value());
+  ASSERT_TRUE(
+      rfl::json::read<ErrorKindParityStruct>(valid.dump()).has_value());
+
+  const auto expect_parity = [](const nlohmann::json& _j,
+                                const rfl::ErrorKind _expected) {
+    const auto nj_res =
+        rfl::nlohmann::read<ErrorKindParityStruct, rfl::NoExtraFields>(_j);
+    const auto yy_res =
+        rfl::json::read<ErrorKindParityStruct, rfl::NoExtraFields>(_j.dump());
+    ASSERT_FALSE(nj_res.has_value()) << _j.dump();
+    ASSERT_FALSE(yy_res.has_value()) << _j.dump();
+    EXPECT_EQ(nj_res.error().kind(), _expected)
+        << "nlohmann mismatch for: " << _j.dump() << " -> "
+        << nj_res.error().what();
+    EXPECT_EQ(yy_res.error().kind(), _expected)
+        << "json mismatch for: " << _j.dump() << " -> "
+        << yy_res.error().what();
+    EXPECT_EQ(nj_res.error().kind(), yy_res.error().kind());
+  };
+
+  // Primitive type mismatches -> invalid_type
+  { auto j = valid; j["str_val"] = 123; expect_parity(j, rfl::ErrorKind::invalid_type); }
+  { auto j = valid; j["bool_val"] = "true"; expect_parity(j, rfl::ErrorKind::invalid_type); }
+  { auto j = valid; j["dbl_val"] = "not-a-num"; expect_parity(j, rfl::ErrorKind::invalid_type); }
+  { auto j = valid; j["i8_val"] = "not-an-int"; expect_parity(j, rfl::ErrorKind::invalid_type); }
+  { auto j = valid; j["i64_val"] = 3.14; expect_parity(j, rfl::ErrorKind::invalid_type); }
+  { auto j = valid; j["u8_val"] = false; expect_parity(j, rfl::ErrorKind::invalid_type); }
+  { auto j = valid; j["u64_val"] = "nope"; expect_parity(j, rfl::ErrorKind::invalid_type); }
+  { auto j = valid; j["arr_val"] = "not-arr"; expect_parity(j, rfl::ErrorKind::invalid_type); }
+  { auto j = valid; j["bytes_val"] = 42; expect_parity(j, rfl::ErrorKind::invalid_type); }
+  expect_parity(nlohmann::json::array(), rfl::ErrorKind::invalid_type);
+  expect_parity(nlohmann::json(nullptr), rfl::ErrorKind::invalid_type);
+
+  // Numeric overflows / range errors & bad Base64 -> invalid_value
+  { auto j = valid; j["u8_val"] = 256; expect_parity(j, rfl::ErrorKind::invalid_value); }
+  { auto j = valid; j["u8_val"] = -1; expect_parity(j, rfl::ErrorKind::invalid_value); }
+  { auto j = valid; j["u64_val"] = -5; expect_parity(j, rfl::ErrorKind::invalid_value); }
+  { auto j = valid; j["i8_val"] = 200; expect_parity(j, rfl::ErrorKind::invalid_value); }
+  { auto j = valid; j["i8_val"] = -200; expect_parity(j, rfl::ErrorKind::invalid_value); }
+  {
+    auto j = valid;
+    j["i64_val"] = std::numeric_limits<uint64_t>::max();
+    expect_parity(j, rfl::ErrorKind::invalid_value);
+  }
+  { auto j = valid; j["bytes_val"] = "!!!not-base64!!!"; expect_parity(j, rfl::ErrorKind::invalid_value); }
+
+  // Structural / constraint / tagged union errors
+  { auto j = valid; j.erase("str_val"); expect_parity(j, rfl::ErrorKind::missing_field); }
+  { auto j = valid; j["extra"] = 1; expect_parity(j, rfl::ErrorKind::unknown_field); }
+  { auto j = valid; j["age"] = -1; expect_parity(j, rfl::ErrorKind::constraint_violation); }
+  { auto j = valid; j["shape"] = nlohmann::json::object(); expect_parity(j, rfl::ErrorKind::missing_field); }
+  { auto j = valid; j["shape"] = {{"kind", 123}, {"radius", 1.0}}; expect_parity(j, rfl::ErrorKind::invalid_type); }
+  { auto j = valid; j["shape"] = {{"kind", "Triangle"}, {"radius", 1.0}}; expect_parity(j, rfl::ErrorKind::invalid_value); }
+
+  // Direct Vectorstring non-string check
+  const auto vec_err =
+      rfl::nlohmann::read<BinaryFields>(nlohmann::json{{"bytes", "AA=="}, {"vec", 123}});
+  ASSERT_FALSE(vec_err.has_value());
+  EXPECT_EQ(vec_err.error().kind(), rfl::ErrorKind::invalid_type);
+
+  // Direct array out-of-bounds check (NoFieldNames)
+  struct Pair { int a; int b; };
+  const auto oob_nj =
+      rfl::nlohmann::read<Pair, rfl::NoFieldNames>(nlohmann::json::array({1}));
+  ASSERT_FALSE(oob_nj.has_value());
+  EXPECT_EQ(oob_nj.error().kind(), rfl::ErrorKind::missing_field);
+}
 #endif
 
 }  // namespace test_nlohmann

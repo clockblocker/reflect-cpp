@@ -1,6 +1,8 @@
 #ifndef RFL_XML_READER_HPP_
 #define RFL_XML_READER_HPP_
 
+#include <algorithm>
+#include <array>
 #include <charconv>
 #include <concepts>
 #include <exception>
@@ -9,10 +11,12 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_set>
 #include <variant>
 
 #include "../Result.hpp"
 #include "../always_false.hpp"
+#include "../parsing/FieldVariantReader.hpp"
 #include "../parsing/is_view_reader.hpp"
 
 namespace rfl::xml {
@@ -74,7 +78,8 @@ struct Reader {
         return InputVarType(node);
       }
     }
-    return error("Index " + std::to_string(_idx) + " out of bounds.");
+    return error("Index " + std::to_string(_idx) + " out of bounds.",
+                 ErrorKind::missing_field);
   }
 
   /// Retrieves a field from an XML object by name.
@@ -86,7 +91,8 @@ struct Reader {
       const std::string& _name, const InputObjectType _obj) const noexcept {
     const auto node = _obj.node_.child(_name.c_str());
     if (!node) {
-      return error("Object contains no field named '" + _name + "'.");
+      return error("Object contains no field named '" + _name + "'.",
+                   ErrorKind::missing_field);
     }
     return InputVarType(node);
   }
@@ -129,7 +135,8 @@ struct Reader {
       } else if (val == "false" || val == "0") {
         return false;
       } else {
-        return error("Could not cast '" + val + "' to boolean.");
+        return error("Could not cast '" + val + "' to boolean.",
+                     ErrorKind::invalid_value);
       }
 
     } else if constexpr (std::is_floating_point<std::remove_cvref_t<T>>()) {
@@ -138,7 +145,8 @@ struct Reader {
         return static_cast<T>(std::stod(str));
       } catch (std::exception& e) {
         return error("Could not cast '" + std::string(str) +
-                     "' to floating point value.");
+                         "' to floating point value.",
+                     ErrorKind::invalid_value);
       }
 
     } else if constexpr (std::is_integral<std::remove_cvref_t<T>>()) {
@@ -147,7 +155,8 @@ struct Reader {
       const auto [ptr, ec] =
           std::from_chars(str.data(), str.data() + str.size(), value);
       if (ec != std::errc() || ptr != str.data() + str.size()) {
-        return error("Could not cast '" + std::string(str) + "' to integer.");
+        return error("Could not cast '" + std::string(str) + "' to integer.",
+                     ErrorKind::invalid_value);
       }
       return value;
 
@@ -195,9 +204,62 @@ struct Reader {
   template <class ObjectReader>
   std::optional<Error> read_object(const ObjectReader& _object_reader,
                                    const InputObjectType& _obj) const noexcept {
-    for (auto child = _obj.node_.first_child(); child;
-         child = child.next_sibling()) {
-      _object_reader.read(std::string_view(child.name()), InputVarType(child));
+    constexpr bool deduplicate_siblings =
+        parsing::is_view_reader_v<ObjectReader> ||
+        is_field_variant_reader_v<ObjectReader>;
+
+    if constexpr (deduplicate_siblings) {
+      std::string_view prev_name{};
+      std::array<std::string_view, 16> seen_inline{};
+      size_t seen_inline_count = 0;
+      std::unordered_set<std::string_view> seen_overflow;
+
+      for (auto child = _obj.node_.first_child(); child;
+           child = child.next_sibling()) {
+        if (child.type() != pugi::node_element) {
+          continue;
+        }
+        const auto name = std::string_view(child.name());
+        if (seen_inline_count > 0 && name == prev_name) {
+          continue;
+        }
+        bool already_seen = false;
+        if (seen_overflow.empty()) {
+          for (size_t i = 0; i < seen_inline_count; ++i) {
+            if (seen_inline[i] == name) {
+              already_seen = true;
+              break;
+            }
+          }
+          if (!already_seen) {
+            if (seen_inline_count < seen_inline.size()) {
+              seen_inline[seen_inline_count++] = name;
+            } else {
+              seen_overflow.reserve(seen_inline.size() * 2);
+              for (const auto& s : seen_inline) {
+                seen_overflow.insert(s);
+              }
+              seen_overflow.insert(name);
+            }
+          }
+        } else {
+          already_seen = !seen_overflow.insert(name).second;
+        }
+        if (already_seen) {
+          continue;
+        }
+        prev_name = name;
+        _object_reader.read(name, InputVarType(child));
+      }
+    } else {
+      for (auto child = _obj.node_.first_child(); child;
+           child = child.next_sibling()) {
+        if (child.type() != pugi::node_element) {
+          continue;
+        }
+        _object_reader.read(std::string_view(child.name()),
+                            InputVarType(child));
+      }
     }
 
     for (auto attr = _obj.node_.first_attribute(); attr;
@@ -206,8 +268,13 @@ struct Reader {
     }
 
     if constexpr (parsing::is_view_reader_v<ObjectReader>) {
-      _object_reader.read(std::string_view("xml_content"),
-                          InputVarType(_obj.node_));
+      if constexpr (ObjectReader::ViewType::size() > 0) {
+        if constexpr (ObjectReader::ViewType::Names::template contains<
+                          "xml_content">()) {
+          _object_reader.read(std::string_view("xml_content"),
+                              InputVarType(_obj.node_));
+        }
+      }
     }
 
     return std::nullopt;
@@ -242,6 +309,18 @@ struct Reader {
   }
 
  private:
+  template <class T>
+  struct is_field_variant_reader : std::false_type {};
+
+  template <class R, class W, class ProcessorsType, class... FieldTypes>
+  struct is_field_variant_reader<
+      parsing::FieldVariantReader<R, W, ProcessorsType, FieldTypes...>>
+      : std::true_type {};
+
+  template <class T>
+  static constexpr bool is_field_variant_reader_v =
+      is_field_variant_reader<std::remove_cvref_t<T>>::value;
+
   /// XML-only helper function. This is needed because XML distinguishes between
   /// nodes and attributes.
   static rfl::Result<pugi::xml_node> cast_as_node(
@@ -252,7 +331,8 @@ struct Reader {
       if constexpr (std::is_same<Type, pugi::xml_node>()) {
         return _n;
       } else {
-        return error("Field '" + std::string(_n.name()) + "' is an attribute.");
+        return error("Field '" + std::string(_n.name()) + "' is an attribute.",
+                     ErrorKind::invalid_type);
       }
     };
     return std::visit(cast, _node_or_attribute);

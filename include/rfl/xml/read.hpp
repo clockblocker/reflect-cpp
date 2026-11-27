@@ -1,6 +1,7 @@
 #ifndef RFL_XML_READ_HPP_
 #define RFL_XML_READ_HPP_
 
+#include <cctype>
 #include <istream>
 #include <pugixml.hpp>
 #include <string>
@@ -43,7 +44,7 @@ auto read(const InputVarType& _var) {
 template <class T, class... Ps>
 Result<T> read(const pugi::xml_node& _node) {
   if (!_node) {
-    return error("XML node is empty.");
+    return error("XML node is empty.", ErrorKind::syntax_error);
   }
   if (_node.type() == pugi::node_document) {
     for (auto child = _node.first_child(); child;
@@ -52,7 +53,7 @@ Result<T> read(const pugi::xml_node& _node) {
         return read<T, Ps...>(InputVarType(child));
       }
     }
-    return error("XML document has no root element.");
+    return error("XML document has no root element.", ErrorKind::syntax_error);
   }
   return read<T, Ps...>(InputVarType(_node));
 }
@@ -68,8 +69,30 @@ Result<T> read(const std::string_view _xml_str) {
   pugi::xml_document doc;
   const auto result = doc.load_buffer(_xml_str.data(), _xml_str.size());
   if (!result) {
+    if (result.status == pugi::status_no_document_element) {
+      auto trimmed = _xml_str;
+      if (trimmed.size() >= 3 &&
+          static_cast<unsigned char>(trimmed[0]) == 0xEF &&
+          static_cast<unsigned char>(trimmed[1]) == 0xBB &&
+          static_cast<unsigned char>(trimmed[2]) == 0xBF) {
+        trimmed.remove_prefix(3);
+      }
+      bool all_ws = true;
+      for (const char c : trimmed) {
+        if (!std::isspace(static_cast<unsigned char>(c))) {
+          all_ws = false;
+          break;
+        }
+      }
+      if (all_ws) {
+        return error("XML document is empty.", ErrorKind::syntax_error);
+      }
+      return error("XML document has no root element.",
+                   ErrorKind::syntax_error);
+    }
     return error("XML string could not be parsed: " +
-                 std::string(result.description()));
+                     std::string(result.description()),
+                 ErrorKind::syntax_error);
   }
   return read<T, Ps...>(doc);
 }

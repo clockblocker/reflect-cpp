@@ -50,7 +50,10 @@ struct peel_transparent {
   static constexpr bool peeled = false;
   static constexpr bool has_default_val = is_default_val_wrapper_v<T>;
 
-  static RFL_ALWAYS_INLINE T wrap(T&& _v) { return std::move(_v); }
+  template <class U>
+  static RFL_ALWAYS_INLINE U&& wrap(U&& _v) noexcept {
+    return std::forward<U>(_v);
+  }
   static RFL_ALWAYS_INLINE CoreType& unwrap_ref(T& _t) noexcept { return _t; }
 };
 

@@ -321,10 +321,27 @@ schema::Type type_to_json_schema_type(const parsing::schema::Type& _type,
                               .additionalProperties = additional_properties}};
 
     } else if constexpr (std::is_same<T, Type::Optional>()) {
+      auto inner = type_to_json_schema_type(*_t.type_, _no_required);
+      if (auto* any_of = rfl::get_if<schema::Type::AnyOf>(&inner.value);
+          any_of && !any_of->annotations.value_.description &&
+          !any_of->annotations.value_.deprecated &&
+          !any_of->annotations.value_.deprecationMessage &&
+          !any_of->annotations.value_.defaultValue.value().has_value()) {
+        bool has_null = false;
+        for (const auto& branch : any_of->anyOf) {
+          if (rfl::holds_alternative<schema::Type::Null>(branch.value)) {
+            has_null = true;
+            break;
+          }
+        }
+        if (!has_null) {
+          any_of->anyOf.emplace_back(schema::Type{schema::Type::Null{}});
+        }
+        return inner;
+      }
       return schema::Type{
           .value = schema::Type::AnyOf{
-              .anyOf = {type_to_json_schema_type(*_t.type_, _no_required),
-                        schema::Type{schema::Type::Null{}}}}};
+              .anyOf = {std::move(inner), schema::Type{schema::Type::Null{}}}}};
 
     } else if constexpr (std::is_same<T, Type::Reference>()) {
       return schema::Type{

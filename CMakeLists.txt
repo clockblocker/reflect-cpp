@@ -257,13 +257,16 @@ set(REFLECT_CPP_SOURCES
 )
 
 target_include_directories(
-    reflectcpp PUBLIC
+    reflectcpp PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_include_directories(
+    reflectcpp SYSTEM INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
 
 if (REFLECTCPP_USE_BUNDLED_DEPENDENCIES)
     target_include_directories(
-        reflectcpp PUBLIC
+        reflectcpp SYSTEM PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/rfl/thirdparty>)
 else ()
     if (NOT TARGET ctre::ctre)
@@ -288,10 +291,6 @@ if (_REFLECTCPP_NEEDS_JSON_IMPL)
             src/yyjson.c
         )
         set_source_files_properties(src/yyjson.c PROPERTIES LANGUAGE CXX)
-
-        target_include_directories(
-            reflectcpp PUBLIC
-            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/rfl/thirdparty>)
     else ()
         if (NOT TARGET yyjson::yyjson)
             find_package(yyjson CONFIG REQUIRED)
@@ -458,6 +457,16 @@ if (REFLECTCPP_XML OR REFLECTCPP_CHECK_HEADERS)
     if (NOT TARGET pugixml::pugixml)
         find_package(pugixml CONFIG REQUIRED)
     endif ()
+    set(_rfl_pugixml_target pugixml::pugixml)
+    get_target_property(_rfl_pugixml_aliased ${_rfl_pugixml_target} ALIASED_TARGET)
+    if (_rfl_pugixml_aliased)
+        set(_rfl_pugixml_target ${_rfl_pugixml_aliased})
+    endif ()
+    get_target_property(_rfl_pugixml_inc ${_rfl_pugixml_target} INTERFACE_INCLUDE_DIRECTORIES)
+    if (_rfl_pugixml_inc)
+        set_property(TARGET ${_rfl_pugixml_target} APPEND PROPERTY
+            INTERFACE_SYSTEM_INCLUDE_DIRECTORIES ${_rfl_pugixml_inc})
+    endif ()
     target_link_libraries(reflectcpp PUBLIC pugixml::pugixml)
 endif ()
 
@@ -495,6 +504,8 @@ target_precompile_headers(reflectcpp PRIVATE [["rfl.hpp"]] <iostream> <string> <
 
 if (REFLECTCPP_BUILD_TESTS)
     add_library(reflectcpp_tests_crt INTERFACE)
+    target_include_directories(reflectcpp_tests_crt BEFORE INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
     target_link_libraries(reflectcpp_tests_crt INTERFACE reflectcpp GTest::gtest_main)
 
     enable_testing()
