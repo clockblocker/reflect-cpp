@@ -105,13 +105,13 @@ template <internal::StringLiteral _discriminator, class T>
 static inline auto make_tag(const T& _t) noexcept {
   using U = std::remove_cvref_t<T>;
   if constexpr (is_tagged_union_based<U>) {
-    if constexpr (internal::has_tag_v<U>) {
-      using LiteralType = typename U::Tag;
-      return LiteralType::template name_of<0>();
-    } else if constexpr (contains_discriminator_v<U, _discriminator>) {
+    if constexpr (contains_discriminator_v<U, _discriminator>) {
       using Base = tagged_union_base_t<U>;
       return make_tu_alternatives_tag<_discriminator>(
           static_cast<const Base*>(nullptr));
+    } else if constexpr (internal::has_tag_v<U>) {
+      using LiteralType = typename U::Tag;
+      return LiteralType::template name_of<0>();
     } else {
       return rfl::Literal<
           internal::remove_namespaces<internal::get_type_name<U>()>()>();

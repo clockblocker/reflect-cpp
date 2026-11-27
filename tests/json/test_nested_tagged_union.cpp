@@ -717,4 +717,399 @@ TEST(json, test_nested_tagged_union_error_cases) {
   }
 }
 
+// ============================================================================
+// Blocker regressions: B1 (throwing default), B2 (mixed live/raw DefaultVal),
+// B3 (ReflectionType & Reflector), B5 (make_tag precedence), rfl::Alias
+// ============================================================================
+
+struct ThrowingDefaultVal {
+  int v;
+  ThrowingDefaultVal() : v(0) {
+    throw std::runtime_error("default ctor exploded");
+  }
+  explicit ThrowingDefaultVal(int _v) : v(_v) {}
+  using ReflectionType = int;
+  int reflection() const { return v; }
+  static rfl::Result<ThrowingDefaultVal> from_reflection(int _v) {
+    return ThrowingDefaultVal(_v);
+  }
+};
+
+struct NonDefaultInt {
+  int v;
+  NonDefaultInt() = delete;
+  explicit NonDefaultInt(int _v) : v(_v) {}
+  using ReflectionType = int;
+  int reflection() const { return v; }
+  static rfl::Result<NonDefaultInt> from_reflection(int _v) {
+    return NonDefaultInt(_v);
+  }
+};
+
+// B1: Throwing default constructor inside a matched nested alt must return
+// rfl::Error rather than calling std::terminate().
+struct ThrowingDefaultAlt {
+  using Tag = rfl::Literal<"throw_default_alt">;
+  rfl::DefaultVal<ThrowingDefaultVal> bad;
+};
+
+struct SafeAlt {
+  using Tag = rfl::Literal<"safe_alt">;
+  int x;
+};
+
+using B1InnerTU = rfl::TaggedUnion<"kind", ThrowingDefaultAlt, SafeAlt>;
+
+struct B1Envelope {
+  int seq;
+  rfl::Flatten<B1InnerTU> payload;
+};
+
+struct B1ThrowingOuterEnvelope {
+  rfl::DefaultVal<ThrowingDefaultVal> bad_outer;
+  rfl::Flatten<B1InnerTU> payload;
+};
+
+TEST(json, test_nested_tagged_union_throwing_default_returns_error) {
+  // Matched inner alt throws during WrappedAlt{} construction -> Error, not
+  // std::terminate().
+  {
+    const auto res = rfl::json::read<B1Envelope>(
+        R"({"seq":1,"kind":"throw_default_alt"})");
+    ASSERT_FALSE(res.has_value());
+    EXPECT_NE(res.error().what().find("default ctor exploded"),
+              std::string::npos);
+  }
+
+  // Non-throwing sibling alt parses fine without touching ThrowingDefaultAlt.
+  {
+    const auto res =
+        rfl::json::read<B1Envelope>(R"({"seq":2,"kind":"safe_alt","x":42})");
+    ASSERT_TRUE(res.has_value()) << res.error().what();
+    EXPECT_EQ(res->seq, 2);
+    const auto* safe = rfl::get_if<SafeAlt>(&res->payload.get().variant());
+    ASSERT_NE(safe, nullptr);
+    EXPECT_EQ(safe->x, 42);
+  }
+
+  // Outer struct with throwing DefaultVal returns Error, not std::terminate().
+  {
+    const auto res = rfl::json::read<B1ThrowingOuterEnvelope>(
+        R"({"kind":"safe_alt","x":1})");
+    ASSERT_FALSE(res.has_value());
+    EXPECT_NE(res.error().what().find("default ctor exploded"),
+              std::string::npos);
+  }
+}
+
+// B2: Per-level / per-alt default construction decoupling.
+// An alt with rfl::DefaultVal must NOT force default-construction of
+// non-default-constructible or throwing sibling alts or outer structs.
+struct WithDefaultAlt {
+  using Tag = rfl::Literal<"with_default">;
+  rfl::DefaultVal<int> retries = 3;
+  rfl::Alias<"old_name", std::string> name;
+};
+
+struct NonDefaultAlt {
+  using Tag = rfl::Literal<"no_default">;
+  NonDefaultInt code;
+};
+
+struct ThrowingWhenDefaultedAlt {
+  using Tag = rfl::Literal<"throw_if_defaulted">;
+  ThrowingDefaultVal val;
+};
+
+using MixedInnerTU =
+    rfl::TaggedUnion<"kind", WithDefaultAlt, NonDefaultAlt,
+                     ThrowingWhenDefaultedAlt>;
+
+struct NonDefaultOuterEnvelope {
+  NonDefaultInt seq;
+  rfl::Flatten<MixedInnerTU> payload;
+};
+
+struct DefaultOuterEnvelope {
+  rfl::DefaultVal<int> version = 7;
+  rfl::Flatten<MixedInnerTU> payload;
+  rfl::ExtraFields<rfl::Generic> extra;
+};
+
+TEST(json, test_nested_tagged_union_mixed_default_and_non_default) {
+  // Non-default outer + live DefaultVal inner alt (omitting retries uses DMI=3,
+  // and rfl::Alias "old_name" resolves to "name").
+  {
+    const auto res = rfl::json::read<NonDefaultOuterEnvelope, rfl::NoExtraFields>(
+        R"({"seq":10,"kind":"with_default","old_name":"alice"})");
+    ASSERT_TRUE(res.has_value()) << res.error().what();
+    EXPECT_EQ(res->seq.v, 10);
+    const auto* alt =
+        rfl::get_if<WithDefaultAlt>(&res->payload.get().variant());
+    ASSERT_NE(alt, nullptr);
+    EXPECT_EQ(alt->retries.value(), 3);
+    EXPECT_EQ(alt->name.value(), "alice");
+  }
+
+  // Non-default outer + live DefaultVal inner alt (explicit retries overrides DMI).
+  {
+    const auto res = rfl::json::read<NonDefaultOuterEnvelope, rfl::NoExtraFields>(
+        R"({"seq":11,"kind":"with_default","name":"bob","retries":9})");
+    ASSERT_TRUE(res.has_value()) << res.error().what();
+    const auto* alt =
+        rfl::get_if<WithDefaultAlt>(&res->payload.get().variant());
+    ASSERT_NE(alt, nullptr);
+    EXPECT_EQ(alt->retries.value(), 9);
+    EXPECT_EQ(alt->name.value(), "bob");
+  }
+
+  // Alias + canonical collision rejected in mixed live/raw reader.
+  {
+    const auto res = rfl::json::read<NonDefaultOuterEnvelope>(
+        R"({"seq":11,"kind":"with_default","name":"bob","old_name":"b"})");
+    ASSERT_FALSE(res.has_value());
+  }
+
+  // NoExtraFields rejects unknown key in mixed live/raw reader.
+  {
+    const auto res = rfl::json::read<NonDefaultOuterEnvelope, rfl::NoExtraFields>(
+        R"({"seq":10,"kind":"with_default","name":"alice","bogus":1})");
+    ASSERT_FALSE(res.has_value());
+    EXPECT_NE(res.error().what().find("bogus"), std::string::npos);
+  }
+
+  // Non-default outer + non-default inner alt.
+  {
+    const auto res = rfl::json::read<NonDefaultOuterEnvelope, rfl::NoExtraFields>(
+        R"({"seq":12,"kind":"no_default","code":99})");
+    ASSERT_TRUE(res.has_value()) << res.error().what();
+    EXPECT_EQ(res->seq.v, 12);
+    const auto* alt = rfl::get_if<NonDefaultAlt>(&res->payload.get().variant());
+    ASSERT_NE(alt, nullptr);
+    EXPECT_EQ(alt->code.v, 99);
+  }
+
+  // Non-default outer + throwing-default inner alt (default ctor must NOT run).
+  {
+    const auto res = rfl::json::read<NonDefaultOuterEnvelope, rfl::NoExtraFields>(
+        R"({"seq":13,"kind":"throw_if_defaulted","val":55})");
+    ASSERT_TRUE(res.has_value()) << res.error().what();
+    EXPECT_EQ(res->seq.v, 13);
+    const auto* alt =
+        rfl::get_if<ThrowingWhenDefaultedAlt>(&res->payload.get().variant());
+    ASSERT_NE(alt, nullptr);
+    EXPECT_EQ(alt->val.v, 55);
+  }
+
+  // Live DefaultVal outer + raw non-default inner alt + ExtraFields capture.
+  {
+    const auto res = rfl::json::read<DefaultOuterEnvelope>(
+        R"({"kind":"no_default","code":42,"extra_k":"extra_v"})");
+    ASSERT_TRUE(res.has_value()) << res.error().what();
+    EXPECT_EQ(res->version.value(), 7);
+    const auto* alt = rfl::get_if<NonDefaultAlt>(&res->payload.get().variant());
+    ASSERT_NE(alt, nullptr);
+    EXPECT_EQ(alt->code.v, 42);
+    ASSERT_TRUE(res->extra.get("extra_k").has_value());
+    EXPECT_EQ(res->extra.get("extra_k").value().to_string().value(), "extra_v");
+  }
+}
+
+// B3: ReflectionType and Reflector<T> (including non-aggregate classes with
+// private members) inside flattened TaggedUnion.
+class ReflTypeAlt {
+ public:
+  using Tag = rfl::Literal<"refl_type">;
+  struct ReflectionType {
+    std::string label;
+  };
+
+  explicit ReflTypeAlt(std::string _label) : label_(std::move(_label)) {}
+
+  const std::string& label() const { return label_; }
+
+  ReflectionType reflection() const { return ReflectionType{label_}; }
+
+  static ReflTypeAlt from_reflection(const ReflectionType& _r) {
+    if (_r.label == "throw") {
+      throw std::runtime_error("from_reflection threw");
+    }
+    if (_r.label.empty()) {
+      throw std::runtime_error("label cannot be empty");
+    }
+    return ReflTypeAlt(_r.label);
+  }
+
+ private:
+  std::string label_;
+};
+
+class CustomReflectorAlt {
+ public:
+  using Tag = rfl::Literal<"custom_refl">;
+  explicit CustomReflectorAlt(int _v) : value_(_v) {}
+  int value() const { return value_; }
+
+ private:
+  int value_;
+};
+
+}  // namespace test_nested_tagged_union
+
+namespace rfl {
+template <>
+struct Reflector<test_nested_tagged_union::CustomReflectorAlt> {
+  struct ReflType {
+    int value;
+  };
+
+  static test_nested_tagged_union::CustomReflectorAlt to(const ReflType& _r) {
+    if (_r.value < 0) {
+      throw std::runtime_error("negative reflector value");
+    }
+    return test_nested_tagged_union::CustomReflectorAlt(_r.value);
+  }
+
+  static ReflType from(const test_nested_tagged_union::CustomReflectorAlt& _v) {
+    return ReflType{_v.value()};
+  }
+};
+}  // namespace rfl
+
+namespace test_nested_tagged_union {
+
+using B3InnerTU = rfl::TaggedUnion<"kind", ReflTypeAlt, CustomReflectorAlt>;
+
+struct B3Envelope {
+  int seq;
+  rfl::Flatten<B3InnerTU> payload;
+};
+
+TEST(json, test_nested_tagged_union_reflection_type_and_reflector) {
+  // ReflectionType roundtrip
+  {
+    const B3Envelope env{.seq = 1, .payload = B3InnerTU(ReflTypeAlt("hello"))};
+    const auto json = rfl::json::write(env);
+    EXPECT_EQ(json, R"({"seq":1,"kind":"refl_type","label":"hello"})");
+    const auto parsed = rfl::json::read<B3Envelope, rfl::NoExtraFields>(json);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error().what();
+    EXPECT_EQ(parsed->seq, 1);
+    const auto* alt = rfl::get_if<ReflTypeAlt>(&parsed->payload.get().variant());
+    ASSERT_NE(alt, nullptr);
+    EXPECT_EQ(alt->label(), "hello");
+  }
+
+  // ReflectionType returning Error & throwing exception (no terminate)
+  {
+    const auto res_err = rfl::json::read<B3Envelope>(
+        R"({"seq":2,"kind":"refl_type","label":""})");
+    ASSERT_FALSE(res_err.has_value());
+    EXPECT_NE(res_err.error().what().find("label cannot be empty"),
+              std::string::npos);
+
+    const auto res_throw = rfl::json::read<B3Envelope>(
+        R"({"seq":3,"kind":"refl_type","label":"throw"})");
+    ASSERT_FALSE(res_throw.has_value());
+    EXPECT_NE(res_throw.error().what().find("from_reflection threw"),
+              std::string::npos);
+  }
+
+  // Reflector<T> roundtrip + throwing to()
+  {
+    const B3Envelope env{
+        .seq = 4, .payload = B3InnerTU(CustomReflectorAlt(123))};
+    const auto json = rfl::json::write(env);
+    EXPECT_EQ(json, R"({"seq":4,"kind":"custom_refl","value":123})");
+    const auto parsed = rfl::json::read<B3Envelope, rfl::NoExtraFields>(json);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error().what();
+    EXPECT_EQ(parsed->seq, 4);
+    const auto* alt =
+        rfl::get_if<CustomReflectorAlt>(&parsed->payload.get().variant());
+    ASSERT_NE(alt, nullptr);
+    EXPECT_EQ(alt->value(), 123);
+
+    const auto res_neg = rfl::json::read<B3Envelope>(
+        R"({"seq":5,"kind":"custom_refl","value":-1})");
+    ASSERT_FALSE(res_neg.has_value());
+    EXPECT_NE(res_neg.error().what().find("negative reflector value"),
+              std::string::npos);
+  }
+
+  // to_schema works for ReflectionType and Reflector<T> alternatives
+  {
+    const auto schema = rfl::json::to_schema<B3Envelope, rfl::NoExtraFields>();
+    const auto parsed = rfl::json::read<rfl::Generic>(schema);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error().what();
+    EXPECT_NE(schema.find("refl_type"), std::string::npos);
+    EXPECT_NE(schema.find("custom_refl"), std::string::npos);
+    EXPECT_NE(schema.find("label"), std::string::npos);
+    EXPECT_NE(schema.find("value"), std::string::npos);
+  }
+}
+
+// B5: make_tag precedence — TaggedUnion subclass whose alternatives all
+// contain the outer discriminator field uses the inner field literals rather
+// than its own Tag alias (matching plain structs and ReflectionType).
+struct InnerWithOuterDiscA {
+  using Tag = rfl::Literal<"sub_a">;
+  rfl::Literal<"outer_a"> type;
+  int a;
+};
+
+struct InnerWithOuterDiscB {
+  using Tag = rfl::Literal<"sub_b">;
+  rfl::Literal<"outer_b"> type;
+  int b;
+};
+
+struct SubTUWithInnerOuterDisc
+    : rfl::TaggedUnion<"sub", InnerWithOuterDiscA, InnerWithOuterDiscB> {
+  using Tag = rfl::Literal<"should_be_overridden_by_field">;
+  using TaggedUnion::TaggedUnion;
+};
+
+using OuterPrecedenceTU =
+    rfl::TaggedUnion<"type", Response, SubTUWithInnerOuterDisc>;
+
+TEST(json, test_nested_tagged_union_make_tag_precedence) {
+  const OuterPrecedenceTU msg = SubTUWithInnerOuterDisc(
+      InnerWithOuterDiscA{.type = rfl::Literal<"outer_a">(), .a = 7});
+  const auto json = rfl::json::write(msg);
+  EXPECT_EQ(json, R"({"sub":"sub_a","type":"outer_a","a":7})");
+
+  const auto parsed =
+      rfl::json::read<OuterPrecedenceTU, rfl::NoExtraFields>(json);
+  ASSERT_TRUE(parsed.has_value()) << parsed.error().what();
+  const auto* sub = rfl::get_if<SubTUWithInnerOuterDisc>(&parsed->variant());
+  ASSERT_NE(sub, nullptr);
+  const auto* a = rfl::get_if<InnerWithOuterDiscA>(&sub->variant());
+  ASSERT_NE(a, nullptr);
+  EXPECT_EQ(a->a, 7);
+}
+
+// rfl::Alias inside a homogeneous raw flattened TaggedUnion.
+struct AliasInnerAlt {
+  using Tag = rfl::Literal<"alias_alt">;
+  rfl::Alias<"legacy_src", std::string> source;
+};
+
+using AliasInnerTU = rfl::TaggedUnion<"event", AliasInnerAlt>;
+
+struct AliasEnvelope {
+  int seq;
+  rfl::Flatten<AliasInnerTU> payload;
+};
+
+TEST(json, test_nested_tagged_union_with_field_alias) {
+  const auto parsed = rfl::json::read<AliasEnvelope, rfl::NoExtraFields>(
+      R"({"seq":1,"event":"alias_alt","legacy_src":"a.vcd"})");
+  ASSERT_TRUE(parsed.has_value()) << parsed.error().what();
+  const auto* alt =
+      rfl::get_if<AliasInnerAlt>(&parsed->payload.get().variant());
+  ASSERT_NE(alt, nullptr);
+  EXPECT_EQ(alt->source.value(), "a.vcd");
+  EXPECT_EQ(rfl::json::write(*parsed),
+            R"({"seq":1,"event":"alias_alt","source":"a.vcd"})");
+}
+
 }  // namespace test_nested_tagged_union

@@ -271,6 +271,9 @@ Key guarantees:
 - **`rfl::NoExtraFields` and `rfl::ExtraFields`**: outer and inner discriminators and fields are validated together, so outer fields do not trigger false extra-field errors in the inner union while truly unknown fields are rejected (or captured by `rfl::ExtraFields`).
 - **JSON Schema (`rfl::json::to_schema`)**: expands flattened tagged unions into `anyOf` branches containing the merged flat object schemas.
 - **Compile-time collision checking**: duplicate discriminators (e.g. an outer and inner `rfl::TaggedUnion` both using `"type"`) or duplicate field names across flattened levels fail at compile time with a `static_assert`.
+- **Constraints**:
+  - Use value semantics (`rfl::Flatten<MyTaggedUnion>`, not raw pointers `rfl::Flatten<MyTaggedUnion*>`).
+  - Flattened `rfl::TaggedUnion` is supported for schemaless formats (JSON, YAML, TOML, Generic, etc.), and is rejected at compile time for schemaful formats (Avro, Cap'n Proto, Parquet, SQLite) as well as `rfl::to_named_tuple`, `rfl::from_named_tuple`, and `rfl::cli::read`.
 
 ## `std::variant` or `rfl::Variant` (externally tagged)
 

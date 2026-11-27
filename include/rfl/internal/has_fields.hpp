@@ -6,6 +6,8 @@
 
 #include "../Tuple.hpp"
 //#include "all_fields.hpp"
+#include "has_reflection_type_v.hpp"
+#include "has_reflector.hpp"
 #include "is_field.hpp"
 #include "is_flatten_field.hpp"
 #include "is_named_tuple.hpp"
@@ -70,6 +72,10 @@ constexpr bool has_fields() {
   using U = remove_all_ptrs_t<T>;
   if constexpr (is_tagged_union_based<U>) {
     return false;
+  } else if constexpr (has_reflection_type_v<U>) {
+    return has_fields<std::remove_cvref_t<typename U::ReflectionType>>();
+  } else if constexpr (has_read_reflector<U> || has_write_reflector<U>) {
+    return has_fields<std::remove_cvref_t<typename Reflector<U>::ReflType>>();
   } else if constexpr (is_named_tuple_v<U>) {
     return true;
   } else {
