@@ -39,6 +39,7 @@
 #include "BoolValueTokens.hpp"
 #include "LastValueWins.hpp"
 #include "Opt.hpp"
+#include "OptGroup.hpp"
 #include "OptionsFirst.hpp"
 #include "Parser.hpp"
 #include "PreserveNames.hpp"
@@ -900,6 +901,9 @@ void collect_options(const std::string& _prefix, Options* _options);
 template <class T, class ProcessorsType, class VisitedType>
 void collect_value_options(Options* _options);
 
+template <class T, class ProcessorsType, class VisitedType>
+void collect_opt_groups(const std::string& _prefix, Options* _options);
+
 /// Adds the open prefix `_prefix` of a map or of rfl::ExtraFields with
 /// values of type T. If the values are structs or maps, also adds the
 /// options inside one of them.
@@ -928,6 +932,7 @@ void collect_value_options(Options* _options) {
   }
   else if constexpr (is_option_struct_v<U>) {
     collect_options<U, ProcessorsType, VisitedType>("", _options);
+    collect_opt_groups<U, ProcessorsType, VisitedType>("", _options);
   }
   else {
     _options->open_prefixes.emplace_back("", Option{OptionKind::other});
@@ -1020,6 +1025,8 @@ void collect_options(const std::string& _prefix, Options* _options) {
           } else {
             collect_options<U, ProcessorsType, NextVisitedType>(
                 path + path_separator, _options);
+            collect_opt_groups<U, ProcessorsType, NextVisitedType>(
+                path + path_separator, _options);
           }
         } else {
           static_assert(
@@ -1035,6 +1042,77 @@ void collect_options(const std::string& _prefix, Options* _options) {
     };
     (add_one.template operator()<_is>(), ...);
   }(std::make_index_sequence<NT::size()>());
+}
+
+/// Assigns `_group` to every leaf option inside `Sub` that does not already
+/// have an explicit group in `_options->option_groups`.
+template <class Sub, class ProcessorsType, class VisitedType>
+void apply_inherited_group(const std::string& _prefix,
+                           const std::string_view _group, Options* _options) {
+  using SubNT = option_fields_t<Sub, ProcessorsType>;
+  using NextVisited = typename VisitedType::template add<Sub>;
+  const auto set_group_if_unset = [&](const std::string& _path) {
+    const bool already_set = std::any_of(
+        _options->option_groups.begin(), _options->option_groups.end(),
+        [&](const auto& _entry) { return _entry.first == _path; });
+    if (!already_set) {
+      _options->option_groups.emplace_back(_path, std::string(_group));
+    }
+  };
+  [&]<size_t... _is>(std::index_sequence<_is...>) {
+    auto apply_one = [&]<size_t _i>() {
+      using FieldType = rfl::tuple_element_t<_i, typename SubNT::Fields>;
+      using FT = std::remove_cvref_t<typename FieldType::Type>;
+      if constexpr (!rfl::internal::is_extra_fields_v<FT>) {
+        using U = unwrapped_option_t<FT, ProcessorsType>;
+        const std::string path = _prefix + std::string(FieldType::name());
+        if constexpr (is_option_struct_v<U> && !is_open_option_v<U>
+                      && !parsing::is_string_map_v<U>
+                      && !NextVisited::template contains<U>) {
+          apply_inherited_group<U, ProcessorsType, NextVisited>(
+              path + path_separator, _group, _options);
+        } else {
+          set_group_if_unset(path);
+        }
+      }
+    };
+    (apply_one.template operator()<_is>(), ...);
+  }(std::make_index_sequence<SubNT::size()>());
+}
+
+/// Walks the unflattened members of `T` to propagate `rfl::cli::OptGroup`
+/// section names across flattened sub-structs (inner groups take precedence
+/// over outer groups; explicit per-field groups take precedence over both).
+template <class T, class ProcessorsType, class VisitedType>
+void collect_opt_groups(const std::string& _prefix, Options* _options) {
+  using RawT = std::remove_cvref_t<T>;
+  if constexpr (!is_option_struct_v<RawT>
+                || rfl::internal::is_named_tuple_v<RawT>
+                || VisitedType::template contains<RawT>) {
+    return;
+  } else {
+    using NextVisited = typename VisitedType::template add<RawT>;
+    using PtrTuple = rfl::internal::ptr_tuple_t<RawT>;
+    [&]<size_t... _is>(std::index_sequence<_is...>) {
+      auto visit = [&]<size_t _i>() {
+        using MemberType = std::remove_cvref_t<
+            std::remove_pointer_t<rfl::tuple_element_t<_i, PtrTuple>>>;
+        if constexpr (is_opt_group_v<MemberType>) {
+          using Sub = typename MemberType::Type;
+          // Recurse first so inner OptGroups take precedence over outer ones.
+          collect_opt_groups<Sub, ProcessorsType, NextVisited>(_prefix,
+                                                               _options);
+          apply_inherited_group<Sub, ProcessorsType, NextVisited>(
+              _prefix, MemberType::group_name_.string_view(), _options);
+        } else if constexpr (rfl::internal::is_flatten_field_v<MemberType>) {
+          using Sub = typename MemberType::Type;
+          collect_opt_groups<Sub, ProcessorsType, NextVisited>(_prefix,
+                                                               _options);
+        }
+      };
+      (visit.template operator()<_is>(), ...);
+    }(std::make_index_sequence<rfl::tuple_size_v<PtrTuple>>());
+  }
 }
 
 template <class T, class ProcessorsType>

@@ -67,6 +67,8 @@ struct ResolvedArgs {
   std::string verbatim_list;
   /// Every option occurrence `(canonical_long_name, raw_value)` in argv order.
   std::vector<std::pair<std::string, std::string>> occurrences;
+  /// Rich per-occurrence metadata in argv order.
+  std::vector<OptionOccurrence> detailed_occurrences;
 };
 
 /// Applies what parse_argv could not know without the option table.
@@ -209,7 +211,8 @@ inline rfl::Result<ResolvedArgs> resolve_args(
   return ResolvedArgs{std::move(result),
                       std::move(_parsed.later_occurrences),
                       std::move(verbatim_list),
-                      std::move(_parsed.occurrences)};
+                      std::move(_parsed.occurrences),
+                      std::move(_parsed.detailed_occurrences)};
 }
 
 /// The error for a long option that abbreviates several options, worded
