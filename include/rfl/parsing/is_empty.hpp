@@ -3,8 +3,11 @@
 
 #include <type_traits>
 
+#include "../Nullable.hpp"
+#include "../TriState.hpp"
 #include "../internal/has_reflection_method_v.hpp"
 #include "../internal/has_reflection_type_v.hpp"
+#include "../internal/is_default_val_v.hpp"
 #include "../internal/is_positional.hpp"
 #include "../internal/is_rename.hpp"
 #include "../internal/is_short.hpp"
@@ -29,6 +32,12 @@ static bool is_empty(const T& _var) {
     return !_var || is_empty(*_var);
   } else if constexpr (internal::is_skip_v<Type>) {
     return Type::skip_serialization_;
+  } else if constexpr (internal::is_nullable_wrapper_v<Type>) {
+    // rfl::Nullable<T> always serializes explicitly ("field": null when null).
+    return false;
+  } else if constexpr (internal::is_tri_state_v<Type>) {
+    // rfl::TriState<T> omits only when State::omitted; State::null emits null.
+    return _var.is_omitted();
   } else if constexpr (internal::has_reflection_type_v<Type>) {
     if constexpr (internal::has_reflection_method_v<Type>) {
       return is_empty(_var.reflection());
@@ -38,7 +47,8 @@ static bool is_empty(const T& _var) {
     }
   } else if constexpr (internal::is_rename_v<Type> ||
                        internal::is_short_v<Type> ||
-                       internal::is_positional_v<Type>) {
+                       internal::is_positional_v<Type> ||
+                       internal::is_default_val_v<Type>) {
     return is_empty(_var.value());
   } else if constexpr (is_map_like_v<Type> || is_vector_like_v<Type>) {
     return _var.begin() == _var.end();
