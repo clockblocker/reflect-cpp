@@ -4,6 +4,9 @@
 #include <array>
 #include <exception>
 #include <map>
+#include <memory>
+#include <new>
+#include <optional>
 #include <sstream>
 #include <type_traits>
 #include <utility>
@@ -12,12 +15,14 @@
 #include "../Result.hpp"
 #include "../internal/always_inline.hpp"
 #include "../internal/default_if_missing_v.hpp"
+#include "../internal/default_if_null_v.hpp"
 #include "../internal/has_default_val_v.hpp"
 #include "../internal/has_reflection_method_v.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/is_attribute.hpp"
 #include "../internal/is_default_val_v.hpp"
 #include "../internal/is_extra_fields.hpp"
+#include "../internal/is_safe_default_constructible.hpp"
 #include "../internal/is_skip.hpp"
 #include "../internal/no_extra_fields_v.hpp"
 #include "../internal/nth_element_t.hpp"
@@ -34,6 +39,7 @@
 #include "ViewReaderWithStrippedFieldNames.hpp"
 #include "call_destructors_where_necessary.hpp"
 #include "is_empty.hpp"
+#include "is_nullable.hpp"
 #include "is_required.hpp"
 #include "schema/Type.hpp"
 #include "to_single_error_message.hpp"
@@ -125,6 +131,19 @@ struct NamedTupleParser {
    */
   static Result<NamedTuple<FieldTypes...>> read(
       const R& _r, const InputVarType& _var) noexcept {
+    if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                  (internal::is_safe_default_constructible_v<
+                       typename std::remove_cvref_t<FieldTypes>::Type> &&
+                   ...)) {
+      if (_r.is_empty(_var)) {
+        try {
+          return NamedTuple<FieldTypes...>(
+              typename std::remove_cvref_t<FieldTypes>::Type{}...);
+        } catch (std::exception& e) {
+          return error(e.what());
+        }
+      }
+    }
     alignas(NamedTuple<FieldTypes...>) unsigned char
         buf[sizeof(NamedTuple<FieldTypes...>)];
     auto ptr = internal::ptr_cast<NamedTuple<FieldTypes...>*>(&buf);
@@ -401,30 +420,94 @@ struct NamedTupleParser {
 
       if constexpr (!is_required_field && !is_default_val_field) {
         if (defaults_constructed) {
+          if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                        !internal::default_if_missing_v<ProcessorsType> &&
+                        !internal::has_default_val_v<NamedTupleType> &&
+                        is_nullable_v<ValueType>) {
+            using NonConstT = std::remove_const_t<ValueType>;
+            if constexpr (internal::is_safe_default_constructible_v<NonConstT>) {
+              auto* const ptr = const_cast<NonConstT*>(rfl::get<_i>(_view));
+              const auto record_reset_error = [&](const std::string& _msg) {
+                constexpr auto current_name =
+                    internal::nth_element_t<_i, FieldTypes...>::name();
+                _errors->emplace_back(make_nested_error(
+                    std::string(current_name),
+                    "Field named '" + std::string(current_name) +
+                        "' not found, and its default value could not be "
+                        "constructed: " +
+                        _msg));
+              };
+              if constexpr (std::is_const_v<ValueType> ||
+                            !std::is_move_assignable_v<NonConstT>) {
+                if constexpr (std::is_nothrow_default_constructible_v<
+                                  NonConstT>) {
+                  std::destroy_at(ptr);
+                  ::new (ptr) NonConstT{};
+                } else if constexpr (std::is_nothrow_move_constructible_v<
+                                         NonConstT>) {
+                  std::optional<NonConstT> tmp;
+                  try {
+                    tmp.emplace();
+                  } catch (std::exception& e) {
+                    record_reset_error(e.what());
+                    return;
+                  }
+                  std::destroy_at(ptr);
+                  ::new (ptr) NonConstT(std::move(*tmp));
+                } else {
+                  record_reset_error(
+                      "cannot safely reset a const or non-move-assignable "
+                      "field whose default and move constructors may throw.");
+                }
+              } else if constexpr (std::is_nothrow_default_constructible_v<
+                                       NonConstT> &&
+                                   std::is_nothrow_move_assignable_v<
+                                       NonConstT>) {
+                *ptr = NonConstT{};
+              } else {
+                try {
+                  *ptr = NonConstT{};
+                } catch (std::exception& e) {
+                  record_reset_error(e.what());
+                }
+              }
+            }
+          }
           return;
         }
         using NonConstT = std::remove_const_t<ValueType>;
-        const auto ptr = const_cast<NonConstT*>(rfl::get<_i>(_view));
-        if constexpr (std::is_nothrow_default_constructible_v<NonConstT>) {
-          ::new (ptr) NonConstT();
+        if constexpr (!internal::is_safe_default_constructible_v<NonConstT>) {
+          constexpr auto current_name =
+              internal::nth_element_t<_i, FieldTypes...>::name();
+          std::stringstream stream;
+          stream << "Field named '" << std::string(current_name)
+                 << "' not found.";
+          _errors->emplace_back(
+              make_nested_error(std::string(current_name), stream.str()));
+          return;
         } else {
-          // The default value can throw, for instance a Validator whose
-          // default value is invalid.
-          try {
+          const auto ptr = const_cast<NonConstT*>(rfl::get<_i>(_view));
+          if constexpr (std::is_nothrow_default_constructible_v<NonConstT>) {
             ::new (ptr) NonConstT();
-          } catch (std::exception& e) {
-            constexpr auto current_name =
-                internal::nth_element_t<_i, FieldTypes...>::name();
-            _errors->emplace_back(make_nested_error(
-                std::string(current_name),
-                "Field named '" + std::string(current_name) +
-                    "' not found, and its default value could not be "
-                    "constructed: " +
-                    e.what()));
-            return;
+          } else {
+            // The default value can throw, for instance a Validator whose
+            // default value is invalid.
+            try {
+              ::new (ptr) NonConstT();
+            } catch (std::exception& e) {
+              constexpr auto current_name =
+                  internal::nth_element_t<_i, FieldTypes...>::name();
+              _errors->emplace_back(make_nested_error(
+                  std::string(current_name),
+                  "Field named '" + std::string(current_name) +
+                      "' not found, and its default value could not be "
+                      "constructed: " +
+                      e.what()));
+              return;
+            }
           }
+          std::get<_i>(*_set) = true;
         }
-        std::get<_i>(*_set) = true;
       }
     }
   }
@@ -514,8 +597,7 @@ struct NamedTupleParser {
         return err;
       }
     }
-    if constexpr (internal::has_default_val_v<NamedTupleType> &&
-                  !internal::default_if_missing_v<ProcessorsType>) {
+    if constexpr (!internal::default_if_missing_v<ProcessorsType>) {
       if (!should_stop_on_field_error<ProcessorsType>(errors)) {
         handle_missing_fields(reader.found(), *_view, nullptr, &errors,
                               /*_value_initialize_default_vals=*/false,

@@ -38,6 +38,7 @@ reflect-cpp currently supports the following processors:
 - `rfl::AddNamespacedTagsToVariants`
 - `rfl::AllowRawPtrs`
 - `rfl::DefaultIfMissing`
+- `rfl::DefaultIfNull`
 - `rfl::DurationsAsCount`
 - `rfl::EnumNamesOnly`
 - `rfl::FailFast`
@@ -313,6 +314,54 @@ of the type is used instead.
 Note that the struct is default-constructed before it is read. Every field
 therefore needs a valid default value, even if the field is in the input.
 This is explained in the documentation on `rfl::DefaultVal`.
+
+### `rfl::DefaultIfNull`
+
+The `rfl::DefaultIfNull` processor is only relevant for reading data. For writing data, it will make no difference.
+
+Usually, when a non-nullable value is `null` or empty in the input (for example, an empty or comment-only YAML document, a YAML key with no value such as `tags:` or `logging:`, or a JSON `null`), reading fails with a parse error.
+If you pass `rfl::DefaultIfNull`, null/empty values are replaced by the target's default value instead (when the target type is default-constructible):
+
+```cpp
+struct Logging {
+  std::string level = "info";
+};
+
+struct Config {
+  int port = 8080;
+  std::string host = "localhost";
+  std::vector<std::string> tags;
+  std::map<std::string, std::string> env;
+  Logging logging;
+  std::map<std::string, Logging> modules;
+};
+```
+
+```yaml
+port: null
+host:
+tags:
+env:
+logging:
+modules:
+  network:
+```
+
+```cpp
+const auto cfg = rfl::yaml::read<Config, rfl::DefaultIfNull>(yaml_str).value();
+// cfg.port == 8080, cfg.host == "localhost", cfg.tags.empty(), cfg.env.empty(),
+// cfg.logging.level == "info", cfg.modules["network"].level == "info"
+```
+
+Empty or comment-only YAML documents (and root `null` in JSON) also produce a default-constructed `Config{}`.
+
+Key details:
+
+- **In-class member initializers are preserved:** For default-constructible structs, `port: null` preserves `8080` rather than overwriting it with `0`.
+- **Nullable types still decode `null` as empty:** `std::optional<T>`, `std::unique_ptr<T>`, `std::shared_ptr<T>`, raw pointers, and `rfl::Generic` always decode an explicit `null` as `std::nullopt` / `nullptr` / `rfl::Generic::Null` — even if the field has a non-null in-class initializer such as `std::optional<int> x = 5`.
+- **Missing fields remain required unless combined with `rfl::DefaultIfMissing`:** `rfl::DefaultIfNull` only applies to null/empty values that are present (or a null root document). Combine `rfl::DefaultIfMissing, rfl::DefaultIfNull` when you want both missing fields and null values to fall back to defaults.
+- **Non-default-constructible types:** If a type is not default-constructible, encountering `null` falls back to normal error reporting rather than failing to compile.
+- **Default-constructible structs are default-constructed before reading:** To preserve in-class member initializers, default-constructible structs are default-constructed before their fields are read. Every field of such a struct therefore needs a valid default value (for example, a `rfl::Validator` whose default constructor throws will cause reading to return an error, even if the field is present in the input). This is explained in the documentation on `rfl::DefaultVal`.
 
 ### `rfl::DurationsAsCount`
 

@@ -29,7 +29,9 @@ struct Rename {
   using Name = rfl::Literal<_name>;
 
   /// Default constructor - creates a Rename with a default-constructed value.
-  Rename() : value_(Type()) {}
+  Rename()
+    requires std::is_default_constructible_v<Type>
+      : value_(Type()) {}
 
   /// Constructs from a const reference to the value.
   /// @param _value The value to store

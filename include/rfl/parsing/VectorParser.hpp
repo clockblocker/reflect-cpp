@@ -10,6 +10,7 @@
 #include "../Result.hpp"
 #include "../Vectorstring.hpp"
 #include "../always_false.hpp"
+#include "../internal/default_if_null_v.hpp"
 #include "MapParser.hpp"
 #include "Parent.hpp"
 #include "Parser_base.hpp"
@@ -51,6 +52,11 @@ struct VectorParser {
    * @return A Result containing the parsed type or an error.
    */
   static Result<VecType> read(const R& _r, const InputVarType& _var) noexcept {
+    if constexpr (internal::default_if_null_v<ProcessorsType>) {
+      if (_r.is_empty(_var)) {
+        return VecType{};
+      }
+    }
     if constexpr (treat_as_map()) {
       return MapParser<R, W, VecType, ProcessorsType>::read(_r, _var);
     } else if constexpr (is_forward_list<VecType>()) {

@@ -11,12 +11,16 @@
 #include "../Variant.hpp"
 #include "../internal/add_tags_to_variants_v.hpp"
 #include "../internal/all_fields.hpp"
+#include "../internal/default_if_null_v.hpp"
+#include "../internal/is_safe_default_constructible.hpp"
 #include "../internal/to_ptr_field.hpp"
 #include "../visit.hpp"
 #include "FieldVariantParser.hpp"
 #include "Parent.hpp"
 #include "Parser_base.hpp"
 #include "VariantAlternativeWrapper.hpp"
+#include "default_construct.hpp"
+#include "is_nullable.hpp"
 #include "schema/Type.hpp"
 #include "schemaful/IsSchemafulReader.hpp"
 #include "schemaful/IsSchemafulWriter.hpp"
@@ -65,6 +69,14 @@ class ParserVariant<R, W, std::variant<AlternativeTypes...>, ProcessorsType> {
    */
   static Result<std::variant<AlternativeTypes...>> read(
       const R& _r, const InputVarType& _var) noexcept {
+    if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                  !(is_nullable_v<AlternativeTypes> || ...) &&
+                  internal::is_safe_default_constructible_v<
+                      std::variant<AlternativeTypes...>>) {
+      if (_r.is_empty(_var)) {
+        return default_construct<std::variant<AlternativeTypes...>>();
+      }
+    }
     if constexpr (internal::all_fields_v<AlternativeTypes...>) {
       if constexpr (schemaful::IsSchemafulReader<R>) {
         using WrappedType = rfl::Variant<NamedTuple<AlternativeTypes>...>;
@@ -264,6 +276,13 @@ class ParserVariant<R, W, std::variant<AlternativeTypes...>, ProcessorsType> {
     if (!*_result) {
       using AltType =
           std::remove_cvref_t<internal::nth_element_t<_i, AlternativeTypes...>>;
+      if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                    (is_nullable_v<AlternativeTypes> || ...) &&
+                    !is_nullable_v<AltType>) {
+        if (_r.is_empty(_var)) {
+          return;
+        }
+      }
       auto res = Parser<R, W, AltType, ProcessorsType>::read(_r, _var);
       if (res) {
         _result->emplace(std::move(*res));
