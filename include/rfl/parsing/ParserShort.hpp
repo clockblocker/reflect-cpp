@@ -49,6 +49,25 @@ struct ParserShort<R, W, Short<_name, T>, ProcessorsType> {
   }
 
   /**
+   * @brief Overlays a short value from the input onto an existing value.
+   *
+   * @param _r The reader to use.
+   * @param _var The input variable to read from.
+   * @param _base The existing short value.
+   * @return A Result containing the overlaid value or an error.
+   */
+  static Result<Short<_name, T>> read_into(const R& _r,
+                                           const InputVarType& _var,
+                                           Short<_name, T> _base) noexcept {
+    const auto to_short = [](auto&& _t) {
+      return Short<_name, T>(std::forward<decltype(_t)>(_t));
+    };
+    return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
+               _r, _var, std::move(_base.value()))
+        .transform(to_short);
+  }
+
+  /**
    * @brief Writes a short value to the output.
    *
    * @tparam P The type of the parent.

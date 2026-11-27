@@ -16,6 +16,7 @@
 #include "../internal/has_reflection_method_v.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/has_reflector.hpp"
+#include "../internal/is_attribute.hpp"
 #include "../internal/is_basic_type.hpp"
 #include "../internal/is_deprecated.hpp"
 #include "../internal/is_description.hpp"
@@ -328,6 +329,170 @@ struct Parser {
       } else {
         return read_struct(_r, _var);
       }
+    }
+  }
+
+  /**
+   * @brief Overlays input data onto an existing base value.
+   *
+   * For structs and transparent wrappers, fields absent from the input preserve
+   * their values from `_base`, nested structs are overlaid recursively, and
+   * leaf/container values present in the input replace `_base`.
+   *
+   * @param _r The reader to use.
+   * @param _var The input variable to read from.
+   * @param _base The base value to overlay onto.
+   * @return A Result containing the overlaid value or an error.
+   */
+  static RFL_ALWAYS_INLINE auto read_into(const R& _r, const InputVarType& _var,
+                                          [[maybe_unused]] T _base)
+    requires(!std::is_array_v<T>)
+  {
+    if constexpr (internal::is_basic_type_v<T> || is_bytestring_v<T> ||
+                  is_vectorstring_v<T> || is_string_map_v<T> ||
+                  is_vector_like_v<T>) {
+      return read(_r, _var);
+
+    } else if constexpr (is_shared_ptr_v<T>) {
+      return ParserSharedPtr<R, W, typename T::element_type,
+                             ProcessorsType>::read_into(_r, _var,
+                                                        std::move(_base));
+
+    } else if constexpr (is_unique_ptr_v<T>) {
+      return ParserUniquePtr<R, W, typename T::element_type,
+                             ProcessorsType>::read_into(_r, _var,
+                                                        std::move(_base));
+
+    } else if constexpr (is_optional_v<T>) {
+      return ParserOptional<R, W, typename std::remove_cvref_t<T>::value_type,
+                            ProcessorsType>::read_into(_r, _var,
+                                                       std::move(_base));
+
+    } else if constexpr (is_box_v<T>) {
+      using IsBox = is_box<std::remove_cvref_t<T>>;
+      return ParserBox<R, W, typename IsBox::element_type, IsBox::copyability,
+                       ProcessorsType>::read_into(_r, _var, std::move(_base));
+
+    } else if constexpr (is_ref_v<T>) {
+      using IsRef = is_ref<std::remove_cvref_t<T>>;
+      return ParserRef<R, W, typename IsRef::element_type,
+                       ProcessorsType>::read_into(_r, _var, std::move(_base));
+
+    } else if constexpr (is_variant_v<T> || is_rfl_variant_v<T> ||
+                         is_tagged_union_v<T>) {
+      return read(_r, _var);
+
+    } else if constexpr (is_rename_v<T>) {
+      return ParserRename<R, W, T, ProcessorsType>::read_into(_r, _var,
+                                                              std::move(_base));
+
+    } else if constexpr (is_result_v<T> || is_expected_v<T> ||
+                         is_duration_v<T> || is_filepath_v<T>) {
+      return read(_r, _var);
+
+    } else if constexpr (is_skip_v<T>) {
+      using U = std::remove_cvref_t<T>;
+      return ParserSkip<R, W, typename U::Type, U::skip_serialization_,
+                        U::skip_deserialization_,
+                        ProcessorsType>::read_into(_r, _var, std::move(_base));
+
+    } else if constexpr (is_span_v<T> || is_time_point_v<T>) {
+      return read(_r, _var);
+
+    } else if constexpr (is_default_val_v<T>) {
+      return ParserDefaultVal<R, W, T, ProcessorsType>::read_into(
+          _r, _var, std::move(_base));
+
+    } else if constexpr (is_short_v<T>) {
+      return ParserShort<R, W, T, ProcessorsType>::read_into(_r, _var,
+                                                             std::move(_base));
+
+    } else if constexpr (is_positional_v<T>) {
+      return ParserPositional<R, W, typename std::remove_cvref_t<T>::Type,
+                              ProcessorsType>::read_into(_r, _var,
+                                                         std::move(_base));
+
+    } else if constexpr (is_reference_wrapper_v<T> || is_array_v<T> ||
+                         is_rfl_array_v<T> || is_tuple_v<T> ||
+                         is_rfl_tuple_v<T> || is_pair_v<T> ||
+                         std::is_enum_v<T> || is_wstring_v<T> ||
+                         is_string_view_v<T>) {
+      return read(_r, _var);
+
+    } else if constexpr (is_commented_v<T>) {
+      return ParserCommented<R, W, T, ProcessorsType>::read_into(
+          _r, _var, std::move(_base));
+
+    } else if constexpr (std::is_pointer_v<T> || is_c_array_v<T>) {
+      return read(_r, _var);
+
+    } else if constexpr (internal::has_read_reflector<T>) {
+      if constexpr (internal::has_write_reflector<T>) {
+        const auto wrap_in_t = [](auto&& _named_tuple) -> Result<T> {
+          try {
+            using NT = decltype(_named_tuple);
+            return Reflector<T>::to(std::forward<NT>(_named_tuple));
+          } catch (std::exception& e) {
+            return error(e.what());
+          }
+        };
+        try {
+          return read_into_or_read<R, W, typename Reflector<T>::ReflType,
+                                   ProcessorsType>(_r, _var,
+                                                   Reflector<T>::from(_base))
+              .and_then(wrap_in_t);
+        } catch (std::exception& e) {
+          return error(e.what());
+        }
+      } else {
+        return read(_r, _var);
+      }
+
+    } else if constexpr ((schemaful::IsSchemafulReader<R> &&
+                          internal::is_literal_v<T>) ||
+                         R::template has_custom_constructor<T>) {
+      return read(_r, _var);
+
+    } else if constexpr (internal::has_reflection_type_v<T>) {
+      if constexpr (internal::is_literal_v<T>) {
+        return read(_r, _var);
+      } else {
+        using ReflectionType = std::remove_cvref_t<typename T::ReflectionType>;
+        const auto wrap_in_t = [](auto&& _named_tuple) -> Result<T> {
+          try {
+            using NT = decltype(_named_tuple);
+            if constexpr (internal::HasFromReflectionMethod<T>) {
+              return T::from_reflection(std::forward<NT>(_named_tuple));
+            } else if constexpr (internal::is_validator_v<T>) {
+              return T::from_value(std::forward<NT>(_named_tuple));
+            } else {
+              return T{std::forward<NT>(_named_tuple)};
+            }
+          } catch (std::exception& e) {
+            return error(e.what());
+          }
+        };
+        if constexpr (internal::is_description_v<T> ||
+                      internal::is_deprecated_v<T> ||
+                      internal::is_attribute_v<T> ||
+                      internal::is_validator_v<T>) {
+          return read_into_or_read<R, W, ReflectionType, ProcessorsType>(
+                     _r, _var, std::move(_base.value()))
+              .and_then(wrap_in_t);
+        } else if constexpr (internal::has_reflection_method_v<T> &&
+                             std::is_constructible_v<
+                                 ReflectionType,
+                                 decltype(_base.reflection())>) {
+          return read_into_or_read<R, W, ReflectionType, ProcessorsType>(
+                     _r, _var, ReflectionType(_base.reflection()))
+              .and_then(wrap_in_t);
+        } else {
+          return read(_r, _var);
+        }
+      }
+
+    } else {
+      return read_struct_into(_r, _var, std::move(_base));
     }
   }
 
@@ -854,6 +1019,24 @@ struct Parser {
       } else {
         return error(default_construction_error(e.what()));
       }
+    }
+  }
+
+  /// Overlays input data onto an existing struct instance, preserving any
+  /// fields not present in the input and recursively overlaying nested structs.
+  static Result<T> read_struct_into(const R& _r, const InputVarType& _var,
+                                    T _base) {
+    try {
+      auto view = ProcessorsType::template process<T>(to_view(_base));
+      using ViewType = std::remove_cvref_t<decltype(view)>;
+      auto err = Parser<R, W, ViewType, ProcessorsType>::read_view_into(
+          _r, _var, &view);
+      if (err) [[unlikely]] {
+        return error(std::move(*err));
+      }
+      return _base;
+    } catch (std::exception& e) {
+      return error(e.what());
     }
   }
 

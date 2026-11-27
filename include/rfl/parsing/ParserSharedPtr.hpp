@@ -86,6 +86,41 @@ struct ParserSharedPtr {
   }
 
   /**
+   * @brief Overlays a shared_ptr from the input onto an existing shared_ptr
+   *        without mutating the shared pointee in place.
+   *
+   * @param _r The reader to use.
+   * @param _var The input variable to read from.
+   * @param _base The existing shared_ptr.
+   * @return A Result containing the overlaid shared_ptr or an error.
+   */
+  static Result<std::shared_ptr<T>> read_into(
+      const R& _r, const InputVarType& _var,
+      std::shared_ptr<T> _base) noexcept {
+    if constexpr (atomic::is_atomic_v<T> || schemaful::IsSchemafulReader<R>) {
+      return read(_r, _var);
+    } else {
+      if (_r.is_empty(_var)) {
+        return std::shared_ptr<T>();
+      }
+      const auto to_shared = [](auto&& _t) {
+        return std::make_shared<T>(std::forward<decltype(_t)>(_t));
+      };
+      if constexpr (std::is_copy_constructible_v<std::remove_cvref_t<T>>) {
+        if (_base) {
+          return read_into_or_read<R, W, std::remove_cvref_t<T>,
+                                   ProcessorsType>(
+                     _r, _var, std::remove_cvref_t<T>(*_base))
+              .transform(to_shared);
+        }
+      }
+      return Parser<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(_r,
+                                                                        _var)
+          .transform(to_shared);
+    }
+  }
+
+  /**
    * @brief Writes a shared_ptr to the output.
    *
    * @tparam P The type of the parent.

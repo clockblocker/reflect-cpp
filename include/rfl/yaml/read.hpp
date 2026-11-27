@@ -6,10 +6,12 @@
 #include <istream>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "../Processors.hpp"
 #include "../internal/no_field_names_v.hpp"
 #include "../internal/wrap_in_rfl_array_t.hpp"
+#include "../parsing/Parser_base.hpp"
 #include "Parser.hpp"
 #include "Reader.hpp"
 
@@ -73,6 +75,57 @@ auto read(std::istream& _stream) {
   const auto yaml_str = std::string(std::istreambuf_iterator<char>(_stream),
                                     std::istreambuf_iterator<char>());
   return read<T, Ps...>(yaml_str);
+}
+
+/// Overlays a YAML var onto an existing object, preserving missing fields and
+/// recursively overlaying nested structs. Atomic on error.
+/// @tparam Ps Processors to apply during parsing
+/// @tparam T The type to overlay onto (deduced from `_base`)
+/// @param _base The base object to overlay onto
+/// @param _var The YAML variant object to overlay from
+/// @param _yaml_str The original YAML string (used for error context)
+/// @return Result containing either the overlaid object or an error
+template <class... Ps, class T>
+Result<T> read_into(T _base, const InputVarType& _var,
+                    const std::string& _yaml_str) {
+  const auto r = Reader(_yaml_str);
+  using ProcessorsType = Processors<Ps...>;
+  static_assert(!internal::no_field_names_v<ProcessorsType>,
+                "The NoFieldNames processor is not supported for BSON, XML, "
+                "TOML, or YAML.");
+  return parsing::read_into_or_read<Reader, Writer, T, ProcessorsType>(
+      r, _var, std::move(_base));
+}
+
+/// Overlays a YAML string onto an existing object, preserving missing fields
+/// and recursively overlaying nested structs. Atomic on error.
+/// @tparam Ps Processors to apply during parsing
+/// @tparam T The type to overlay onto (deduced from `_base`)
+/// @param _base The base object to overlay onto
+/// @param _yaml_str The YAML string to overlay
+/// @return Result containing either the overlaid object or an error message
+template <class... Ps, class T>
+Result<T> read_into(T _base, const std::string_view _yaml_str) {
+  try {
+    const auto yaml_str = std::string(_yaml_str);
+    const auto var = InputVarType(YAML::Load(yaml_str));
+    return read_into<Ps...>(std::move(_base), var, yaml_str);
+  } catch (std::exception& e) {
+    return error(e.what());
+  }
+}
+
+/// Overlays YAML from an input stream onto an existing object. Atomic on error.
+/// @tparam Ps Processors to apply during parsing
+/// @tparam T The type to overlay onto (deduced from `_base`)
+/// @param _base The base object to overlay onto
+/// @param _stream The input stream containing YAML data
+/// @return Result containing either the overlaid object or an error message
+template <class... Ps, class T>
+Result<T> read_into(T _base, std::istream& _stream) {
+  const auto yaml_str = std::string(std::istreambuf_iterator<char>(_stream),
+                                    std::istreambuf_iterator<char>());
+  return read_into<Ps...>(std::move(_base), std::string_view(yaml_str));
 }
 
 }  // namespace yaml

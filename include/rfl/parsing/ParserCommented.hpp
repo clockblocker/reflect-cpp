@@ -46,6 +46,26 @@ struct ParserCommented {
   }
 
   /**
+   * @brief Overlays a Commented value from the input onto an existing value,
+   *        preserving any comment attached to `_base`.
+   *
+   * @param _r The reader to use.
+   * @param _var The input variable to read from.
+   * @param _base The existing Commented value.
+   * @return A Result containing the overlaid Commented value or an error.
+   */
+  static Result<Commented<T>> read_into(const R& _r, const InputVarType& _var,
+                                        Commented<T> _base) noexcept {
+    auto comment = std::move(_base.comment_);
+    return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
+               _r, _var, std::move(_base.value()))
+        .transform([&comment](auto&& _t) {
+          return Commented<T>(std::forward<decltype(_t)>(_t),
+                              std::move(comment));
+        });
+  }
+
+  /**
    * @brief Writes a Commented value to the output.
    *
    * @tparam P The type of the parent.

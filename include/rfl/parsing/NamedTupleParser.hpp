@@ -450,6 +450,12 @@ struct NamedTupleParser {
                                                  ProcessorsType>,
       ViewReaderWithDefault<R, W, NamedTupleType, ProcessorsType>>;
 
+  using ViewReaderOverlayType = std::conditional_t<
+      _no_field_names,
+      ViewReaderWithDefaultAndStrippedFieldNames<R, W, NamedTupleType,
+                                                 ProcessorsType, true>,
+      ViewReaderWithDefault<R, W, NamedTupleType, ProcessorsType, true>>;
+
   using InputObjectOrArrayType =
       std::conditional_t<_no_field_names, typename R::InputArrayType,
                          typename R::InputObjectType>;
@@ -569,6 +575,55 @@ struct NamedTupleParser {
         return obj.error();
       }
       return read_object_or_array_with_default(_r, *obj, _view);
+    }
+  }
+
+  /**
+   * @brief Overlays input data onto an existing named tuple, preserving
+   *        fields that are absent from the input.
+   *
+   * @param _r The reader to use.
+   * @param _var The input variable to read from.
+   * @param _base The base named tuple to overlay onto.
+   * @return A Result containing the overlaid named tuple or an error.
+   */
+  static Result<NamedTuple<FieldTypes...>> read_into(
+      const R& _r, const InputVarType& _var,
+      NamedTuple<FieldTypes...> _base) noexcept {
+    auto view = rfl::to_view(_base);
+    using ViewType = std::remove_cvref_t<decltype(view)>;
+    auto err = Parser<R, W, ViewType, ProcessorsType>::read_view_into(_r, _var,
+                                                                      &view);
+    if (err) [[unlikely]] {
+      return error(std::move(*err));
+    }
+    return _base;
+  }
+
+  /**
+   * @brief Overlays input data into a view, preserving missing fields and
+   *        recursively overlaying nested structs.
+   *
+   * @param _r The reader to use.
+   * @param _var The input variable to read from.
+   * @param _view The view to overlay into.
+   * @return An optional error.
+   */
+  static std::optional<Error> read_view_into(
+      const R& _r, const InputVarType& _var,
+      NamedTuple<FieldTypes...>* _view) noexcept {
+    if constexpr (_no_field_names) {
+      auto arr = _r.to_array(_var);
+      if (!arr) [[unlikely]] {
+        return arr.error();
+      }
+      return read_object_or_array_into(_r, *arr, _view);
+    } else {
+      auto obj = _r.to_object(_var);
+      if (!obj) [[unlikely]] {
+        return obj.error();
+      }
+      return read_object_or_array_into(_r, *obj, _view);
     }
   }
 
@@ -997,6 +1052,32 @@ struct NamedTupleParser {
         handle_missing_fields(reader.found(), *_view, nullptr, &errors,
                               /*_value_initialize_default_vals=*/false,
                               std::make_integer_sequence<int, size_>());
+      }
+    }
+    if constexpr (internal::fail_fast_v<ProcessorsType>) {
+      return std::move(errors).error();
+    } else {
+      if (errors.size() != 0) [[unlikely]] {
+        return to_single_error(std::move(errors));
+      }
+      return std::nullopt;
+    }
+  }
+
+  static std::optional<Error> read_object_or_array_into(
+      const R& _r, const InputObjectOrArrayType& _obj_or_arr,
+      NamedTupleType* _view) noexcept {
+    FieldErrors<ProcessorsType> errors;
+    const auto reader = ViewReaderOverlayType(&_r, _view, &errors);
+    if constexpr (_no_field_names) {
+      auto err = _r.read_array(reader, _obj_or_arr);
+      if (err) [[unlikely]] {
+        return err;
+      }
+    } else {
+      auto err = _r.read_object(reader, _obj_or_arr);
+      if (err) [[unlikely]] {
+        return err;
       }
     }
     if constexpr (internal::fail_fast_v<ProcessorsType>) {
