@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "Generic.hpp"
@@ -22,7 +23,7 @@ struct SchemaAnnotations {
   Object<Generic> extensions = {};
 
   bool empty() const noexcept {
-    return !title.has_value() &&
+    return (!title.has_value() || title->empty()) &&
            (!examples.has_value() || examples->empty()) &&
            extensions.empty();
   }
@@ -78,51 +79,30 @@ struct OmitEmptyRequired {
 
 namespace internal {
 
-template <class ProcessorsType>
-struct has_integer_bounds : std::false_type {};
+template <class Tag, class T>
+struct has_schema_processor : std::false_type {};
 
-template <>
-struct has_integer_bounds<Processors<>> : std::false_type {};
+template <class Tag>
+struct has_schema_processor<Tag, Tag> : std::true_type {};
 
-template <class Head, class... Tail>
-struct has_integer_bounds<Processors<Head, Tail...>>
-    : std::bool_constant<std::is_same_v<Head, IntegerBounds> ||
-                         has_integer_bounds<Processors<Tail...>>::value> {};
+template <class Tag, class... Ps>
+struct has_schema_processor<Tag, Processors<Ps...>>
+    : std::bool_constant<(has_schema_processor<Tag, Ps>::value || ...)> {};
 
 template <class ProcessorsType>
 inline constexpr bool integer_bounds_v =
-    has_integer_bounds<std::remove_cvref_t<ProcessorsType>>::value;
-
-template <class ProcessorsType>
-struct has_tuple_bounds : std::false_type {};
-
-template <>
-struct has_tuple_bounds<Processors<>> : std::false_type {};
-
-template <class Head, class... Tail>
-struct has_tuple_bounds<Processors<Head, Tail...>>
-    : std::bool_constant<std::is_same_v<Head, TupleBounds> ||
-                         has_tuple_bounds<Processors<Tail...>>::value> {};
+    has_schema_processor<IntegerBounds,
+                         std::remove_cvref_t<ProcessorsType>>::value;
 
 template <class ProcessorsType>
 inline constexpr bool tuple_bounds_v =
-    has_tuple_bounds<std::remove_cvref_t<ProcessorsType>>::value;
-
-template <class ProcessorsType>
-struct has_omit_empty_required : std::false_type {};
-
-template <>
-struct has_omit_empty_required<Processors<>> : std::false_type {};
-
-template <class Head, class... Tail>
-struct has_omit_empty_required<Processors<Head, Tail...>>
-    : std::bool_constant<std::is_same_v<Head, OmitEmptyRequired> ||
-                         has_omit_empty_required<Processors<Tail...>>::value> {
-};
+    has_schema_processor<TupleBounds,
+                         std::remove_cvref_t<ProcessorsType>>::value;
 
 template <class ProcessorsType>
 inline constexpr bool omit_empty_required_v =
-    has_omit_empty_required<std::remove_cvref_t<ProcessorsType>>::value;
+    has_schema_processor<OmitEmptyRequired,
+                         std::remove_cvref_t<ProcessorsType>>::value;
 
 // --- SchemaName detection ---
 

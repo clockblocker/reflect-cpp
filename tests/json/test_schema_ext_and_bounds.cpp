@@ -47,6 +47,21 @@ struct TupleAndOptional {
   std::tuple<int, std::string> pair;
 };
 
+struct FnNamedConfig {
+  int v = 0;
+};
+
+using AnnotatedPort = rfl::Validator<int, rfl::Minimum<1>, rfl::Maximum<65535>>;
+
+struct WithAnnotatedValidator {
+  AnnotatedPort port = 80;
+};
+
+struct WithRequiredAndOptional {
+  std::string required_field;
+  std::optional<int> opt;
+};
+
 struct BooleanDefaultOrder {
   rfl::DefaultVal<bool> enabled = true;
 };
@@ -87,6 +102,21 @@ struct SchemaExtension<test_schema_ext_and_bounds::InlineToken> {
   }
 };
 
+template <>
+struct SchemaName<test_schema_ext_and_bounds::FnNamedConfig> {
+  static std::string value() { return "DynamicConfig"; }
+};
+
+template <>
+struct SchemaExtension<test_schema_ext_and_bounds::AnnotatedPort> {
+  static constexpr bool inline_schema = true;
+  static SchemaAnnotations annotations() {
+    SchemaAnnotations ann;
+    ann.title = "TCP Port";
+    return ann;
+  }
+};
+
 }  // namespace rfl
 
 namespace test_schema_ext_and_bounds {
@@ -104,6 +134,11 @@ TEST(json, test_schema_name_override) {
   const auto tagged_schema = rfl::json::to_schema<Tagged>();
   EXPECT_NE(tagged_schema.find(R"(ExportedConfig__tagged)"), std::string::npos)
       << tagged_schema;
+
+  const auto fn_schema = rfl::json::to_schema<FnNamedConfig>();
+  EXPECT_NE(fn_schema.find(R"("$ref":"#/$defs/DynamicConfig")"),
+            std::string::npos)
+      << fn_schema;
 }
 
 TEST(json, test_schema_extension_title_examples_extensions_and_inline) {
@@ -122,6 +157,15 @@ TEST(json, test_schema_extension_title_examples_extensions_and_inline) {
                 R"("token":{"type":"string","title":"Inline Token","x-sensitive":true})"),
             std::string::npos)
       << inline_schema;
+
+  // SchemaExtension with inline_schema = true on a Validator must preserve
+  // validation constraints (and apply annotations).
+  const auto val_schema = rfl::json::to_schema<WithAnnotatedValidator>();
+  EXPECT_NE(val_schema.find(R"("title":"TCP Port")"), std::string::npos)
+      << val_schema;
+  EXPECT_NE(val_schema.find(R"("minimum":1)"), std::string::npos) << val_schema;
+  EXPECT_NE(val_schema.find(R"("maximum":65535)"), std::string::npos)
+      << val_schema;
 }
 
 TEST(json, test_schema_integer_bounds_processor) {
@@ -148,6 +192,21 @@ TEST(json, test_schema_integer_bounds_processor) {
       << bounded;
   EXPECT_NE(
       bounded.find(
+          R"("i32":{"type":"integer","minimum":-2147483648,"maximum":2147483647})"),
+      std::string::npos)
+      << bounded;
+  EXPECT_NE(
+      bounded.find(
+          R"("u32":{"type":"integer","minimum":0,"maximum":4294967295})"),
+      std::string::npos)
+      << bounded;
+  EXPECT_NE(
+      bounded.find(
+          R"("i64":{"type":"integer","minimum":-9223372036854775808,"maximum":9223372036854775807})"),
+      std::string::npos)
+      << bounded;
+  EXPECT_NE(
+      bounded.find(
           R"("u64":{"type":"integer","minimum":0,"maximum":18446744073709551615})"),
       std::string::npos)
       << bounded;
@@ -166,6 +225,13 @@ TEST(json, test_schema_tuple_bounds_omit_empty_required_and_bool_order) {
   EXPECT_EQ(schema.find(R"("required")"), std::string::npos) << schema;
   EXPECT_NE(schema.find(R"("minItems":2,"maxItems":2)"), std::string::npos)
       << schema;
+
+  // OmitEmptyRequired keeps non-empty required arrays intact.
+  const auto non_empty =
+      rfl::json::to_schema<WithRequiredAndOptional, rfl::OmitEmptyRequired>();
+  EXPECT_NE(non_empty.find(R"("required":["required_field"])"),
+            std::string::npos)
+      << non_empty;
 
   // Boolean schema emits "type":"boolean" before "default":true.
   const auto bool_schema = rfl::json::to_schema<BooleanDefaultOrder>();

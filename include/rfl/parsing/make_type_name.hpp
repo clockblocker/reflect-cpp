@@ -2,6 +2,7 @@
 #define RFL_PARSING_MAKETYPENAME_HPP_
 
 #include <cctype>
+#include <string>
 
 #include "../SchemaExt.hpp"
 #include "../type_name_t.hpp"

@@ -76,6 +76,18 @@
 
 namespace rfl::parsing {
 
+inline void apply_schema_annotations(schema::Type* _schema,
+                                     const SchemaAnnotations& _ann) {
+  if (_ann.empty()) {
+    return;
+  }
+  *_schema = schema::Type{schema::Type::Annotated{
+      .title_ = _ann.title,
+      .examples_ = _ann.examples,
+      .extensions_ = _ann.extensions,
+      .type_ = Ref<schema::Type>::make(std::move(*_schema))}};
+}
+
 /// Default case - anything that cannot be explicitly matched.
 template <class R, class W, class T, class ProcessorsType>
   requires AreReaderAndWriter<R, W, T>
@@ -601,6 +613,17 @@ struct Parser {
     } else if constexpr (rfl::internal::is_deprecated_v<U>) {
       return make_deprecated<U>(_definitions);
 
+    } else if constexpr (internal::is_literal_v<U>) {
+      return Type{Type::Literal{.values_ = U::strings()}};
+
+    } else if constexpr (internal::is_validator_v<U>) {
+      auto validated = make_validated<U>(_definitions);
+      if constexpr (internal::has_schema_annotations_v<U>) {
+        apply_schema_annotations(&validated,
+                                 internal::get_schema_annotations<U>());
+      }
+      return validated;
+
     } else if constexpr (internal::schema_extension_inline_v<U> &&
                          (internal::has_reflection_type_v<U> ||
                           internal::has_read_reflector<U> ||
@@ -621,12 +644,6 @@ struct Parser {
 
     } else if constexpr (std::is_class_v<U> && std::is_aggregate_v<U>) {
       return make_reference<U>(_definitions);
-
-    } else if constexpr (internal::is_literal_v<U>) {
-      return Type{Type::Literal{.values_ = U::strings()}};
-
-    } else if constexpr (internal::is_validator_v<U>) {
-      return make_validated<U>(_definitions);
 
     } else if constexpr (internal::has_reflection_type_v<U> ||
                          internal::has_read_reflector<U> ||
@@ -660,18 +677,6 @@ struct Parser {
         .type_ =
             Ref<Type>::make(Parser<R, W, std::remove_cvref_t<typename U::Type>,
                                    ProcessorsType>::to_schema(_definitions))}};
-  }
-
-  static void apply_schema_annotations(schema::Type* _schema,
-                                       const SchemaAnnotations& _ann) {
-    if (_ann.empty()) {
-      return;
-    }
-    *_schema = schema::Type{schema::Type::Annotated{
-        .title_ = _ann.title,
-        .examples_ = _ann.examples,
-        .extensions_ = _ann.extensions,
-        .type_ = Ref<schema::Type>::make(std::move(*_schema))}};
   }
 
   template <class U>
