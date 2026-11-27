@@ -690,13 +690,12 @@ class NamedTuple {
       rfl::Tuple<OtherFieldTypes...>&& _other_fields,
       std::integer_sequence<int, _is...>) {
     const auto get_field = [&]<int _i>(Index<_i>) {
-      constexpr auto field_name =
-          internal::nth_element_t<_i, FieldTypes...>::name_;
-      constexpr auto index =
-          internal::find_index<field_name, rfl::Tuple<OtherFieldTypes...>>();
+      constexpr auto index = internal::find_matching_field_index<
+          _i, Fields, rfl::Tuple<OtherFieldTypes...>>();
       using FieldType = internal::nth_element_t<_i, FieldTypes...>;
-      using T = std::remove_cvref_t<typename FieldType::Type>;
-      return FieldType(std::forward<T>(rfl::get<index>(_other_fields).value_));
+      using OtherFieldType = internal::nth_element_t<index, OtherFieldTypes...>;
+      return FieldType(std::forward<typename OtherFieldType::Type>(
+          rfl::get<index>(_other_fields).value_));
     };
     return rfl::make_tuple(get_field(Index<_is>{})...);
   }
