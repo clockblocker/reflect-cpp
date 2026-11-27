@@ -9,7 +9,6 @@
 #include "../Alias.hpp"
 #include "../Result.hpp"
 #include "../internal/StringLiteral.hpp"
-#include "../internal/is_alias.hpp"
 #include "Parser_base.hpp"
 #include "schema/Type.hpp"
 

@@ -144,7 +144,8 @@ struct Parser {
       return ParserRename<R, W, T, ProcessorsType>::read(_r, _var);
 
     } else if constexpr (internal::is_alias<std::remove_cvref_t<T>>::value) {
-      return ParserAlias<R, W, T, ProcessorsType>::read(_r, _var);
+      return ParserAlias<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(
+          _r, _var);
 
     } else if constexpr (is_result_v<T>) {
       return ParserResult<R, W, T, ProcessorsType>::read(_r, _var);
@@ -348,7 +349,8 @@ struct Parser {
       ParserRename<R, W, T, ProcessorsType>::write(_w, _var, _parent);
 
     } else if constexpr (internal::is_alias<std::remove_cvref_t<T>>::value) {
-      ParserAlias<R, W, T, ProcessorsType>::write(_w, _var, _parent);
+      ParserAlias<R, W, std::remove_cvref_t<T>, ProcessorsType>::write(
+          _w, _var, _parent);
 
     } else if constexpr (is_duration_v<T>) {
       using U = std::remove_cvref_t<T>;

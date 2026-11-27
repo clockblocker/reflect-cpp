@@ -52,7 +52,8 @@ struct prepend_alias<_head, AliasList<_tail...>> {
 
 /// Collects all rfl::Alias names declared on a field type, unwrapping through
 /// transparent field wrappers (Alias, Rename, Description, Deprecated,
-/// DefaultVal, Short, Positional, std::optional, Skip, Attribute, Commented).
+/// DefaultVal, Short, Positional, std::optional, Skip, Attribute, Commented,
+/// Validator, Box, Ref, std::unique_ptr, std::shared_ptr, and raw pointers).
 template <class T>
 struct field_aliases_impl {
   using type = AliasList<>;
@@ -61,6 +62,11 @@ struct field_aliases_impl {
 template <class T>
 using field_aliases_t = typename field_aliases_impl<
     std::remove_cvref_t<std::remove_pointer_t<T>>>::type;
+
+template <class T>
+struct field_aliases_impl<T*> {
+  using type = field_aliases_t<T>;
+};
 
 template <StringLiteral _name, class T>
 struct field_aliases_impl<Alias<_name, T>> {

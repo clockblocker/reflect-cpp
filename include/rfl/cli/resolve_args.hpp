@@ -89,16 +89,25 @@ inline rfl::Result<std::map<std::string, std::string>> resolve_args(
 ) {
   std::map<std::string, std::string> result;
   std::map<std::string, std::string> seen_flag;
-  for (auto& [key, val] : _parsed.named) {
-    const auto it = _options.long_aliases.find(key);
-    const auto& target =
-        it == _options.long_aliases.end() ? key : it->second;
-    if (!result.emplace(target, std::move(val)).second) {
-      return rfl::error(
-          "Conflict: '--" + key + "' and '--" + seen_flag[target]
-          + "' refer to the same field.");
+  if (_options.long_aliases.empty()) {
+    result = std::move(_parsed.named);
+  } else {
+    for (auto& [key, val] : _parsed.named) {
+      const auto it = _options.long_aliases.find(key);
+      const auto& target =
+          it == _options.long_aliases.end() ? key : it->second;
+      if (!result.emplace(target, std::move(val)).second) {
+        const auto seen_it = seen_flag.find(target);
+        const auto& prev =
+            seen_it != seen_flag.end() ? seen_it->second : target;
+        return rfl::error(
+            "Conflict: '--" + key + "' and '--" + prev
+            + "' refer to the same field.");
+      }
+      if (key != target) {
+        seen_flag.emplace(target, key);
+      }
     }
-    seen_flag.emplace(target, key);
   }
 
   // Merge positional args.

@@ -213,7 +213,7 @@ constexpr auto operator<=>(const Alias<_n1, T1>& _lhs,
 
 /// Equality comparison between an Alias wrapper and a non-Alias value.
 template <internal::StringLiteral _n, class T, class U>
-  requires(!internal::is_alias_v<U> &&
+  requires(!internal::is_alias<std::remove_cvref_t<U>>::value &&
            requires(const T& _a, const U& _b) { _a == _b; })
 constexpr bool operator==(const Alias<_n, T>& _lhs, const U& _rhs) {
   return _lhs.value() == _rhs;
@@ -221,7 +221,7 @@ constexpr bool operator==(const Alias<_n, T>& _lhs, const U& _rhs) {
 
 /// Three-way comparison between an Alias wrapper and a non-Alias value.
 template <internal::StringLiteral _n, class T, class U>
-  requires(!internal::is_alias_v<U> &&
+  requires(!internal::is_alias<std::remove_cvref_t<U>>::value &&
            requires(const T& _a, const U& _b) { _a <=> _b; })
 constexpr auto operator<=>(const Alias<_n, T>& _lhs, const U& _rhs) {
   return _lhs.value() <=> _rhs;

@@ -347,4 +347,68 @@ TEST(json, test_alias_with_skip_validator_and_pointer_wrappers) {
           .has_value());
 }
 
+struct WithRawPointerAlias {
+  rfl::Alias<"old_outer", int*> outer_ptr = nullptr;
+  rfl::Alias<"old_inner", int>* inner_ptr = nullptr;
+};
+
+struct FlattenedAliasedInner {
+  rfl::Alias<"legacy_port", int> port = 80;
+};
+
+struct FlattenedAliasedOuter {
+  std::string host;
+  rfl::Flatten<FlattenedAliasedInner> inner;
+};
+
+struct SkipSerializationAlias {
+  std::string name;
+  rfl::SkipSerialization<rfl::Alias<"old_secret", std::string>> secret;
+  rfl::Alias<"old_token", rfl::SkipSerialization<std::string>> token;
+};
+
+TEST(json, test_alias_raw_pointers_flatten_and_skip_serialization) {
+  // Raw pointers: both Alias<"old", int*> and Alias<"old", int>* under
+  // AllowRawPtrs must compile and support read (by alias and canonical),
+  // conflict rejection, and write.
+  int a = 11;
+  rfl::Alias<"old_inner", int> b = 22;
+  const WithRawPointerAlias to_write{.outer_ptr = &a, .inner_ptr = &b};
+  EXPECT_EQ((rfl::json::write<rfl::AllowRawPtrs>(to_write)),
+            R"({"outer_ptr":11,"inner_ptr":22})");
+
+  const auto read_null =
+      rfl::json::read<WithRawPointerAlias, rfl::AllowRawPtrs,
+                      rfl::NoExtraFields>(
+          R"({"old_outer":null,"old_inner":null})");
+  ASSERT_TRUE(read_null) << read_null.error().what();
+  EXPECT_EQ(read_null->outer_ptr.value(), nullptr);
+  EXPECT_EQ(read_null->inner_ptr, nullptr);
+
+  // Conflict between canonical and alias on raw pointer field is detected.
+  EXPECT_FALSE(
+      (rfl::json::read<WithRawPointerAlias, rfl::AllowRawPtrs>(
+           R"({"inner_ptr":null,"old_inner":null})"))
+          .has_value());
+
+  // Flatten preserves aliases on inner struct fields.
+  const auto flat = rfl::json::read<FlattenedAliasedOuter, rfl::NoExtraFields>(
+      R"({"host":"localhost","legacy_port":8443})");
+  ASSERT_TRUE(flat) << flat.error().what();
+  EXPECT_EQ(flat->host, "localhost");
+  EXPECT_EQ(flat->inner.get().port.value(), 8443);
+  EXPECT_EQ(rfl::json::write(*flat), R"({"host":"localhost","port":8443})");
+
+  // SkipSerialization + Alias (both orders): aliases populate on read, omitted
+  // on write.
+  const auto skipped =
+      rfl::json::read<SkipSerializationAlias, rfl::NoExtraFields>(
+          R"({"name":"svc","old_secret":"s1","old_token":"t1"})");
+  ASSERT_TRUE(skipped) << skipped.error().what();
+  EXPECT_EQ(skipped->name, "svc");
+  EXPECT_EQ(skipped->secret.value().value(), "s1");
+  EXPECT_EQ(skipped->token.value().value(), "t1");
+  EXPECT_EQ(rfl::json::write(*skipped), R"({"name":"svc"})");
+}
+
 }  // namespace test_alias
