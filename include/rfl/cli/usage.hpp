@@ -44,6 +44,9 @@ namespace rfl::cli {
 /// Runtime customization for `rfl::cli::usage` and `rfl::cli::read_app`.
 struct UsageOptions {
   bool detailed = true;
+  /// If non-empty, shown before the Usage line in detailed output (overrides
+  /// any header from rfl::cli::App).
+  std::string header = {};
   /// If non-empty, replaces the auto-generated synopsis after "Usage: ".
   std::string synopsis = {};
   /// If non-empty, shown after the Usage line in detailed output.
@@ -53,6 +56,13 @@ struct UsageOptions {
   /// If non-empty, places built-in `--help` and `--version` in this group
   /// (at the start of the group if fields already use it).
   std::string help_group = {};
+  /// Maximum left-column width used to align option descriptions; options
+  /// wider than this place their description on the next line instead of
+  /// widening every other row. Set to 0 for no cap.
+  size_t max_option_width = 40;
+  /// Group names to omit from generated detailed help output (e.g. conditional
+  /// feature groups hidden at runtime).
+  std::vector<std::string> hidden_groups = {};
 };
 
 namespace internal {
@@ -674,7 +684,18 @@ inline std::string format_usage(const std::string& _program_name,
                                 const std::optional<char> _delimiter,
                                 const bool _options_first,
                                 const std::string& _header) {
-  auto out = _opts.detailed ? _header : std::string();
+  auto out = std::string();
+  if (_opts.detailed) {
+    if (!_opts.header.empty()) {
+      out += _opts.header;
+      if (!out.ends_with('\n')) {
+        out += '\n';
+      }
+      out += '\n';
+    } else {
+      out += _header;
+    }
+  }
   if (!_opts.synopsis.empty()) {
     out += "Usage: " + _opts.synopsis + "\n";
   } else {
@@ -708,7 +729,12 @@ inline std::string format_usage(const std::string& _program_name,
   for (const auto& arg : _args) {
     rows.emplace_back(usage_arg_to_string(arg, ", ", _delimiter),
                       usage_help_text(arg));
-    width = std::max(width, rows.back().first.size());
+    const size_t row_w = rows.back().first.size();
+    if (_opts.max_option_width == 0 || row_w <= _opts.max_option_width) {
+      width = std::max(width, row_w);
+    } else {
+      width = std::max(width, _opts.max_option_width);
+    }
   }
 
   constexpr size_t indent = 2;
@@ -718,7 +744,11 @@ inline std::string format_usage(const std::string& _program_name,
                             const std::string& _right) {
     out += std::string(indent, ' ') + _left;
     if (!_right.empty()) {
-      out += std::string(width - _left.size() + gap, ' ');
+      if (_left.size() <= width) {
+        out += std::string(width - _left.size() + gap, ' ');
+      } else {
+        out += continuation;
+      }
       for (const char c : _right) {
         if (c == '\n') {
           out += continuation;
@@ -863,6 +893,18 @@ rfl::Result<std::string> usage(const std::string& _program_name,
           } else {
             args = std::move(builtin_args);
             args.insert(args.end(), fields.begin(), fields.end());
+          }
+          if (!_opts.hidden_groups.empty()) {
+            args.erase(
+                std::remove_if(
+                    args.begin(), args.end(),
+                    [&](const internal::UsageArg& _a) {
+                      return !_a.group.empty() &&
+                             std::find(_opts.hidden_groups.begin(),
+                                       _opts.hidden_groups.end(),
+                                       _a.group) != _opts.hidden_groups.end();
+                    }),
+                args.end());
           }
           return internal::format_usage(
               _program_name, args, _opts, delimiter, options.options_first,
