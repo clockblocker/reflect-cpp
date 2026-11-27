@@ -38,7 +38,8 @@ struct PatternValidator {
       std::stringstream stream;
       stream << "String '" << _str << "' did not match format '" << _name.str()
              << "': '" << _regex.str() << "'.";
-      return error(stream.str());
+      return error(Error(stream.str(), ErrorKind::constraint_violation,
+                         internal::BuiltinErrorCode::pattern));
     }
   }
 
