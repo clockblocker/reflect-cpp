@@ -352,38 +352,75 @@ struct NamedTupleParser {
   }
 
   /// Generates error messages for when fields are missing.
-  template <int _i>
+  template <int _i, bool _defaults_constructed>
   static RFL_ALWAYS_INLINE void handle_one_missing_field(
       const std::array<bool, size_>& _found, const NamedTupleType& _view,
       std::array<bool, size_>* _set, FieldErrors<ProcessorsType>* _errors,
       const bool _value_initialize_default_vals) noexcept {
-    if (should_stop_on_field_error<ProcessorsType>(*_errors)) return;
     using FieldType = internal::nth_element_t<_i, FieldTypes...>;
     using ValueType = std::remove_reference_t<
         std::remove_pointer_t<typename FieldType::Type>>;
+    constexpr bool is_default_val_field =
+        internal::is_default_val_v<ValueType>;
+    constexpr bool is_required_field =
+        !is_default_val_field && !internal::is_extra_fields_v<ValueType> &&
+        (_all_required || is_required<ValueType, _ignore_empty_containers>());
 
-    if (!std::get<_i>(_found)) {
-      constexpr bool is_default_val_field =
-          internal::is_default_val_v<ValueType>;
-      constexpr bool is_required_field =
-          !is_default_val_field && !internal::is_extra_fields_v<ValueType> &&
-          (_all_required || is_required<ValueType, _ignore_empty_containers>());
+    // When the struct was default-constructed, missing optional or DefaultVal
+    // fields already hold their default values, so nothing is needed at all.
+    if constexpr (_defaults_constructed && !is_required_field) {
+      return;
+    } else {
+      if (should_stop_on_field_error<ProcessorsType>(*_errors)) return;
+      if (!std::get<_i>(_found)) {
+        if constexpr (!_defaults_constructed &&
+                      internal::is_unwrapped_default_val_v<ValueType>) {
+          if constexpr (can_value_initialize_default_val<ValueType>()) {
+            if (_value_initialize_default_vals) {
+              // The value's constructor can throw, for instance a Validator
+              // whose zero value is invalid.
+              try {
+                ::new (rfl::get<_i>(_view)) ValueType();
+              } catch (std::exception& e) {
+                constexpr auto current_name =
+                    internal::nth_element_t<_i, FieldTypes...>::name();
+                _errors->emplace_back(make_nested_error(
+                    std::string(current_name),
+                    "Field named '" + std::string(current_name) +
+                        "' not found, and its default value could not be "
+                        "constructed: " +
+                        e.what()));
+                return;
+              }
+              std::get<_i>(*_set) = true;
+              return;
+            }
+          }
+        }
 
-      // Without _set, the struct was default-constructed before it was read,
-      // so the field already holds its default value. With _set, the fields
-      // are constructed in raw memory. An rfl::NamedTuple has no in-class
-      // initializers, so a missing bare rfl::DefaultVal field is
-      // value-initialized there. Otherwise the field's default value is not
-      // available, so the field is required.
-      const bool defaults_constructed = _set == nullptr;
+        if constexpr (is_required_field ||
+                      (is_default_val_field && !_defaults_constructed)) {
+          constexpr auto current_name =
+              internal::nth_element_t<_i, FieldTypes...>::name();
+          std::stringstream stream;
+          stream << "Field named '" << std::string(current_name)
+                 << "' not found.";
+          _errors->emplace_back(
+              make_nested_error(std::string(current_name), stream.str()));
+          return;
+        }
 
-      if constexpr (internal::is_unwrapped_default_val_v<ValueType>) {
-        if constexpr (can_value_initialize_default_val<ValueType>()) {
-          if (_value_initialize_default_vals && !defaults_constructed) {
-            // The value's constructor can throw, for instance a Validator
-            // whose zero value is invalid.
+        if constexpr (!_defaults_constructed && !is_required_field &&
+                      !is_default_val_field) {
+          using NonConstT = std::remove_const_t<ValueType>;
+          const auto ptr = const_cast<NonConstT*>(rfl::get<_i>(_view));
+          if constexpr (std::is_nothrow_default_constructible_v<NonConstT>) {
+            ::new (ptr) NonConstT();
+          } else {
+            // The default value can throw, for instance a Validator whose
+            // default value is invalid.
             try {
-              ::new (rfl::get<_i>(_view)) ValueType();
+              ::new (ptr) NonConstT();
             } catch (std::exception& e) {
               constexpr auto current_name =
                   internal::nth_element_t<_i, FieldTypes...>::name();
@@ -395,50 +432,9 @@ struct NamedTupleParser {
                       e.what()));
               return;
             }
-            std::get<_i>(*_set) = true;
-            return;
           }
+          std::get<_i>(*_set) = true;
         }
-      }
-
-      if (is_required_field ||
-          (is_default_val_field && !defaults_constructed)) {
-        constexpr auto current_name =
-            internal::nth_element_t<_i, FieldTypes...>::name();
-        std::stringstream stream;
-        stream << "Field named '" << std::string(current_name)
-               << "' not found.";
-        _errors->emplace_back(
-            make_nested_error(std::string(current_name), stream.str()));
-        return;
-      }
-
-      if constexpr (!is_required_field && !is_default_val_field) {
-        if (defaults_constructed) {
-          return;
-        }
-        using NonConstT = std::remove_const_t<ValueType>;
-        const auto ptr = const_cast<NonConstT*>(rfl::get<_i>(_view));
-        if constexpr (std::is_nothrow_default_constructible_v<NonConstT>) {
-          ::new (ptr) NonConstT();
-        } else {
-          // The default value can throw, for instance a Validator whose
-          // default value is invalid.
-          try {
-            ::new (ptr) NonConstT();
-          } catch (std::exception& e) {
-            constexpr auto current_name =
-                internal::nth_element_t<_i, FieldTypes...>::name();
-            _errors->emplace_back(make_nested_error(
-                std::string(current_name),
-                "Field named '" + std::string(current_name) +
-                    "' not found, and its default value could not be "
-                    "constructed: " +
-                    e.what()));
-            return;
-          }
-        }
-        std::get<_i>(*_set) = true;
       }
     }
   }
@@ -454,14 +450,14 @@ struct NamedTupleParser {
   }
 
   /// Generates error messages for when fields are missing.
-  template <int... _is>
+  template <bool _defaults_constructed, int... _is>
   static RFL_ALWAYS_INLINE void handle_missing_fields(
       const std::array<bool, size_>& _found, const NamedTupleType& _view,
       std::array<bool, size_>* _set, FieldErrors<ProcessorsType>* _errors,
       const bool _value_initialize_default_vals,
       std::integer_sequence<int, _is...>) noexcept {
-    (handle_one_missing_field<_is>(_found, _view, _set, _errors,
-                                   _value_initialize_default_vals),
+    (handle_one_missing_field<_is, _defaults_constructed>(
+         _found, _view, _set, _errors, _value_initialize_default_vals),
      ...);
   }
 
@@ -498,9 +494,9 @@ struct NamedTupleParser {
       }
     }
     if (!should_stop_on_field_error<ProcessorsType>(errors)) {
-      handle_missing_fields(found, *_view, &set, &errors,
-                            _value_initialize_default_vals,
-                            std::make_integer_sequence<int, size_>());
+      handle_missing_fields</*_defaults_constructed=*/false>(
+          found, *_view, &set, &errors, _value_initialize_default_vals,
+          std::make_integer_sequence<int, size_>());
     }
     if constexpr (internal::fail_fast_v<ProcessorsType>) {
       return std::make_pair(set, std::move(errors).error());
@@ -531,9 +527,10 @@ struct NamedTupleParser {
     if constexpr (internal::has_default_val_v<NamedTupleType> &&
                   !internal::default_if_missing_v<ProcessorsType>) {
       if (!should_stop_on_field_error<ProcessorsType>(errors)) {
-        handle_missing_fields(reader.found(), *_view, nullptr, &errors,
-                              /*_value_initialize_default_vals=*/false,
-                              std::make_integer_sequence<int, size_>());
+        handle_missing_fields</*_defaults_constructed=*/true>(
+            reader.found(), *_view, nullptr, &errors,
+            /*_value_initialize_default_vals=*/false,
+            std::make_integer_sequence<int, size_>());
       }
     }
     if constexpr (internal::fail_fast_v<ProcessorsType>) {

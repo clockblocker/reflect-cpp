@@ -14,6 +14,7 @@
 #include "../internal/no_extra_fields_v.hpp"
 #include "FieldErrors.hpp"
 #include "Parser_base.hpp"
+#include "peel_transparent_wrappers.hpp"
 #include "schemaful/IsSchemafulReader.hpp"
 #include "wrap_error.hpp"
 
@@ -115,19 +116,22 @@ class ViewReader {
         is_matching<i, FieldType>(_current_name_or_index)) {
       std::get<i>(*_found) = true;
       *_already_assigned = true;
-      auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
+      using Peel = peel_transparent<T, R>;
+      auto res = read_field_core<R, W, typename Peel::CoreType,
+                                 ProcessorsType>(_r, _var, FieldType::name(),
+                                                 _errors, size_);
       if (!res) [[unlikely]] {
-        constexpr auto name = FieldType::name();
-        // Reserve lazily to avoid error-vector reallocations while keeping
-        // successful reads allocation-free.
-        _errors->reserve(size_);
-        _errors->emplace_back(wrap_field_error(name, std::move(res).error()));
         return;
       }
       if constexpr (std::is_pointer_v<OriginalType>) {
-        move_to(rfl::get<i>(*_view), &(*res));
+        if constexpr (Peel::peeled) {
+          auto wrapped = Peel::wrap(std::move(*res));
+          placement_move_field(rfl::get<i>(*_view), &wrapped);
+        } else {
+          placement_move_field(rfl::get<i>(*_view), &(*res));
+        }
       } else {
-        rfl::get<i>(*_view) = std::move(*res);
+        rfl::get<i>(*_view) = Peel::wrap(std::move(*res));
       }
       std::get<i>(*_set) = true;
     }
@@ -188,26 +192,6 @@ class ViewReader {
         stream << "Value named '" << _current_name_or_index << "' not used.";
         _errors->emplace_back(make_nested_error(
             to_path_segment(_current_name_or_index), stream.str()));
-      }
-    }
-  }
-
-  template <class Target, class Source>
-  static void move_to(Target* _t, Source* _s) {
-    if constexpr (std::is_const_v<Target>) {
-      return move_to(const_cast<std::remove_const_t<Target>*>(_t), _s);
-    } else if constexpr (!rfl::internal::is_array_v<Source> &&
-                         !std::is_array_v<Target>) {
-      ::new (_t) Target(std::move(*_s));
-    } else if constexpr (rfl::internal::is_array_v<Source>) {
-      static_assert(std::is_array_v<Target>,
-                    "Expected target to be a c-array.");
-      for (size_t i = 0; i < _s->arr_.size(); ++i) {
-        move_to(&((*_t)[i]), &(_s->arr_[i]));
-      }
-    } else {
-      for (size_t i = 0; i < _s->size(); ++i) {
-        move_to(&((*_t)[i]), &((*_s)[i]));
       }
     }
   }

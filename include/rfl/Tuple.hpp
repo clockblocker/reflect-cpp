@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstddef>
+#include <memory>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -68,7 +69,7 @@ class Tuple {
   template <int _index>
   constexpr auto& get() {
     using Type = internal::nth_element_t<_index, Types...>;
-    return *internal::ptr_cast<Type*>(data_ + pos<_index>());
+    return *internal::ptr_cast<Type*>(data_ + std::get<_index>(positions_));
   }
 
   /// Gets an element by index (const).
@@ -77,7 +78,8 @@ class Tuple {
   template <int _index>
   constexpr const auto& get() const {
     using Type = internal::nth_element_t<_index, Types...>;
-    return *internal::ptr_cast<const Type*>(data_ + pos<_index>());
+    return *internal::ptr_cast<const Type*>(data_ +
+                                            std::get<_index>(positions_));
   }
 
   /// Copy assignment operator. Assigns from another Tuple by copy.
@@ -154,13 +156,10 @@ class Tuple {
   template <int... _is>
   void copy_from_other(const Tuple& _other,
                        std::integer_sequence<int, _is...>) {
-    const auto copy_one = [this]<int _i>(const auto& _other,
-                                         std::integral_constant<int, _i>) {
-      using Type = internal::nth_element_t<_i, Types...>;
-      ::new (static_cast<void*>(data_ + pos<_i>()))
-          Type(_other.template get<_i>());
-    };
-    (copy_one(_other, std::integral_constant<int, _is>{}), ...);
+    ((::new (static_cast<void*>(data_ + std::get<_is>(positions_)))
+          Types(*internal::ptr_cast<const Types*>(
+              _other.data_ + std::get<_is>(positions_)))),
+     ...);
   }
 
   /// Copies all elements from provided arguments.
@@ -169,25 +168,22 @@ class Tuple {
   template <int... _is>
   void copy_from_types(const Types&... _types,
                        std::integer_sequence<int, _is...>) {
-    const auto copy_one = [this]<int _i>(const auto& _t,
-                                         std::integral_constant<int, _i>) {
-      using Type = internal::nth_element_t<_i, Types...>;
-      ::new (static_cast<void*>(data_ + pos<_i>())) Type(_t);
-    };
-    (copy_one(_types, std::integral_constant<int, _is>{}), ...);
+    ((::new (static_cast<void*>(data_ + std::get<_is>(positions_)))
+          Types(_types)),
+     ...);
   }
 
   /// Destroys all elements if they are destructible.
   /// @param seq_ Integer sequence for element indices.
   template <int... _is>
   void destroy_if_necessary(std::integer_sequence<int, _is...>) {
-    const auto destroy_one = [](auto& _t) {
-      using Type = std::remove_cvref_t<decltype(_t)>;
-      if constexpr (std::is_destructible_v<Type>) {
-        _t.~Type();
-      }
-    };
-    (destroy_one(get<_is>()), ...);
+    if constexpr (!(std::is_trivially_destructible_v<Types> && ...)) {
+      ((std::is_trivially_destructible_v<Types>
+            ? void()
+            : std::destroy_at(
+                  internal::ptr_cast<Types*>(data_ + std::get<_is>(positions_)))),
+       ...);
+    }
   }
 
   /// Moves all elements from another Tuple.
@@ -195,13 +191,10 @@ class Tuple {
   /// @param seq_ Integer sequence for element indices.
   template <int... _is>
   void move_from_other(Tuple&& _other, std::integer_sequence<int, _is...>) {
-    const auto move_one = [this]<int _i>(auto&& _other,
-                                         std::integral_constant<int, _i>) {
-      using Type = internal::nth_element_t<_i, Types...>;
-      ::new (static_cast<void*>(data_ + pos<_i>()))
-          Type(std::move(_other.template get<_i>()));
-    };
-    (move_one(_other, std::integral_constant<int, _is>{}), ...);
+    ((::new (static_cast<void*>(data_ + std::get<_is>(positions_)))
+          Types(std::move(*internal::ptr_cast<Types*>(
+              _other.data_ + std::get<_is>(positions_))))),
+     ...);
   }
 
   /// Moves all elements from provided arguments.
@@ -209,20 +202,9 @@ class Tuple {
   /// @param seq_ Integer sequence for element indices.
   template <int... _is>
   void move_from_types(Types&&... _types, std::integer_sequence<int, _is...>) {
-    const auto move_one = [this]<int _i>(auto&& _t,
-                                         std::integral_constant<int, _i>) {
-      using Type = internal::nth_element_t<_i, Types...>;
-      ::new (static_cast<void*>(data_ + pos<_i>())) Type(std::move(_t));
-    };
-    (move_one(std::move(_types), std::integral_constant<int, _is>{}), ...);
-  }
-
-  /// Returns the byte offset of the element at index _i.
-  /// @tparam _i The index of the element.
-  /// @return The byte offset of the element.
-  template <int _i>
-  static consteval unsigned int pos() {
-    return std::get<_i>(positions_);
+    ((::new (static_cast<void*>(data_ + std::get<_is>(positions_)))
+          Types(std::move(_types))),
+     ...);
   }
 
  private:
