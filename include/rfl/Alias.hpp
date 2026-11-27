@@ -51,10 +51,10 @@ struct Alias {
       : value_(std::move(_value)) {}
 
   /// Move constructor.
-  constexpr Alias(Alias&& _field) = default;
+  Alias(Alias&& _field) = default;
 
   /// Copy constructor.
-  constexpr Alias(const Alias& _field) = default;
+  Alias(const Alias& _field) = default;
 
   /// Copy constructor from Alias with the same alias name and a compatible
   /// underlying type.
@@ -89,7 +89,7 @@ struct Alias {
       : value_() {}
 
   /// Destructor.
-  constexpr ~Alias() = default;
+  ~Alias() = default;
 
   /// Returns a const reference to the underlying value.
   constexpr const Type& get() const noexcept { return value_; }
