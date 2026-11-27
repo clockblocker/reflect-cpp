@@ -98,13 +98,59 @@ struct CountFieldsHelper {
   }
 
   template <std::size_t n = 0>
-  static consteval std::size_t count_max_args_in_agg_init() {
-    static_assert(n <= static_cast<std::size_t>(sizeof(T)));
-    if constexpr (constructible<n>() && !constructible<n + 1>()) {
+  static consteval std::size_t find_first_constructible() {
+    if constexpr (constructible<n>()) {
       return n;
+    } else if constexpr (n < static_cast<std::size_t>(sizeof(T))) {
+      return find_first_constructible<n + 1>();
     } else {
-      return count_max_args_in_agg_init<n + 1>();
+      static_assert(n < static_cast<std::size_t>(sizeof(T)),
+                    "Type is not aggregate-constructible; rfl::num_fields "
+                    "requires an aggregate type.");
+      return 0;
     }
+  }
+
+  template <std::size_t lo, std::size_t hi>
+  static consteval std::size_t binary_search_max() {
+    if constexpr (lo + 1 >= hi) {
+      return lo;
+    } else {
+      constexpr std::size_t mid = lo + (hi - lo) / 2;
+      if constexpr (constructible<mid>()) {
+        return binary_search_max<mid, hi>();
+      } else {
+        return binary_search_max<lo, mid>();
+      }
+    }
+  }
+
+  template <std::size_t lo, std::size_t step = 1>
+  static consteval std::size_t expand_and_search() {
+    static_assert(lo <= static_cast<std::size_t>(sizeof(T)));
+    constexpr std::size_t max_possible = static_cast<std::size_t>(sizeof(T));
+    constexpr std::size_t probe =
+        (step > max_possible - lo) ? (max_possible + 1) : (lo + step);
+    if constexpr (probe <= max_possible && constructible<probe>()) {
+      return expand_and_search<probe, step * 2>();
+    } else if constexpr (probe > max_possible && constructible<probe>()) {
+      static_assert(
+          probe <= max_possible,
+          "Type is constructible with more arguments than sizeof(T); "
+          "rfl::num_fields requires an aggregate type.");
+      return max_possible;
+    } else {
+      return binary_search_max<lo, probe>();
+    }
+  }
+
+  static consteval std::size_t count_max_args_in_agg_init() {
+    // Once constructible<first>() holds, constructible<k>() is monotone
+    // non-increasing for k >= first (every trailing member from `first` onward
+    // is default-initializable), so exponential + binary search finds the
+    // exact maximum in O(log N) SFINAE evaluations instead of O(N).
+    constexpr std::size_t first = find_first_constructible<0>();
+    return expand_and_search<first, 1>();
   }
 
   template <std::size_t index, std::size_t size, std::size_t rest>

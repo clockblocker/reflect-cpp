@@ -4,19 +4,98 @@
 #include <array>
 #include <memory>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 
 #include "../Ref.hpp"
 #include "../Tuple.hpp"
+#include "../internal/always_inline.hpp"
 #include "../internal/is_array.hpp"
 #include "../internal/no_extra_fields_v.hpp"
 #include "FieldErrors.hpp"
 #include "Parser_base.hpp"
+#include "find_field_index.hpp"
 #include "wrap_error.hpp"
 
 namespace rfl::parsing {
+
+namespace detail {
+
+/// Move-assigns a parsed field value into an already-constructed struct field.
+/// Free function parameterized only by (Target, Source)—never ViewType—so
+/// instantiations do not carry the enclosing NamedTuple in mangled symbol
+/// names or DWARF debug info.
+template <class Target, class Source>
+void move_assign_field(Target* _t, Source* _s) {
+  if constexpr (!rfl::internal::is_array_v<Source> &&
+                !std::is_array_v<Target>) {
+    if constexpr (std::is_const_v<Target>) {
+      // The struct was default-constructed, so *_t is a live const object
+      // and must not be assigned to. Re-create it in place instead. If the
+      // constructor throws, we are inside a noexcept function, so it cannot
+      // be destroyed twice.
+      using NonConstTarget = std::remove_const_t<Target>;
+      auto* const ptr = const_cast<NonConstTarget*>(_t);
+      std::destroy_at(ptr);
+      ::new (ptr) NonConstTarget(std::move(*_s));
+    } else {
+      *_t = Target(std::move(*_s));
+    }
+  } else if constexpr (rfl::internal::is_array_v<Source>) {
+    static_assert(std::is_array_v<Target>, "Expected target to be a c-array.");
+    for (size_t i = 0; i < _s->arr_.size(); ++i) {
+      detail::move_assign_field(&((*_t)[i]), &(_s->arr_[i]));
+    }
+  } else {
+    for (size_t i = 0; i < _s->size(); ++i) {
+      detail::move_assign_field(&((*_t)[i]), &((*_s)[i]));
+    }
+  }
+}
+
+/// Reads one field into an already-constructed view slot. Free function
+/// parameterized only by (R, W, OriginalType, ProcessorsType)—never the
+/// enclosing ViewType—so instantiations do not repeat the full NamedTuple in
+/// mangled symbol names or DWARF debug info.
+template <class R, class W, class OriginalType, class ProcessorsType>
+RFL_ALWAYS_INLINE void assign_default_view_field(
+    const R& _r, const typename R::InputVarType& _var,
+    const std::string_view _name, OriginalType& _slot,
+    FieldErrors<ProcessorsType>* _errors) {
+  using T = std::remove_cvref_t<std::remove_pointer_t<OriginalType>>;
+  auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
+  if (!res) [[unlikely]] {
+    _errors->emplace_back(wrap_field_error(_name, std::move(res).error()));
+    return;
+  }
+  if constexpr (std::is_pointer_v<OriginalType>) {
+    detail::move_assign_field(_slot, &(*res));
+  } else {
+    _slot = std::move(*res);
+  }
+}
+
+/// Reads one extra field into an already-constructed ExtraFields slot.
+template <class R, class W, class ExtraFieldsType, class ProcessorsType>
+void assign_extra_default_field(const R& _r,
+                                const std::string_view _current_name,
+                                const typename R::InputVarType& _var,
+                                ExtraFieldsType* _extra_fields,
+                                FieldErrors<ProcessorsType>* _errors) {
+  using T = std::remove_cvref_t<
+      std::remove_pointer_t<typename ExtraFieldsType::Type>>;
+  auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
+  if (!res) [[unlikely]] {
+    _errors->emplace_back(
+        wrap_field_error(_current_name, std::move(res).error()));
+    return;
+  }
+  _extra_fields->emplace(std::string(_current_name), std::move(*res));
+}
+
+}  // namespace detail
 
 template <class R, class W, class _ViewType, class ProcessorsType>
 class ViewReaderWithDefault {
@@ -68,69 +147,47 @@ class ViewReaderWithDefault {
   static constexpr size_t size() { return size_; }
 
  private:
-  template <int i>
-  static void assign_if_field_matches(const R& _r,
-                                      const std::string_view& _current_name,
-                                      const auto& _var, auto* _view,
-                                      auto* _errors, auto* _found,
-                                      bool* _already_assigned) {
-    using FieldType = tuple_element_t<i, typename ViewType::Fields>;
-    using OriginalType = typename FieldType::Type;
-    using T =
-        std::remove_cvref_t<std::remove_pointer_t<typename FieldType::Type>>;
-    constexpr auto name = FieldType::name();
-    if (!(*_already_assigned) && !std::get<i>(*_found) &&
-        _current_name == name) {
-      std::get<i>(*_found) = true;
-      *_already_assigned = true;
-      auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
-      if (!res) {
-        _errors->emplace_back(wrap_field_error(name, std::move(res).error()));
-        return;
-      }
-      if constexpr (std::is_pointer_v<OriginalType>) {
-        move_to(rfl::get<i>(*_view), &(*res));
-      } else {
-        rfl::get<i>(*_view) = std::move(*res);
-      }
-    }
-  }
-
-  template <int _pos>
-  static void assign_to_extra_fields(const R& _r,
-                                     const std::string_view& _current_name,
-                                     const auto& _var, auto* _view,
-                                     auto* _errors) {
-    auto* extra_fields = _view->template get<_pos>();
-    using ExtraFieldsType =
-        std::remove_cvref_t<std::remove_pointer_t<decltype(extra_fields)>>;
-    using T = std::remove_cvref_t<
-        std::remove_pointer_t<typename ExtraFieldsType::Type>>;
-    auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
-    if (!res) {
-      _errors->emplace_back(
-          wrap_field_error(_current_name, std::move(res).error()));
-      return;
-    }
-    extra_fields->emplace(std::string(_current_name), std::move(*res));
-  }
-
   template <int... is>
   static void assign_to_matching_field(const R& _r,
                                        const std::string_view& _current_name,
-                                       const auto& _var, auto* _view,
-                                       auto* _errors, auto* _found,
+                                       const InputVarType& _var,
+                                       ViewType* _view,
+                                       FieldErrors<ProcessorsType>* _errors,
+                                       std::array<bool, size_>* _found,
                                        std::integer_sequence<int, is...>) {
+    using Fields = typename ViewType::Fields;
     bool already_assigned = false;
-
-    (assign_if_field_matches<is>(_r, _current_name, _var, _view, _errors,
-                                 _found, &already_assigned),
-     ...);
+    if constexpr (size_ > 0) {
+      if (const int idx =
+              detail::FieldNameLookup<typename ViewType::Names>::find(
+                  _current_name);
+          idx >= 0) {
+        if (!(*_found)[static_cast<size_t>(idx)]) {
+          (*_found)[static_cast<size_t>(idx)] = true;
+          already_assigned = true;
+          static_cast<void>(
+              ((idx == is
+                    ? (detail::assign_default_view_field<
+                           R, W, typename tuple_element_t<is, Fields>::Type,
+                           ProcessorsType>(_r, _var,
+                                           tuple_element_t<is, Fields>::name(),
+                                           rfl::get<is>(*_view), _errors),
+                       true)
+                    : false) ||
+               ...));
+        }
+      }
+    }
 
     if constexpr (ViewType::pos_extra_fields() != -1) {
       constexpr int pos = ViewType::pos_extra_fields();
       if (!already_assigned) {
-        assign_to_extra_fields<pos>(_r, _current_name, _var, _view, _errors);
+        auto* extra_fields = _view->template get<pos>();
+        using ExtraFieldsType =
+            std::remove_cvref_t<std::remove_pointer_t<decltype(extra_fields)>>;
+        detail::assign_extra_default_field<R, W, ExtraFieldsType,
+                                           ProcessorsType>(
+            _r, _current_name, _var, extra_fields, _errors);
       }
     } else if constexpr (internal::no_extra_fields_v<ProcessorsType>) {
       if (!already_assigned) {
@@ -140,35 +197,6 @@ class ViewReaderWithDefault {
                   "rfl::ExtraFields to avoid this error message.";
         _errors->emplace_back(
             make_nested_error(std::string(_current_name), stream.str()));
-      }
-    }
-  }
-
-  template <class Target, class Source>
-  static void move_to(Target* _t, Source* _s) {
-    if constexpr (!rfl::internal::is_array_v<Source> &&
-                  !std::is_array_v<Target>) {
-      if constexpr (std::is_const_v<Target>) {
-        // The struct was default-constructed, so *_t is a live const object
-        // and must not be assigned to. Re-create it in place instead. If the
-        // constructor throws, we are inside a noexcept function, so it cannot
-        // be destroyed twice.
-        using NonConstTarget = std::remove_const_t<Target>;
-        auto* const ptr = const_cast<NonConstTarget*>(_t);
-        std::destroy_at(ptr);
-        ::new (ptr) NonConstTarget(std::move(*_s));
-      } else {
-        *_t = Target(std::move(*_s));
-      }
-    } else if constexpr (rfl::internal::is_array_v<Source>) {
-      static_assert(std::is_array_v<Target>,
-                    "Expected target to be a c-array.");
-      for (size_t i = 0; i < _s->arr_.size(); ++i) {
-        move_to(&((*_t)[i]), &(_s->arr_[i]));
-      }
-    } else {
-      for (size_t i = 0; i < _s->size(); ++i) {
-        move_to(&((*_t)[i]), &((*_s)[i]));
       }
     }
   }
