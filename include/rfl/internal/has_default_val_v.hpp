@@ -5,9 +5,7 @@
 #include <type_traits>
 
 #include "../NamedTuple.hpp"
-#include "../Tuple.hpp"
 #include "../named_tuple_t.hpp"
-#include "has_flattened_tagged_union.hpp"
 #include "is_default_val_v.hpp"
 #include "is_tagged_union.hpp"
 

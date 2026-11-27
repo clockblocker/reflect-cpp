@@ -131,21 +131,21 @@ struct FlattenedTUTuplePtrsToTypeList<rfl::Tuple<PtrTypes...>> {
 template <class W>
 struct FlattenedTUWrapperTraits;
 
-template <class T, class TagType, StringLiteral _discriminator,
+template <class T, class TagType_, StringLiteral _discriminator,
           bool _as_const_pointer>
 struct FlattenedTUWrapperTraits<parsing::TaggedUnionWrapperNoFields<
-    T, TagType, _discriminator, _as_const_pointer>> {
+    T, TagType_, _discriminator, _as_const_pointer>> {
   using Inner = T;
-  using TagFieldType = rfl::Rename<_discriminator, TagType>;
+  using TagType = TagType_;
   static constexpr auto discriminator_ = _discriminator;
 };
 
-template <class T, class TagType, StringLiteral _discriminator,
+template <class T, class TagType_, StringLiteral _discriminator,
           bool _as_const_pointer>
 struct FlattenedTUWrapperTraits<parsing::TaggedUnionWrapperWithFields<
-    T, TagType, _discriminator, _as_const_pointer>> {
+    T, TagType_, _discriminator, _as_const_pointer>> {
   using Inner = T;
-  using TagFieldType = rfl::Field<_discriminator, TagType>;
+  using TagType = TagType_;
   static constexpr auto discriminator_ = _discriminator;
 };
 
@@ -331,9 +331,7 @@ class FlattenedMixedViewReader {
     } else if constexpr (internal::no_extra_fields_v<ProcessorsType>) {
       if (!already_assigned) {
         std::stringstream stream;
-        stream << "Value named '" << std::string(_name)
-               << "' not used. Remove the rfl::NoExtraFields processor or add "
-                  "rfl::ExtraFields to avoid this error message.";
+        stream << "Value named '" << std::string(_name) << "' not used.";
         errors_->emplace_back(
             make_nested_error(std::string(_name), stream.str()));
       }
@@ -797,10 +795,13 @@ struct FlattenedTaggedUnionParser {
   }
 
   template <bool _target_is_live, class TargetT, class ValueT>
-  static void store_into_target(TargetT& _target, ValueT&& _val) {
+  static void store_into_target(TargetT& _target, ValueT&& _val) noexcept {
     if constexpr (_target_is_live) {
       if constexpr (std::is_const_v<TargetT> ||
                     !std::is_move_assignable_v<TargetT>) {
+        // Matches ViewReaderWithDefault::move_to's invariant: this helper is
+        // noexcept so a destroyed live sub-object can never unwind into its
+        // enclosing destructor and cause double-destruction UB.
         using NonConstT = std::remove_const_t<TargetT>;
         auto* const ptr = const_cast<NonConstT*>(&_target);
         std::destroy_at(ptr);
@@ -811,6 +812,19 @@ struct FlattenedTaggedUnionParser {
     } else {
       ::new (&_target) std::remove_const_t<TargetT>(std::forward<ValueT>(_val));
     }
+  }
+
+  template <class TUPtrs, size_t _after_idx>
+  static void destroy_tu_slots_after(TUPtrs& _tu_ptrs) noexcept {
+    constexpr size_t num_tus = rfl::tuple_size_v<TUPtrs>;
+    [&]<size_t... _is>(std::index_sequence<_is...>) {
+      (([&]() {
+         if constexpr (_is > _after_idx) {
+           std::destroy_at(rfl::get<static_cast<int>(_is)>(_tu_ptrs));
+         }
+       }()),
+       ...);
+    }(std::make_index_sequence<num_tus>());
   }
 
   template <bool _target_is_live, class S, class AccView, bool... LiveBits,
@@ -830,8 +844,8 @@ struct FlattenedTaggedUnionParser {
                              CleanS>) {
       using Traits = internal::FlattenedTUWrapperTraits<CleanS>;
       using TagField =
-          rfl::Field<Traits::discriminator_, decltype(&_target.tag)>;
-      auto tag_view = rfl::NamedTuple<TagField>(TagField(&_target.tag));
+          rfl::Field<Traits::discriminator_, decltype(&_target.tag.value_)>;
+      auto tag_view = rfl::NamedTuple<TagField>(TagField(&_target.tag.value_));
       auto next_acc = internal::flattened_tu_concat_named_tuples(
           std::forward<AccView>(_acc_view), std::move(tag_view));
       constexpr auto next_live =
@@ -841,7 +855,8 @@ struct FlattenedTaggedUnionParser {
           _r, _var, _obj_or_arr, _array_offset + 1, _target.fields.get(),
           std::move(next_acc), next_live, _cont, _leaf_succeeded);
       if (err && *_leaf_succeeded && !_target_is_live) {
-        auto own_tag_view = rfl::NamedTuple<TagField>(TagField(&_target.tag));
+        auto own_tag_view =
+            rfl::NamedTuple<TagField>(TagField(&_target.tag.value_));
         destroy_all_in_view(&own_tag_view);
       }
       return err;
@@ -881,8 +896,8 @@ struct FlattenedTaggedUnionParser {
           if (err) [[unlikely]] {
             return err;
           }
-          store_into_target<_target_is_live>(
-              _target, Reflector<CleanS>::to(std::move(refl_val)));
+          auto converted = Reflector<CleanS>::to(std::move(refl_val));
+          store_into_target<_target_is_live>(_target, std::move(converted));
           return std::nullopt;
         } else {
           alignas(ReflType) unsigned char refl_buf[sizeof(ReflType)]{};
@@ -898,8 +913,8 @@ struct FlattenedTaggedUnionParser {
             ReflType* p;
             ~ReflDestroyer() { p->~ReflType(); }
           } guard{refl_ptr};
-          store_into_target<_target_is_live>(
-              _target, Reflector<CleanS>::to(std::move(*refl_ptr)));
+          auto converted = Reflector<CleanS>::to(std::move(*refl_ptr));
+          store_into_target<_target_is_live>(_target, std::move(converted));
           return std::nullopt;
         }
       } catch (std::exception& e) {
@@ -1014,18 +1029,28 @@ struct FlattenedTaggedUnionParser {
             std::move(next_view), next_live, _cont, _leaf_succeeded);
       } else {
         auto* tu_ptr = rfl::get<static_cast<int>(slot.index)>(_tu_ptrs);
+        bool tail_succeeded = false;
         const auto next_cont = [&](auto& _view_after_tu,
                                    auto _live_after_tu,
                                    const size_t _offset_after_tu) {
-          return resolve_slots<_target_is_live, CleanS, _slot_i + 1, _delta>(
-              _r, _var, _obj_or_arr, _offset_after_tu, _reg_view, _tu_ptrs,
-              std::move(_view_after_tu), _live_after_tu, _cont,
-              _leaf_succeeded);
+          auto tail_err =
+              resolve_slots<_target_is_live, CleanS, _slot_i + 1, _delta>(
+                  _r, _var, _obj_or_arr, _offset_after_tu, _reg_view, _tu_ptrs,
+                  std::move(_view_after_tu), _live_after_tu, _cont,
+                  _leaf_succeeded);
+          if (!tail_err) {
+            tail_succeeded = true;
+          }
+          return tail_err;
         };
-        return resolve_one_tu<_target_is_live>(
+        auto err = resolve_one_tu<_target_is_live>(
             _r, _var, _obj_or_arr, _array_offset, tu_ptr,
             std::forward<AccView>(_acc_view), _live_seq, next_cont,
             _leaf_succeeded);
+        if (err && tail_succeeded && !_target_is_live) {
+          destroy_tu_slots_after<TUPtrs, slot.index>(_tu_ptrs);
+        }
+        return err;
       }
     }
   }
@@ -1157,10 +1182,9 @@ struct FlattenedTaggedUnionParser {
             *_result = embellish(std::move(*err));
             return;
           }
-          store_into_target<_tu_slot_is_live>(
-              *_tu_ptr,
-              internal::from_tagged_union_base<TUType>(
-                  BaseTU(extract_alt(alt))));
+          auto built = internal::from_tagged_union_base<TUType>(
+              BaseTU(extract_alt(alt)));
+          store_into_target<_tu_slot_is_live>(*_tu_ptr, std::move(built));
         } else {
           alignas(WrappedAlt) unsigned char alt_buf[sizeof(WrappedAlt)]{};
           auto* alt_ptr = internal::ptr_cast<WrappedAlt*>(&alt_buf);
@@ -1175,10 +1199,9 @@ struct FlattenedTaggedUnionParser {
             WrappedAlt* p;
             ~AltDestroyer() { p->~WrappedAlt(); }
           } guard{alt_ptr};
-          store_into_target<_tu_slot_is_live>(
-              *_tu_ptr,
-              internal::from_tagged_union_base<TUType>(
-                  BaseTU(extract_alt(*alt_ptr))));
+          auto built = internal::from_tagged_union_base<TUType>(
+              BaseTU(extract_alt(*alt_ptr)));
+          store_into_target<_tu_slot_is_live>(*_tu_ptr, std::move(built));
         }
       } catch (std::exception& e) {
         *_result = embellish(Error(e.what()));
@@ -1256,8 +1279,9 @@ struct FlattenedTaggedUnionParser {
     } else if constexpr (internal::is_wrapper_over_custom_reflection_v<
                              CleanX>) {
       using Traits = internal::FlattenedTUWrapperTraits<CleanX>;
-      using TagField = rfl::Field<Traits::discriminator_, decltype(&_x.tag)>;
-      const auto tag_nt = rfl::NamedTuple<TagField>(TagField(&_x.tag));
+      using TagField =
+          rfl::Field<Traits::discriminator_, decltype(&_x.tag.value_)>;
+      const auto tag_nt = rfl::NamedTuple<TagField>(TagField(&_x.tag.value_));
       Parser<R, W, rfl::NamedTuple<TagField>, ProcessorsType>::write_fields(
           _w, tag_nt, _obj);
       write_fields_into_object(_w, _x.fields.get(), _obj);
@@ -1361,7 +1385,7 @@ struct FlattenedTaggedUnionParser {
                              CleanX>) {
       using Traits = internal::FlattenedTUWrapperTraits<CleanX>;
       using TagField =
-          rfl::Field<Traits::discriminator_, typename Traits::TagFieldType>;
+          rfl::Field<Traits::discriminator_, typename Traits::TagType>;
       const auto tag_schema =
           Parser<R, W, rfl::NamedTuple<TagField>, ProcessorsType>::to_schema(
               _definitions);
