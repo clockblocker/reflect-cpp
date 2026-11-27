@@ -56,13 +56,19 @@ struct ParserCommented {
    */
   static Result<Commented<T>> read_into(const R& _r, const InputVarType& _var,
                                         Commented<T> _base) noexcept {
-    auto comment = std::move(_base.comment_);
-    return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
-               _r, _var, std::move(_base.value()))
-        .transform([&comment](auto&& _t) {
-          return Commented<T>(std::forward<decltype(_t)>(_t),
-                              std::move(comment));
-        });
+    try {
+      auto comment = std::move(_base.comment_);
+      auto res =
+          read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
+              _r, _var, std::move(_base.value()));
+      if (!res) {
+        return error(std::move(res).error());
+      }
+      return make_result_safe<Result<Commented<T>>>(
+          Commented<T>(std::move(*res), std::move(comment)));
+    } catch (std::exception& e) {
+      return error(e.what());
+    }
   }
 
   /**

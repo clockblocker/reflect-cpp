@@ -79,12 +79,17 @@ struct ParserBox {
     if constexpr (atomic::is_atomic_v<T>) {
       return read(_r, _var);
     } else {
-      const auto to_box = [](auto&& _t) {
-        return Box<T, C>::make(std::forward<decltype(_t)>(_t));
-      };
-      return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
-                 _r, _var, std::move(*_base))
-          .transform(to_box);
+      try {
+        auto res =
+            read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
+                _r, _var, std::move(*_base));
+        if (!res) {
+          return error(std::move(res).error());
+        }
+        return Box<T, C>::make(std::move(*res));
+      } catch (std::exception& e) {
+        return error(e.what());
+      }
     }
   }
 

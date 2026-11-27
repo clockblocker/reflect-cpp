@@ -118,14 +118,32 @@ class ViewReaderWithDefaultAndStrippedFieldNames {
             }
             move_to(rfl::get<i>(*_view), &(*res));
           } else {
-            auto res = read_into_or_read<R, W, T, ProcessorsType>(
-                _r, _var, std::move(*rfl::get<i>(*_view)));
-            if (!res) {
-              _errors->emplace_back(
-                  wrap_field_error(name, std::move(res).error()));
-              return;
+            if constexpr (requires {
+                            Parser<R, W, T, ProcessorsType>::read_into_in_place(
+                                _r, _var, rfl::get<i>(*_view));
+                          }) {
+              auto err = Parser<R, W, T, ProcessorsType>::read_into_in_place(
+                  _r, _var, rfl::get<i>(*_view));
+              if (err) {
+                _errors->emplace_back(wrap_field_error(name, std::move(*err)));
+                return;
+              }
+            } else {
+              auto res = [&]() -> Result<T> {
+                try {
+                  return read_into_or_read<R, W, T, ProcessorsType>(
+                      _r, _var, std::move(*rfl::get<i>(*_view)));
+                } catch (std::exception& e) {
+                  return error(e.what());
+                }
+              }();
+              if (!res) {
+                _errors->emplace_back(
+                    wrap_field_error(name, std::move(res).error()));
+                return;
+              }
+              move_to(rfl::get<i>(*_view), &(*res));
             }
-            move_to(rfl::get<i>(*_view), &(*res));
           }
         } else {
           if constexpr (std::is_const_v<OriginalType>) {
@@ -147,14 +165,32 @@ class ViewReaderWithDefaultAndStrippedFieldNames {
             }
             move_to(&rfl::get<i>(*_view), &(*res));
           } else {
-            auto res = read_into_or_read<R, W, T, ProcessorsType>(
-                _r, _var, std::move(rfl::get<i>(*_view)));
-            if (!res) {
-              _errors->emplace_back(
-                  wrap_field_error(name, std::move(res).error()));
-              return;
+            if constexpr (requires {
+                            Parser<R, W, T, ProcessorsType>::read_into_in_place(
+                                _r, _var, &rfl::get<i>(*_view));
+                          }) {
+              auto err = Parser<R, W, T, ProcessorsType>::read_into_in_place(
+                  _r, _var, &rfl::get<i>(*_view));
+              if (err) {
+                _errors->emplace_back(wrap_field_error(name, std::move(*err)));
+                return;
+              }
+            } else {
+              auto res = [&]() -> Result<T> {
+                try {
+                  return read_into_or_read<R, W, T, ProcessorsType>(
+                      _r, _var, std::move(rfl::get<i>(*_view)));
+                } catch (std::exception& e) {
+                  return error(e.what());
+                }
+              }();
+              if (!res) {
+                _errors->emplace_back(
+                    wrap_field_error(name, std::move(res).error()));
+                return;
+              }
+              move_to(&rfl::get<i>(*_view), &(*res));
             }
-            move_to(&rfl::get<i>(*_view), &(*res));
           }
         }
       } else {

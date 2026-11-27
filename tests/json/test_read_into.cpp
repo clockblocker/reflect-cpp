@@ -694,4 +694,51 @@ TEST(json, read_into_top_level_and_nested_const_fields) {
   EXPECT_TRUE(caught_as_result_error);
 }
 
+struct OuterWithThrowingInner {
+  WithThrowingConstField inner;
+};
+
+struct OuterWithOptionalThrowingInner {
+  std::optional<WithThrowingConstField> inner;
+};
+
+TEST(json, read_into_nested_and_optional_throwing_const_fields) {
+  // Non-const nested struct containing a throwing const field must convert
+  // copy exceptions into Result::error rather than calling std::terminate().
+  bool nested_caught_as_error = false;
+  for (int budget = 0; budget <= 12; ++budget) {
+    try {
+      const auto res = rfl::json::read_into(
+          OuterWithThrowingInner{
+              .inner = WithThrowingConstField{
+                  .payload = ThrowingCopyPayload(5, true, budget)}},
+          R"({"inner":{"payload":{"value":9}}})");
+      if (!res.has_value()) {
+        nested_caught_as_error = true;
+      }
+    } catch (const std::runtime_error&) {
+      // Thrown in non-noexcept caller parameter copy before entering parser.
+    }
+  }
+  EXPECT_TRUE(nested_caught_as_error);
+
+  // std::optional<WithThrowingConstField> must also never std::terminate().
+  bool opt_caught_as_error = false;
+  for (int budget = 0; budget <= 12; ++budget) {
+    try {
+      const auto res = rfl::json::read_into(
+          OuterWithOptionalThrowingInner{
+              .inner = WithThrowingConstField{
+                  .payload = ThrowingCopyPayload(5, true, budget)}},
+          R"({"inner":{"payload":{"value":9}}})");
+      if (!res.has_value()) {
+        opt_caught_as_error = true;
+      }
+    } catch (const std::runtime_error&) {
+      // Thrown in non-noexcept caller parameter copy before entering parser.
+    }
+  }
+  EXPECT_TRUE(opt_caught_as_error);
+}
+
 }  // namespace test_read_into

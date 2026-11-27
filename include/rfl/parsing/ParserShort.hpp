@@ -59,12 +59,18 @@ struct ParserShort<R, W, Short<_name, T>, ProcessorsType> {
   static Result<Short<_name, T>> read_into(const R& _r,
                                            const InputVarType& _var,
                                            Short<_name, T> _base) noexcept {
-    const auto to_short = [](auto&& _t) {
-      return Short<_name, T>(std::forward<decltype(_t)>(_t));
-    };
-    return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
-               _r, _var, std::move(_base.value()))
-        .transform(to_short);
+    try {
+      auto res =
+          read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
+              _r, _var, std::move(_base.value()));
+      if (!res) {
+        return error(std::move(res).error());
+      }
+      return make_result_safe<Result<Short<_name, T>>>(
+          Short<_name, T>(std::move(*res)));
+    } catch (std::exception& e) {
+      return error(e.what());
+    }
   }
 
   /**
