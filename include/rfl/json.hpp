@@ -8,6 +8,7 @@
 #include "json/load.hpp"
 #include "json/read.hpp"
 #include "json/save.hpp"
+#include "json/stream.hpp"
 #include "json/to_schema.hpp"
 #include "json/write.hpp"
 
