@@ -244,7 +244,9 @@ schema::Type type_to_json_schema_type(const parsing::schema::Type& _type,
     } else if constexpr (std::is_same<T, Type::Deprecated>()) {
       auto res = type_to_json_schema_type(*_t.type_, _no_required);
       const auto update_prediction = [&](auto _v) -> schema::Type {
-        _v.annotations.value_.description = _t.description_;
+        if (!_t.description_.empty()) {
+          _v.annotations.value_.description = _t.description_;
+        }
         _v.annotations.value_.deprecated = true;
         _v.annotations.value_.deprecationMessage = _t.deprecation_message_;
         return schema::Type{_v};

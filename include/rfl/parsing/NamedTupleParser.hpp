@@ -7,6 +7,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -15,6 +16,7 @@
 #include <vector>
 
 #include "../Generic.hpp"
+#include "../Metadata.hpp"
 #include "../NamedTuple.hpp"
 #include "../Result.hpp"
 #include "../internal/always_inline.hpp"
@@ -148,6 +150,22 @@ inline void set_schema_default_value(Generic _default, schema::Type* _schema) {
   });
 }
 
+/// Applies out-of-band `rfl::FieldMeta` (description / deprecation) to a field
+/// schema node without embedding long StringLiteral NTTPs in field types.
+inline void apply_field_metadata(schema::Type* _schema,
+                                 const FieldMeta& _meta) {
+  if (!_meta.deprecation_message.empty()) {
+    *_schema = schema::Type{schema::Type::Deprecated{
+        .deprecation_message_ = std::string(_meta.deprecation_message),
+        .description_ = std::string(_meta.description),
+        .type_ = Ref<schema::Type>::make(std::move(*_schema))}};
+  } else if (!_meta.description.empty()) {
+    *_schema = schema::Type{schema::Type::Description{
+        .description_ = std::string(_meta.description),
+        .type_ = Ref<schema::Type>::make(std::move(*_schema))}};
+  }
+}
+
 /// Free per-field serialization helper parameterized only by ValueType (never
 /// the enclosing NamedTuple's FieldTypes... pack).
 template <class R, class W, bool _ignore_empty_containers, bool _all_required,
@@ -215,7 +233,9 @@ template <class R, class W, bool _no_field_names, class ProcessorsType, class U,
           class SchemaType, class FieldValPtrT>
 void build_named_tuple_field_schema(
     std::map<std::string, schema::Type>* _definitions, SchemaType* _schema,
-    const std::string_view _name, const FieldValPtrT _field_val) noexcept {
+    const std::string_view _wire_name, const std::string_view _raw_name,
+    const FieldValPtrT _field_val,
+    const std::span<const FieldMeta> _field_meta) noexcept {
   using PtrT = std::remove_cvref_t<FieldValPtrT>;
   if constexpr (!internal::is_skip_v<U> && !internal::is_extra_fields_v<U>) {
     auto s = Parser<R, W, U, ProcessorsType>::to_schema(_definitions);
@@ -230,10 +250,17 @@ void build_named_tuple_field_schema(
             &s);
       }
     }
+    if (!_field_meta.empty()) {
+      if (const auto meta =
+              internal::find_field_metadata(_field_meta, _wire_name, _raw_name);
+          meta.has_value()) {
+        detail::apply_field_metadata(&s, *meta);
+      }
+    }
     if constexpr (_no_field_names) {
       _schema->types_.emplace_back(std::move(s));
     } else {
-      _schema->types_[std::string(_name)] = std::move(s);
+      _schema->types_[std::string(_wire_name)] = std::move(s);
     }
   }
 }
@@ -489,14 +516,19 @@ struct NamedTupleParser {
    * @brief Generates the schema for the named tuple.
    *
    * @param _definitions The map of definitions to add to.
+   * @param _view Optional view into a default-constructed instance.
+   * @param _field_meta Optional out-of-band field metadata (`rfl::Metadata<U>`).
+   * @param _raw_names Optional pre-processor field names for metadata lookup.
    * @return The schema type.
    */
   template <typename View = void>
   static schema::Type to_schema(
       std::map<std::string, schema::Type>* _definitions,
-      View* _view = nullptr) noexcept {
+      View* _view = nullptr,
+      const std::span<const FieldMeta> _field_meta = {},
+      const std::span<const std::string_view> _raw_names = {}) noexcept {
     SchemaType schema;
-    build_schema(_definitions, &schema, _view,
+    build_schema(_definitions, &schema, _view, _field_meta, _raw_names,
                  std::make_integer_sequence<int, size_>());
     return schema::Type{schema};
   }
@@ -517,6 +549,8 @@ struct NamedTupleParser {
   template <typename View, int... _is>
   static void build_schema(std::map<std::string, schema::Type>* _definitions,
                            SchemaType* _schema, View* _view,
+                           const std::span<const FieldMeta> _field_meta,
+                           const std::span<const std::string_view> _raw_names,
                            std::integer_sequence<int, _is...>) noexcept {
     if constexpr (!std::is_same_v<View, void>) {
       (detail::build_named_tuple_field_schema<
@@ -525,8 +559,12 @@ struct NamedTupleParser {
                typename internal::nth_element_t<_is, FieldTypes...>::Type>>(
            _definitions, _schema,
            internal::nth_element_t<_is, FieldTypes...>::name(),
+           static_cast<size_t>(_is) < _raw_names.size()
+               ? _raw_names[static_cast<size_t>(_is)]
+               : std::string_view{},
            _view ? detail::extract_schema_field_ptr(rfl::get<_is>(*_view))
-                 : nullptr),
+                 : nullptr,
+           _field_meta),
        ...);
     } else {
       (detail::build_named_tuple_field_schema<
@@ -534,7 +572,11 @@ struct NamedTupleParser {
            std::remove_cvref_t<
                typename internal::nth_element_t<_is, FieldTypes...>::Type>>(
            _definitions, _schema,
-           internal::nth_element_t<_is, FieldTypes...>::name(), nullptr),
+           internal::nth_element_t<_is, FieldTypes...>::name(),
+           static_cast<size_t>(_is) < _raw_names.size()
+               ? _raw_names[static_cast<size_t>(_is)]
+               : std::string_view{},
+           nullptr, _field_meta),
        ...);
     }
 
