@@ -2,6 +2,7 @@
 #define RFL_BOX_HPP_
 
 #include <memory>
+#include <type_traits>
 
 #include "Result.hpp"
 
@@ -50,6 +51,8 @@ class Box {
   }
 
   /// Default constructor - creates a Box containing a default-constructed T.
+  template <class U = T>
+    requires std::is_default_constructible_v<U>
   Box() : ptr_(std::make_unique<T>()) {}
 
   /// Copy constructor - only available when C == Copyability::COPYABLE.
