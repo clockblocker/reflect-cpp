@@ -1,11 +1,18 @@
 #ifndef RFL_PARSING_PARSER_DEFAULT_HPP_
 #define RFL_PARSING_PARSER_DEFAULT_HPP_
 
+#include <array>
+#include <cstddef>
 #include <map>
+#include <span>
 #include <string>
+#include <string_view>
 #include <type_traits>
+#include <utility>
 
+#include "../Metadata.hpp"
 #include "../Result.hpp"
+#include "../Tuple.hpp"
 #include "../always_false.hpp"
 #include "../internal/HasFromReflectionMethod.hpp"
 #include "../internal/always_inline.hpp"
@@ -23,6 +30,7 @@
 #include "../internal/processed_t.hpp"
 #include "../internal/ptr_cast.hpp"
 #include "../internal/to_ptr_named_tuple.hpp"
+#include "../named_tuple_t.hpp"
 #include "../to_view.hpp"
 #include "AreReaderAndWriter.hpp"
 #include "MapParser.hpp"
@@ -665,6 +673,27 @@ struct Parser {
 
       } else {
         using NamedTupleType = internal::processed_t<U, ProcessorsType>;
+        std::span<const FieldMeta> field_meta;
+        std::span<const std::string_view> raw_names_span;
+        if constexpr (internal::has_field_metadata_v<U>) {
+          field_meta = internal::get_field_metadata<U>();
+          using RawNT = named_tuple_t<U>;
+          if constexpr (NamedTupleType::size() >= RawNT::size()) {
+            // Processors such as rfl::AddStructName prepend synthetic fields
+            // before U's real members. Shift raw_names by the prefix length so
+            // index i aligns with NamedTupleType's field i.
+            constexpr size_t prefix = NamedTupleType::size() - RawNT::size();
+            static constexpr auto raw_names =
+                []<size_t... _is>(std::index_sequence<_is...>) {
+                  std::array<std::string_view, NamedTupleType::size()> arr{};
+                  ((arr[prefix + _is] =
+                        tuple_element_t<_is, typename RawNT::Fields>::name()),
+                   ...);
+                  return arr;
+                }(std::make_index_sequence<RawNT::size()>());
+            raw_names_span = raw_names;
+          }
+        }
         // The schema takes the default values of rfl::DefaultVal fields from
         // a default-constructed instance. A tagged union wrapper holds its
         // alternative through a pointer that U{} leaves null, so we construct
@@ -680,11 +709,21 @@ struct Parser {
               to_view(defaults));
           (*_definitions)[name] =
               Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-                  _definitions, &view);
+                  _definitions, &view, field_meta, raw_names_span);
         } else {
           (*_definitions)[name] =
               Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-                  _definitions);
+                  _definitions, static_cast<void*>(nullptr), field_meta,
+                  raw_names_span);
+        }
+      }
+
+      if constexpr (internal::has_struct_description_v<U>) {
+        auto desc = internal::get_struct_description<U>();
+        if (!desc.empty()) {
+          (*_definitions)[name] = Type{Type::Description{
+              .description_ = std::move(desc),
+              .type_ = Ref<Type>::make(std::move((*_definitions)[name]))}};
         }
       }
     }
