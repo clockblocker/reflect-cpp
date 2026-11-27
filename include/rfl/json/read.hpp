@@ -18,8 +18,8 @@
 namespace rfl {
 namespace json {
 
-/// Stop when done instead of issuing an error if there is additional content
-/// after a JSON document (e.g. NDJSON).
+/// Stop after parsing the first JSON value instead of issuing an error if
+/// trailing content follows.
 inline constexpr yyjson_read_flag stop_when_done = YYJSON_READ_STOP_WHEN_DONE;
 
 /// Allow a single trailing comma at the end of an object or array.

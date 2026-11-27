@@ -45,8 +45,11 @@ inline constexpr yyjson_write_flag inf_and_nan_as_null =
 inline constexpr yyjson_write_flag write_allow_invalid_unicode =
     YYJSON_WRITE_ALLOW_INVALID_UNICODE;
 
+#if defined(YYJSON_VERSION_HEX) && YYJSON_VERSION_HEX >= 0x000900
 /// Append a trailing newline `\n` at the end of the JSON output.
+/// Requires yyjson >= 0.9.0.
 inline constexpr yyjson_write_flag newline_at_end = YYJSON_WRITE_NEWLINE_AT_END;
+#endif
 
 /// Returns a JSON string representation of the object.
 /// Uses compile-time reflection to serialize a C++ object to JSON format.

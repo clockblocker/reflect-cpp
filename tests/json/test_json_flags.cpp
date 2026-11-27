@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <optional>
 #include <rfl.hpp>
@@ -46,7 +48,9 @@ TEST(json, test_json_flags_values_disambiguated) {
                 YYJSON_WRITE_INF_AND_NAN_AS_NULL);
   static_assert(rfl::json::write_allow_invalid_unicode ==
                 YYJSON_WRITE_ALLOW_INVALID_UNICODE);
+#if defined(YYJSON_VERSION_HEX) && YYJSON_VERSION_HEX >= 0x000900
   static_assert(rfl::json::newline_at_end == YYJSON_WRITE_NEWLINE_AT_END);
+#endif
 
   static_assert(rfl::json::stop_when_done == YYJSON_READ_STOP_WHEN_DONE);
   static_assert(rfl::json::allow_trailing_commas ==
@@ -113,13 +117,20 @@ TEST(json, test_pretty_two_spaces_vs_pretty) {
       rfl::json::write(cfg, rfl::json::pretty | rfl::json::pretty_two_spaces),
       expected_two_spaces);
 
-  // Also verify to_schema accepts pretty_two_spaces.
+  // Also verify to_schema accepts pretty_two_spaces (and newline_at_end when
+  // supported by yyjson >= 0.9.0).
+#if defined(YYJSON_VERSION_HEX) && YYJSON_VERSION_HEX >= 0x000900
   const auto schema = rfl::json::to_schema<Config>(
       rfl::json::pretty_two_spaces | rfl::json::newline_at_end);
   EXPECT_NE(schema.find("\n  \"$schema\""), std::string::npos);
   EXPECT_EQ(schema.back(), '\n');
+#else
+  const auto schema = rfl::json::to_schema<Config>(rfl::json::pretty_two_spaces);
+  EXPECT_NE(schema.find("\n  \"$schema\""), std::string::npos);
+#endif
 }
 
+#if defined(YYJSON_VERSION_HEX) && YYJSON_VERSION_HEX >= 0x000900
 TEST(json, test_newline_at_end) {
   const auto wrapper = TextWrapper{.text = "hello"};
 
@@ -134,6 +145,7 @@ TEST(json, test_newline_at_end) {
                    rfl::json::pretty_two_spaces | rfl::json::newline_at_end);
   EXPECT_EQ(oss.str(), "{\n  \"text\": \"hello\"\n}\n");
 }
+#endif
 
 TEST(json, test_escape_slashes) {
   const auto wrapper = TextWrapper{.text = "https://example.com/a/b"};
@@ -150,7 +162,7 @@ TEST(json, test_escape_slashes) {
 }
 
 TEST(json, test_escape_unicode) {
-  // "café" in UTF-8: c a f \xC3 \xA9 (U+00E9)
+  // "cafe" with U+00E9 in UTF-8: c a f \xC3 \xA9
   const auto wrapper = TextWrapper{.text = "caf\xC3\xA9"};
 
   const auto escaped = rfl::json::write(wrapper, rfl::json::escape_unicode);
@@ -201,7 +213,7 @@ TEST(json, test_allow_trailing_commas) {
 TEST(json, test_jsonc_combined_flags) {
   const std::string jsonc_doc = R"({
     // Configuration for server
-    "name": "slang",
+    "name": "my-server",
     /* Listen port */
     "port": 9000,
     "hosts": [
@@ -220,13 +232,13 @@ TEST(json, test_jsonc_combined_flags) {
   const auto res_or = rfl::json::read<Config>(
       jsonc_doc, rfl::json::allow_comments | rfl::json::allow_trailing_commas);
   ASSERT_TRUE(res_or.has_value());
-  EXPECT_EQ(res_or.value().name, "slang");
+  EXPECT_EQ(res_or.value().name, "my-server");
   EXPECT_EQ(res_or.value().port, 9000);
   EXPECT_EQ(res_or.value().hosts, (std::vector<std::string>{"127.0.0.1", "::1"}));
 
   const auto res_jsonc = rfl::json::read<Config>(jsonc_doc, rfl::json::jsonc);
   ASSERT_TRUE(res_jsonc.has_value());
-  EXPECT_EQ(res_jsonc.value().name, "slang");
+  EXPECT_EQ(res_jsonc.value().name, "my-server");
 
   // Also test istream overload with jsonc flag.
   std::istringstream iss(jsonc_doc);
@@ -315,52 +327,110 @@ TEST(json, test_invalid_unicode_flags) {
 
 #if defined(YYJSON_VERSION_HEX) && YYJSON_VERSION_HEX >= 0x000C00
 TEST(json, test_json5_flags) {
-  const std::string json5_doc = R"({
-    // JSON5 document
-    name: 'json5-app',
-    port: 0x1F90,
-    hosts: ['localhost',],
-  })";
+  const std::string json5_doc =
+      "{\v\n"
+      "  // JSON5 document\n"
+      "  name: 'json5-\\x41pp',\n"
+      "  port: 0x1F90,\n"
+      "  hosts: ['localhost',],\n"
+      "}";
 
   EXPECT_FALSE(rfl::json::read<Config>(json5_doc).has_value());
 
   const auto res = rfl::json::read<Config>(json5_doc, rfl::json::json5);
   ASSERT_TRUE(res.has_value());
-  EXPECT_EQ(res.value().name, "json5-app");
+  EXPECT_EQ(res.value().name, "json5-App");
   EXPECT_EQ(res.value().port, 0x1F90);
   EXPECT_EQ(res.value().hosts, std::vector<std::string>{"localhost"});
 
-  // Also test composing individual JSON5 extension flags.
+  // Also test composing all individual JSON5 extension flags.
   const auto res_composed = rfl::json::read<Config>(
       json5_doc, rfl::json::allow_comments | rfl::json::allow_trailing_commas |
                      rfl::json::allow_unquoted_key |
                      rfl::json::allow_single_quoted_str |
-                     rfl::json::allow_ext_number);
+                     rfl::json::allow_ext_number |
+                     rfl::json::allow_ext_escape |
+                     rfl::json::allow_ext_whitespace);
   ASSERT_TRUE(res_composed.has_value());
-  EXPECT_EQ(res_composed.value().name, "json5-app");
+  EXPECT_EQ(res_composed.value().name, "json5-App");
   EXPECT_EQ(res_composed.value().port, 0x1F90);
 }
 #endif
 
 TEST(json, test_save_and_load_with_flags) {
-  const auto path =
-      (std::filesystem::temp_directory_path() / "rfl_test_json_flags.json")
-          .string();
+  struct TempDirGuard {
+    std::filesystem::path dir;
+    TempDirGuard() {
+      const auto base = std::filesystem::temp_directory_path();
+      const auto stamp =
+          std::chrono::steady_clock::now().time_since_epoch().count();
+      for (int attempt = 0; attempt < 1000; ++attempt) {
+        auto candidate = base / ("rfl_json_flags_test_" +
+                                 std::to_string(stamp) + "_" +
+                                 std::to_string(attempt));
+        std::error_code ec;
+        if (std::filesystem::create_directory(candidate, ec)) {
+          dir = std::move(candidate);
+          return;
+        }
+      }
+      throw std::runtime_error("Failed to create temporary directory");
+    }
+    ~TempDirGuard() {
+      if (!dir.empty()) {
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+      }
+    }
+  };
 
+  TempDirGuard tmp;
+  const auto saved_path = (tmp.dir / "saved.json").string();
   const auto cfg =
       Config{.name = "saved", .port = 8081, .hosts = {"127.0.0.1"}};
 
-  const auto save_res = rfl::json::save(
-      path, cfg, rfl::json::pretty_two_spaces | rfl::json::newline_at_end);
+#if defined(YYJSON_VERSION_HEX) && YYJSON_VERSION_HEX >= 0x000900
+  const auto write_flags =
+      rfl::json::pretty_two_spaces | rfl::json::newline_at_end;
+#else
+  const auto write_flags = rfl::json::pretty_two_spaces;
+#endif
+  const auto save_res = rfl::json::save(saved_path, cfg, write_flags);
   ASSERT_TRUE(save_res.has_value());
 
-  const auto load_res = rfl::json::load<Config>(path, rfl::json::jsonc);
+  // Verify the saved file actually honored the write flags.
+  {
+    std::ifstream ifs(saved_path, std::ios::binary);
+    ASSERT_TRUE(ifs.is_open());
+    const std::string content((std::istreambuf_iterator<char>(ifs)),
+                              std::istreambuf_iterator<char>());
+    EXPECT_NE(content.find("\n  \"name\": \"saved\""), std::string::npos);
+#if defined(YYJSON_VERSION_HEX) && YYJSON_VERSION_HEX >= 0x000900
+    ASSERT_FALSE(content.empty());
+    EXPECT_EQ(content.back(), '\n');
+#endif
+  }
+
+  // Write a JSONC file with comments + trailing comma and verify load flags.
+  const auto jsonc_path = (tmp.dir / "config.jsonc").string();
+  {
+    std::ofstream ofs(jsonc_path, std::ios::binary);
+    ASSERT_TRUE(ofs.is_open());
+    ofs << "{\n"
+        << "  // comment\n"
+        << "  \"name\": \"saved\",\n"
+        << "  \"port\": 8081,\n"
+        << "  \"hosts\": [\"127.0.0.1\",],\n"
+        << "}\n";
+  }
+
+  EXPECT_FALSE(rfl::json::load<Config>(jsonc_path).has_value());
+
+  const auto load_res = rfl::json::load<Config>(jsonc_path, rfl::json::jsonc);
   ASSERT_TRUE(load_res.has_value());
   EXPECT_EQ(load_res.value().name, "saved");
   EXPECT_EQ(load_res.value().port, 8081);
   EXPECT_EQ(load_res.value().hosts, std::vector<std::string>{"127.0.0.1"});
-
-  std::filesystem::remove(path);
 }
 
 }  // namespace test_json_flags

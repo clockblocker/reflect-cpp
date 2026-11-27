@@ -80,7 +80,7 @@ rfl::json::write(person, std::cout) << std::endl;
 
 ## Read and write flags
 
-`rfl::json` provides `inline constexpr` flag constants (combinable with `|`) so you do not need to reference underlying `YYJSON_*` macros directly.
+`rfl::json` provides `inline constexpr` flag constants (combinable with `|`) so you do not need to reference underlying `YYJSON_*` constants directly.
 
 ### Read flags (`rfl::json::read` and `rfl::json::load`)
 
@@ -90,7 +90,7 @@ rfl::json::write(person, std::cout) << std::endl;
 | `rfl::json::allow_trailing_commas` | Allow a single trailing comma at the end of an object or array |
 | `rfl::json::jsonc` | Shorthand for `allow_comments \| allow_trailing_commas` (JSONC) |
 | `rfl::json::allow_bom` | Allow and skip a leading UTF-8 BOM *(requires yyjson >= 0.11.0)* |
-| `rfl::json::stop_when_done` | Stop after the first JSON value instead of failing on trailing content (e.g. NDJSON) |
+| `rfl::json::stop_when_done` | Stop after the first JSON value and ignore trailing content |
 | `rfl::json::read_allow_inf_and_nan` | Allow `Inf`, `Infinity`, and `NaN` numbers and literals |
 | `rfl::json::read_allow_invalid_unicode` | Allow invalid UTF-8 byte sequences in string values |
 | `rfl::json::allow_ext_number` | Allow hex numbers, leading/trailing decimal points, and leading `+` *(requires yyjson >= 0.12.0)* |
@@ -116,7 +116,7 @@ const auto result2 = rfl::json::read<Person>(jsonc_string, rfl::json::jsonc);
 | --- | --- |
 | `rfl::json::pretty` | Pretty-print with 4-space indentation |
 | `rfl::json::pretty_two_spaces` | Pretty-print with 2-space indentation (overrides `pretty`) |
-| `rfl::json::newline_at_end` | Append a trailing `\n` to the output |
+| `rfl::json::newline_at_end` | Append a trailing `\n` to the output *(requires yyjson >= 0.9.0)* |
 | `rfl::json::escape_unicode` | Escape non-ASCII characters as `\uXXXX` for ASCII-only output |
 | `rfl::json::escape_slashes` | Escape `/` as `\/` |
 | `rfl::json::write_allow_inf_and_nan` | Write `Inf`/`NaN` as `Infinity`/`NaN` literals (non-standard) |
@@ -130,7 +130,7 @@ const std::string json_string = rfl::json::write(
     person, rfl::json::pretty_two_spaces | rfl::json::newline_at_end);
 ```
 
-> Note: `read_allow_inf_and_nan` / `write_allow_inf_and_nan` and `read_allow_invalid_unicode` / `write_allow_invalid_unicode` are prefixed with `read_` / `write_` because the underlying read and write flag bit values differ.
+> Note: `read_allow_inf_and_nan` / `write_allow_inf_and_nan` and `read_allow_invalid_unicode` / `write_allow_invalid_unicode` are prefixed with `read_` / `write_` because the underlying read and write flag bit values differ. Unsafe/incompatible read flags (`YYJSON_READ_INSITU`, `YYJSON_READ_NUMBER_AS_RAW`, `YYJSON_READ_BIGNUM_AS_RAW`) are intentionally not exposed (`YYJSON_READ_INSITU` is rejected at runtime).
 
 ## Custom constructors
 
