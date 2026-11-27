@@ -14,6 +14,7 @@
 
 #include "../Metadata.hpp"
 #include "../Result.hpp"
+#include "../SchemaExt.hpp"
 #include "../always_false.hpp"
 #include "../internal/DeferredDefaults.hpp"
 #include "../internal/HasFromReflectionMethod.hpp"
@@ -422,6 +423,7 @@ struct Parser {
                                                                          _var);
 
       } else if constexpr (internal::default_if_missing_v<ProcessorsType> ||
+                           internal::struct_default_if_missing_v<T> ||
                            internal::has_unwrapped_default_val_v<T> ||
                            (internal::has_default_val_v<T> &&
                             requires { T{}; }) ||
@@ -874,8 +876,34 @@ struct Parser {
 
     } else if constexpr (internal::is_tagged_union_based<U>) {
       using BaseTU = internal::tagged_union_base_t<U>;
-      return ParserTaggedUnion<R, W, BaseTU, ProcessorsType>::to_schema(
-          _definitions);
+      if constexpr (std::is_same_v<U, BaseTU> &&
+                    !internal::has_schema_name_v<U> &&
+                    !internal::has_struct_description_v<U> &&
+                    !internal::has_schema_annotations_v<U>) {
+        return ParserTaggedUnion<R, W, BaseTU, ProcessorsType>::to_schema(
+            _definitions);
+      } else {
+        const auto name = make_type_name<U>();
+        if (_definitions->find(name) == _definitions->end()) {
+          (*_definitions)[name] =
+              Type{Type::Integer{}};  // Placeholder to avoid infinite loop.
+          auto def = ParserTaggedUnion<R, W, BaseTU, ProcessorsType>::to_schema(
+              _definitions);
+          if constexpr (internal::has_struct_description_v<U>) {
+            const auto struct_desc = internal::get_struct_description<U>();
+            if (!struct_desc.empty()) {
+              def = Type{Type::Description{
+                  .description_ = std::string(struct_desc),
+                  .type_ = Ref<Type>::make(std::move(def))}};
+            }
+          }
+          if constexpr (internal::has_schema_annotations_v<U>) {
+            apply_schema_annotations(&def, internal::get_schema_annotations<U>());
+          }
+          (*_definitions)[name] = std::move(def);
+        }
+        return Type{Type::Reference{name}};
+      }
 
     } else if constexpr (is_rename_v<U>) {
       return ParserRename<R, W, U, ProcessorsType>::to_schema(_definitions);
@@ -922,8 +950,12 @@ struct Parser {
     } else if constexpr (rfl::internal::is_transparent_wrapper_v<U>) {
       // Read and written through its ReflectionType, but described as the
       // type itself rather than as a named reference, like rfl::Short.
-      return Parser<R, W, typename U::Type, ProcessorsType>::to_schema(
+      auto s = Parser<R, W, typename U::Type, ProcessorsType>::to_schema(
           _definitions);
+      if constexpr (internal::has_schema_annotations_v<U>) {
+        apply_schema_annotations(&s, internal::get_schema_annotations<U>());
+      }
+      return s;
 
     } else if constexpr (is_reference_wrapper_v<U>) {
       return ParserReferenceWrapper<R, W, typename U::type,
@@ -980,7 +1012,26 @@ struct Parser {
       return make_deprecated<U>(_definitions);
 
     } else if constexpr (std::is_class_v<U> && std::is_aggregate_v<U>) {
-      return make_reference<U>(_definitions);
+      if constexpr (internal::schema_extension_inline_v<U> &&
+                    internal::has_reflection_type_v<U>) {
+        auto s = Parser<R, W, typename U::ReflectionType,
+                        ProcessorsType>::to_schema(_definitions);
+        if constexpr (internal::has_schema_annotations_v<U>) {
+          apply_schema_annotations(&s, internal::get_schema_annotations<U>());
+        }
+        return s;
+      } else if constexpr (internal::schema_extension_inline_v<U> &&
+                           (internal::has_read_reflector<U> ||
+                            internal::has_write_reflector<U>)) {
+        auto s = Parser<R, W, typename Reflector<U>::ReflType,
+                        ProcessorsType>::to_schema(_definitions);
+        if constexpr (internal::has_schema_annotations_v<U>) {
+          apply_schema_annotations(&s, internal::get_schema_annotations<U>());
+        }
+        return s;
+      } else {
+        return make_reference<U>(_definitions);
+      }
 
     } else if constexpr (internal::is_literal_v<U>) {
       return Type{Type::Literal{.values_ = U::strings()}};
@@ -991,7 +1042,26 @@ struct Parser {
     } else if constexpr (internal::has_reflection_type_v<U> ||
                          internal::has_read_reflector<U> ||
                          internal::has_write_reflector<U>) {
-      return make_reference<U>(_definitions);
+      if constexpr (internal::schema_extension_inline_v<U> &&
+                    internal::has_reflection_type_v<U>) {
+        auto s = Parser<R, W, typename U::ReflectionType,
+                        ProcessorsType>::to_schema(_definitions);
+        if constexpr (internal::has_schema_annotations_v<U>) {
+          apply_schema_annotations(&s, internal::get_schema_annotations<U>());
+        }
+        return s;
+      } else if constexpr (internal::schema_extension_inline_v<U> &&
+                           (internal::has_read_reflector<U> ||
+                            internal::has_write_reflector<U>)) {
+        auto s = Parser<R, W, typename Reflector<U>::ReflType,
+                        ProcessorsType>::to_schema(_definitions);
+        if constexpr (internal::has_schema_annotations_v<U>) {
+          apply_schema_annotations(&s, internal::get_schema_annotations<U>());
+        }
+        return s;
+      } else {
+        return make_reference<U>(_definitions);
+      }
 
     } else {
       static_assert(rfl::always_false_v<U>, "Unsupported type.");
@@ -1050,8 +1120,14 @@ struct Parser {
       } else {
         using NamedTupleType = internal::processed_t<U, ProcessorsType>;
         const auto field_meta = internal::get_field_metadata<U>();
+        const auto field_ann = internal::get_field_schema_annotations<U>();
+        const Object<SchemaAnnotations>* field_ann_ptr =
+            field_ann.empty() ? nullptr : &field_ann;
+        constexpr bool has_any_field_lookup =
+            internal::has_field_metadata_v<U> ||
+            internal::HasMetadataFieldAnnotationsFn<U>;
         const auto get_raw_names = [&]() -> std::span<const std::string_view> {
-          if constexpr (internal::has_field_metadata_v<U>) {
+          if constexpr (has_any_field_lookup) {
             using RawNT = rfl::named_tuple_t<U>;
             if constexpr (NamedTupleType::size() >= RawNT::size()) {
               constexpr size_t prefix = NamedTupleType::size() - RawNT::size();
@@ -1069,11 +1145,13 @@ struct Parser {
           return {};
         };
         const auto raw_names = get_raw_names();
+        constexpr bool struct_dim = internal::struct_default_if_missing_v<U>;
         // The schema takes the default values of rfl::DefaultVal fields (and
-        // all fields under rfl::DefaultIfMissing) from a default-constructed
-        // instance. A tagged union wrapper holds its alternative through a
-        // pointer that U{} leaves null, so we construct the wrapper that holds
-        // the alternative by value instead.
+        // all fields under rfl::DefaultIfMissing or per-struct
+        // DefaultIfMissingFor<U>) from a default-constructed instance. A tagged
+        // union wrapper holds its alternative through a pointer that U{} leaves
+        // null, so we construct the wrapper that holds the alternative by value
+        // instead.
         using DefaultsType = tagged_union_wrapper_no_ptr_t<U>;
         if constexpr (internal::has_unwrapped_default_val_v<U>) {
           static_assert(requires { DefaultsType{}; },
@@ -1085,41 +1163,46 @@ struct Parser {
                       requires { DefaultsType{}; }) {
           try {
             (*_definitions)[name] =
-                schema_with_defaults<DefaultsType, NamedTupleType>(
-                    _definitions, field_meta, raw_names);
+                schema_with_defaults<DefaultsType, NamedTupleType, struct_dim>(
+                    _definitions, field_meta, raw_names, field_ann_ptr);
           } catch (std::exception&) {
             if (internal::has_unwrapped_default_val_v<U>) {
               throw;
             }
             (*_definitions)[name] =
-                Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-                    _definitions, static_cast<void*>(nullptr), nullptr,
-                    field_meta, raw_names);
+                Parser<R, W, NamedTupleType, ProcessorsType>::template to_schema<
+                    void, struct_dim>(_definitions, static_cast<void*>(nullptr),
+                                      nullptr, field_meta, raw_names,
+                                      field_ann_ptr);
           }
-        } else if constexpr (internal::default_if_missing_v<ProcessorsType>) {
+        } else if constexpr (internal::default_if_missing_v<ProcessorsType> ||
+                             struct_dim) {
           if constexpr (internal::is_safe_default_constructible_v<
                             DefaultsType>) {
             try {
               (*_definitions)[name] =
-                  schema_with_defaults<DefaultsType, NamedTupleType>(
-                      _definitions, field_meta, raw_names);
+                  schema_with_defaults<DefaultsType, NamedTupleType,
+                                       struct_dim>(_definitions, field_meta,
+                                                   raw_names, field_ann_ptr);
             } catch (...) {
               (*_definitions)[name] =
-                  Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-                      _definitions, static_cast<void*>(nullptr), nullptr,
-                      field_meta, raw_names);
+                  Parser<R, W, NamedTupleType, ProcessorsType>::
+                      template to_schema<void, struct_dim>(
+                          _definitions, static_cast<void*>(nullptr), nullptr,
+                          field_meta, raw_names, field_ann_ptr);
             }
           } else {
             (*_definitions)[name] =
-                Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-                    _definitions, static_cast<void*>(nullptr), nullptr,
-                    field_meta, raw_names);
+                Parser<R, W, NamedTupleType, ProcessorsType>::template to_schema<
+                    void, struct_dim>(_definitions, static_cast<void*>(nullptr),
+                                      nullptr, field_meta, raw_names,
+                                      field_ann_ptr);
           }
         } else {
           (*_definitions)[name] =
               Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
                   _definitions, static_cast<void*>(nullptr), nullptr,
-                  field_meta, raw_names);
+                  field_meta, raw_names, field_ann_ptr);
         }
       }
       if constexpr (internal::has_struct_description_v<U>) {
@@ -1129,6 +1212,10 @@ struct Parser {
               .description_ = std::string(struct_desc),
               .type_ = Ref<Type>::make(std::move((*_definitions)[name]))}};
         }
+      }
+      if constexpr (internal::has_schema_annotations_v<U>) {
+        apply_schema_annotations(&(*_definitions)[name],
+                                 internal::get_schema_annotations<U>());
       }
     }
     return Type{Type::Reference{name}};
@@ -1143,30 +1230,38 @@ struct Parser {
   /// reading requires them. If an invalid default value has been used up while
   /// constructing, the schema has no default values at all. Anything else that
   /// throws is passed on.
-  template <class U, class NamedTupleType>
+  template <class U, class NamedTupleType,
+            bool _struct_default_if_missing = false>
   static schema::Type schema_with_defaults(
       std::map<std::string, schema::Type>* _definitions,
       const std::span<const FieldMeta> _field_meta = {},
-      const std::span<const std::string_view> _raw_names = {}) {
+      const std::span<const std::string_view> _raw_names = {},
+      const Object<SchemaAnnotations>* _field_annotations = nullptr) {
     internal::DeferredDefaults deferred;
     auto defaults = default_construct<U>(&deferred);
     auto view = ProcessorsType::template process<U>(to_view(defaults));
     using ViewType = decltype(view);
     if (deferred.num() == 0) [[likely]] {
-      return Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-          _definitions, &view, nullptr, _field_meta, _raw_names);
+      return Parser<R, W, NamedTupleType, ProcessorsType>::template to_schema<
+          ViewType, _struct_default_if_missing>(_definitions, &view, nullptr,
+                                                _field_meta, _raw_names,
+                                                _field_annotations);
     }
     if (!holds_all_deferred(deferred, view)) {
       auto all_no_default = std::array<bool, ViewType::size()>{};
       all_no_default.fill(true);
-      return Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-          _definitions, &view, &all_no_default, _field_meta, _raw_names);
+      return Parser<R, W, NamedTupleType, ProcessorsType>::template to_schema<
+          ViewType, _struct_default_if_missing>(
+          _definitions, &view, &all_no_default, _field_meta, _raw_names,
+          _field_annotations);
     }
     auto no_default = std::array<bool, ViewType::size()>{};
     mark_invalid_defaults_in_view(view, &no_default,
                                   std::make_index_sequence<ViewType::size()>());
-    return Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-        _definitions, &view, &no_default, _field_meta, _raw_names);
+    return Parser<R, W, NamedTupleType, ProcessorsType>::template to_schema<
+        ViewType, _struct_default_if_missing>(_definitions, &view, &no_default,
+                                              _field_meta, _raw_names,
+                                              _field_annotations);
   }
 
   template <class U>
@@ -1246,7 +1341,8 @@ struct Parser {
         }
         auto err =
             Parser<R, W, ViewType, ProcessorsType>::read_view_with_default(
-                _r, _var, &view, any_deferred ? &found : nullptr);
+                _r, _var, &view, any_deferred ? &found : nullptr,
+                internal::struct_default_if_missing_v<T>);
         if (!err && any_deferred) [[unlikely]] {
           if constexpr (ViewType::pos_extra_fields() != -1) {
             if (extra_was_empty) {
@@ -1264,6 +1360,7 @@ struct Parser {
       }
     } catch (std::exception& e) {
       if constexpr (!internal::default_if_missing_v<ProcessorsType> &&
+                    !internal::struct_default_if_missing_v<T> &&
                     !internal::has_unwrapped_default_val_v<T> &&
                     !internal::default_if_null_v<ProcessorsType>) {
         // Its only rfl::DefaultVal fields are inside rfl::Short,
@@ -1397,7 +1494,9 @@ struct Parser {
             ? "it contains rfl::DefaultVal"
             : (internal::default_if_missing_v<ProcessorsType>
                    ? "it is read with rfl::DefaultIfMissing"
-                   : "it is read with rfl::DefaultIfNull");
+                   : (internal::struct_default_if_missing_v<T>
+                          ? "it opts into per-struct DefaultIfMissing"
+                          : "it is read with rfl::DefaultIfNull"));
     return Error(
         "Could not default-construct " + type_name_t<T>().str() +
         ", which is required because " + reason +

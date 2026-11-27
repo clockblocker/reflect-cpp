@@ -42,6 +42,7 @@
 #include "../Ref.hpp"
 #include "../Rename.hpp"
 #include "../Result.hpp"
+#include "../SchemaExt.hpp"
 #include "../Short.hpp"
 #include "../TaggedUnion.hpp"
 #include "../TriState.hpp"
@@ -521,23 +522,24 @@ inline Generic to_default_generic(const U& _val) {
 }
 
 /// Sets the default value of the DefaultVal node in `_schema`. Rename, Short,
-/// Positional and ImplicitValue leave no node in the schema, but Description
-/// and Deprecated wrap the DefaultVal node in one of their own.
+/// Positional and ImplicitValue leave no node in the schema, but Description,
+/// Deprecated and Annotated wrap the DefaultVal node in one of their own.
 inline void set_schema_default_value(Generic _default, schema::Type* _schema) {
   _schema->variant_.visit([&](auto& _s) {
     using S = std::remove_cvref_t<decltype(_s)>;
     if constexpr (std::is_same_v<S, schema::Type::DefaultVal>) {
       _s.default_value_ = std::move(_default);
     } else if constexpr (std::is_same_v<S, schema::Type::Description> ||
-                         std::is_same_v<S, schema::Type::Deprecated>) {
+                         std::is_same_v<S, schema::Type::Deprecated> ||
+                         std::is_same_v<S, schema::Type::Annotated>) {
       set_schema_default_value(std::move(_default), &*_s.type_);
     }
   });
 }
 
 /// Replaces the DefaultVal node in `_schema` by the type it holds, which makes
-/// the field required. Description and Deprecated wrap the DefaultVal node in
-/// one of their own.
+/// the field required. Description, Deprecated and Annotated wrap the
+/// DefaultVal node in one of their own.
 inline void remove_schema_default_val(schema::Type* _schema) {
   std::optional<schema::Type> inner;
   _schema->variant_.visit([&](auto& _s) {
@@ -545,7 +547,8 @@ inline void remove_schema_default_val(schema::Type* _schema) {
     if constexpr (std::is_same_v<S, schema::Type::DefaultVal>) {
       inner = *_s.type_;
     } else if constexpr (std::is_same_v<S, schema::Type::Description> ||
-                         std::is_same_v<S, schema::Type::Deprecated>) {
+                         std::is_same_v<S, schema::Type::Deprecated> ||
+                         std::is_same_v<S, schema::Type::Annotated>) {
       remove_schema_default_val(&*_s.type_);
     }
   });
@@ -554,8 +557,23 @@ inline void remove_schema_default_val(schema::Type* _schema) {
   }
 }
 
-/// Applies out-of-band `rfl::FieldMeta` (description / deprecation) to a field
-/// schema node without embedding long StringLiteral NTTPs in field types.
+/// Applies `rfl::SchemaAnnotations` (`title`, `examples`, and `x-*` extension
+/// keywords) to a schema node.
+inline void apply_schema_annotations(schema::Type* _schema,
+                                     const SchemaAnnotations& _ann) {
+  if (_ann.empty()) {
+    return;
+  }
+  *_schema = schema::Type{schema::Type::Annotated{
+      .title_ = _ann.title,
+      .examples_ = _ann.examples,
+      .extensions_ = _ann.extensions,
+      .type_ = Ref<schema::Type>::make(std::move(*_schema))}};
+}
+
+/// Applies out-of-band `rfl::FieldMeta` (description / deprecation / title) to
+/// a field schema node without embedding long StringLiteral NTTPs in field
+/// types.
 inline void apply_field_metadata(schema::Type* _schema,
                                  const FieldMeta& _meta) {
   if (!_meta.deprecation_message.empty()) {
@@ -566,6 +584,13 @@ inline void apply_field_metadata(schema::Type* _schema,
   } else if (!_meta.description.empty()) {
     *_schema = schema::Type{schema::Type::Description{
         .description_ = std::string(_meta.description),
+        .type_ = Ref<schema::Type>::make(std::move(*_schema))}};
+  }
+  if (!_meta.title.empty()) {
+    *_schema = schema::Type{schema::Type::Annotated{
+        .title_ = std::string(_meta.title),
+        .examples_ = std::nullopt,
+        .extensions_ = {},
         .type_ = Ref<schema::Type>::make(std::move(*_schema))}};
   }
 }
@@ -643,12 +668,14 @@ RFL_ALWAYS_INLINE auto extract_schema_field_ptr(const SlotT& _slot) noexcept {
 /// pointers (`T (*)[N]` vs `rfl::internal::Array<T[N]>`) and non-pointer
 /// processor-added slots (`const void*` / `nullptr`) work cleanly.
 template <class R, class W, bool _no_field_names, class ProcessorsType, class U,
-          class SchemaType, class FieldValPtrT>
+          bool _struct_default_if_missing = false, class SchemaType,
+          class FieldValPtrT>
 void build_named_tuple_field_schema(
     std::map<std::string, schema::Type>* _definitions, SchemaType* _schema,
     const std::string_view _wire_name, const std::string_view _raw_name,
     const FieldValPtrT _field_val, const bool _no_default_flag,
-    const std::span<const FieldMeta> _field_meta) noexcept {
+    const std::span<const FieldMeta> _field_meta,
+    const Object<SchemaAnnotations>* _field_annotations = nullptr) noexcept {
   using PtrT = std::remove_cvref_t<FieldValPtrT>;
   if constexpr (!internal::skip_serialization_v<U> &&
                 !internal::is_extra_fields_v<U>) {
@@ -677,7 +704,8 @@ void build_named_tuple_field_schema(
               }
             }
           }
-        } else if constexpr (internal::default_if_missing_v<ProcessorsType> &&
+        } else if constexpr ((internal::default_if_missing_v<ProcessorsType> ||
+                              _struct_default_if_missing) &&
                              internal::CanWriteGeneric<U>) {
           bool skip_default = false;
           if constexpr (std::is_pointer_v<U>) {
@@ -703,6 +731,26 @@ void build_named_tuple_field_schema(
               internal::find_field_metadata(_field_meta, _wire_name, _raw_name);
           meta.has_value()) {
         apply_field_metadata(&s, *meta);
+      }
+    }
+    if (_field_annotations != nullptr && !_field_annotations->empty()) {
+      const SchemaAnnotations* matched = nullptr;
+      for (const auto& [k, v] : *_field_annotations) {
+        if (k == _wire_name) {
+          matched = &v;
+          break;
+        }
+      }
+      if (!matched && !_raw_name.empty()) {
+        for (const auto& [k, v] : *_field_annotations) {
+          if (k == _raw_name) {
+            matched = &v;
+            break;
+          }
+        }
+      }
+      if (matched) {
+        apply_schema_annotations(&s, *matched);
       }
     }
     if constexpr (_no_field_names) {
@@ -1004,19 +1052,22 @@ struct NamedTupleParser {
    */
   static std::optional<Error> read_view_with_default(
       const R& _r, const InputVarType& _var, NamedTuple<FieldTypes...>* _view,
-      std::array<bool, size_>* _found = nullptr) noexcept {
+      std::array<bool, size_>* _found = nullptr,
+      const bool _struct_default_if_missing = false) noexcept {
     if constexpr (_no_field_names) {
       auto arr = _r.to_array(_var);
       if (!arr) [[unlikely]] {
         return arr.error();
       }
-      return read_object_or_array_with_default(_r, *arr, _view, _found);
+      return read_object_or_array_with_default(_r, *arr, _view, _found,
+                                               _struct_default_if_missing);
     } else {
       auto obj = _r.to_object(_var);
       if (!obj) [[unlikely]] {
         return obj.error();
       }
-      return read_object_or_array_with_default(_r, *obj, _view, _found);
+      return read_object_or_array_with_default(_r, *obj, _view, _found,
+                                               _struct_default_if_missing);
     }
   }
 
@@ -1142,16 +1193,18 @@ struct NamedTupleParser {
    * @param _raw_names Optional original C++ member names for metadata lookup.
    * @return The schema type.
    */
-  template <typename View = void>
+  template <typename View = void, bool _struct_default_if_missing = false>
   static schema::Type to_schema(
       std::map<std::string, schema::Type>* _definitions,
       View* _view = nullptr,
       const std::array<bool, size_>* _no_default = nullptr,
       const std::span<const FieldMeta> _field_meta = {},
-      const std::span<const std::string_view> _raw_names = {}) noexcept {
+      const std::span<const std::string_view> _raw_names = {},
+      const Object<SchemaAnnotations>* _field_annotations = nullptr) noexcept {
     SchemaType schema;
-    build_schema(_definitions, &schema, _view, _no_default, _field_meta,
-                 _raw_names, std::make_integer_sequence<int, size_>());
+    build_schema<View, _struct_default_if_missing>(
+        _definitions, &schema, _view, _no_default, _field_meta, _raw_names,
+        _field_annotations, std::make_integer_sequence<int, size_>());
     return schema::Type{schema};
   }
 
@@ -1180,38 +1233,42 @@ struct NamedTupleParser {
      ...);
   }
 
-  template <typename View, int... _is>
-  static void build_schema(std::map<std::string, schema::Type>* _definitions,
-                           SchemaType* _schema, View* _view,
-                           const std::array<bool, size_>* _no_default,
-                           const std::span<const FieldMeta> _field_meta,
-                           const std::span<const std::string_view> _raw_names,
-                           std::integer_sequence<int, _is...>) noexcept {
+  template <typename View, bool _struct_default_if_missing = false, int... _is>
+  static void build_schema(
+      std::map<std::string, schema::Type>* _definitions, SchemaType* _schema,
+      View* _view, const std::array<bool, size_>* _no_default,
+      const std::span<const FieldMeta> _field_meta,
+      const std::span<const std::string_view> _raw_names,
+      const Object<SchemaAnnotations>* _field_annotations,
+      std::integer_sequence<int, _is...>) noexcept {
     if constexpr (!std::is_same_v<View, void>) {
       (build_named_tuple_field_schema<
            R, W, _no_field_names, ProcessorsType,
            std::remove_cvref_t<
-               typename internal::nth_element_t<_is, FieldTypes...>::Type>>(
+               typename internal::nth_element_t<_is, FieldTypes...>::Type>,
+           _struct_default_if_missing>(
            _definitions, _schema,
            internal::nth_element_t<_is, FieldTypes...>::name(),
            static_cast<size_t>(_is) < _raw_names.size()
                ? _raw_names[static_cast<size_t>(_is)]
                : std::string_view{},
            _view ? extract_schema_field_ptr(rfl::get<_is>(*_view)) : nullptr,
-           _no_default != nullptr && std::get<_is>(*_no_default), _field_meta),
+           _no_default != nullptr && std::get<_is>(*_no_default), _field_meta,
+           _field_annotations),
        ...);
     } else {
       (build_named_tuple_field_schema<
            R, W, _no_field_names, ProcessorsType,
            std::remove_cvref_t<
-               typename internal::nth_element_t<_is, FieldTypes...>::Type>>(
+               typename internal::nth_element_t<_is, FieldTypes...>::Type>,
+           _struct_default_if_missing>(
            _definitions, _schema,
            internal::nth_element_t<_is, FieldTypes...>::name(),
            static_cast<size_t>(_is) < _raw_names.size()
                ? _raw_names[static_cast<size_t>(_is)]
                : std::string_view{},
            nullptr, _no_default != nullptr && std::get<_is>(*_no_default),
-           _field_meta),
+           _field_meta, _field_annotations),
        ...);
     }
 
@@ -1288,7 +1345,8 @@ struct NamedTupleParser {
 
   static std::optional<Error> read_object_or_array_with_default(
       const R& _r, const InputObjectOrArrayType& _obj_or_arr,
-      NamedTupleType* _view, std::array<bool, size_>* _found) noexcept {
+      NamedTupleType* _view, std::array<bool, size_>* _found,
+      const bool _struct_default_if_missing = false) noexcept {
     FieldErrors<ProcessorsType> errors;
     const auto reader = ViewReaderWithDefaultType(&_r, _view, &errors);
     if constexpr (_no_field_names) {
@@ -1306,7 +1364,8 @@ struct NamedTupleParser {
       *_found = reader.found();
     }
     if constexpr (!internal::default_if_missing_v<ProcessorsType>) {
-      if (!should_stop_on_field_error<ProcessorsType>(errors)) {
+      if (!_struct_default_if_missing &&
+          !should_stop_on_field_error<ProcessorsType>(errors)) {
         handle_missing_fields</*_defaults_constructed=*/true>(
             _r, _obj_or_arr, reader.found(), *_view, nullptr, &errors,
             /*_value_initialize_default_vals=*/false,

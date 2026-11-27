@@ -2,6 +2,7 @@
 #define RFL_PARSING_SCHEMA_TYPE_HPP_
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -32,6 +33,11 @@ struct RFL_API Type {
   struct UInt64 {};
 
   struct Integer {};
+
+  struct BoundedInteger {
+    int64_t minimum_;
+    rfl::Variant<int64_t, uint64_t> maximum_;
+  };
 
   struct Float {};
 
@@ -119,12 +125,20 @@ struct RFL_API Type {
     ValidationType validation_;
   };
 
+  struct Annotated {
+    std::optional<std::string> title_;
+    std::optional<std::vector<Generic>> examples_;
+    rfl::Object<Generic> extensions_;
+    Ref<Type> type_;
+  };
+
   using VariantType =
       rfl::Variant<Boolean, Bytestring, Vectorstring, Int32, Int64, UInt32,
-                   UInt64, Integer, Float, Double, String, AnyOf, DefaultVal,
-                   Deprecated, Description, DescribedLiteral,
-                   FixedSizeTypedArray, Literal, Object, Optional, Reference,
-                   StringMap, Tuple, TypedArray, Validated>;
+                   UInt64, Integer, BoundedInteger, Float, Double, String,
+                   AnyOf, Annotated, DefaultVal, Deprecated, Description,
+                   DescribedLiteral, FixedSizeTypedArray, Literal, Object,
+                   Optional, Reference, StringMap, Tuple, TypedArray,
+                   Validated>;
 
   /**
    * @brief Default constructor.

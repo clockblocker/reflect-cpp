@@ -196,6 +196,12 @@ schema::Type type_to_capnproto_schema_type(
                          std::is_same<T, Type::Integer>()) {
       return schema::Type{.value = schema::Type::Int32{}};
 
+    } else if constexpr (std::is_same<T, Type::BoundedInteger>()) {
+      if (_t.minimum_ < 0) {
+        return schema::Type{.value = schema::Type::Int64{}};
+      }
+      return schema::Type{.value = schema::Type::UInt64{}};
+
     } else if constexpr (std::is_same<T, Type::Int64>()) {
       return schema::Type{.value = schema::Type::Int64{}};
 
@@ -222,7 +228,8 @@ schema::Type type_to_capnproto_schema_type(
       return type_to_capnproto_schema_type(*_t.type_, _definitions, _parent,
                                            _cnp_types);
 
-    } else if constexpr (std::is_same<T, Type::Description>()) {
+    } else if constexpr (std::is_same<T, Type::Description>() ||
+                         std::is_same<T, Type::Annotated>()) {
       return type_to_capnproto_schema_type(*_t.type_, _definitions, _parent,
                                            _cnp_types);
 

@@ -10,6 +10,7 @@
 #include <string>
 
 #include "../Processors.hpp"
+#include "../SchemaExt.hpp"
 #include "../Variant.hpp"
 #include "../common.hpp"
 #include "../internal/default_if_missing_v.hpp"
@@ -28,6 +29,16 @@ struct TypeHelper<rfl::Variant<Ts...>> {
   using JSONSchemaType = rfl::Variant<schema::JSONSchema<Ts>...>;
 };
 
+struct SchemaRenderOptions {
+  bool no_required = false;
+  bool omit_empty_required = false;
+  bool tuple_bounds = false;
+};
+
+RFL_API std::string to_schema_internal_schema(
+    const parsing::schema::Definition& internal_schema, const yyjson_write_flag,
+    const SchemaRenderOptions& _options, const std::string& comment = "");
+
 RFL_API std::string to_schema_internal_schema(
     const parsing::schema::Definition& internal_schema, const yyjson_write_flag,
     const bool _no_required, const std::string& comment = "");
@@ -38,8 +49,12 @@ std::string to_schema(const yyjson_write_flag _flag = 0,
                       const std::string& comment = "") {
   using P = Processors<Ps...>;
   const auto internal_schema = parsing::schema::make<Reader, Writer, T, P>();
-  return to_schema_internal_schema(internal_schema, _flag,
-                                   internal::default_if_missing_v<P>, comment);
+  const SchemaRenderOptions options{
+      .no_required = internal::default_if_missing_v<P>,
+      .omit_empty_required = internal::omit_empty_required_v<P>,
+      .tuple_bounds = internal::tuple_bounds_v<P>,
+  };
+  return to_schema_internal_schema(internal_schema, _flag, options, comment);
 }
 }  // namespace rfl::json
 

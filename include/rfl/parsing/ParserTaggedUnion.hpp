@@ -4,6 +4,7 @@
 #include <map>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <type_traits>
 #include <utility>
 
@@ -24,6 +25,7 @@
 #include "TaggedUnionWrapper.hpp"
 #include "default_construct.hpp"
 #include "is_tagged_union_wrapper.hpp"
+#include "make_type_name.hpp"
 #include "schema/Type.hpp"
 #include "schemaful/IsSchemafulReader.hpp"
 #include "schemaful/IsSchemafulWriter.hpp"
@@ -145,14 +147,36 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
    * @return The schema type.
    */
   static schema::Type to_schema(
-      std::map<std::string, schema::Type>* _definitions) noexcept {
+      std::map<std::string, schema::Type>* _definitions) {
     if constexpr (schemaful::IsSchemafulReader<R> &&
                   schemaful::IsSchemafulWriter<W>) {
       return Parser<R, W, Variant<AlternativeTypes...>,
                     ProcessorsType>::to_schema(_definitions);
     } else {
-      validate_tagged_union_no_collisions<
-          TaggedUnion<_discriminator, AlternativeTypes...>, ProcessorsType>();
+      using SelfType = TaggedUnion<_discriminator, AlternativeTypes...>;
+      validate_tagged_union_no_collisions<SelfType, ProcessorsType>();
+
+      const auto name = make_type_name<SelfType>();
+      if (_definitions->find(name) != _definitions->end()) {
+        return schema::Type{schema::Type::Reference{name}};
+      }
+
+      // Break cycles for recursive bare `rfl::TaggedUnion` aliases (e.g.
+      // `using Expr = rfl::TaggedUnion<"kind", Lit, Binary>;` where `Binary`
+      // holds `rfl::Box<Expr>`). Non-recursive tagged unions stay inline so
+      // existing schemas are completely unchanged.
+      thread_local std::map<std::string, bool> active_unions;
+      if (const auto it = active_unions.find(name); it != active_unions.end()) {
+        it->second = true;
+        return schema::Type{schema::Type::Reference{name}};
+      }
+      struct ActiveUnionGuard {
+        std::map<std::string, bool>* map;
+        std::string key;
+        ~ActiveUnionGuard() { map->erase(key); }
+      };
+      active_unions.emplace(name, false);
+      const ActiveUnionGuard guard{&active_unions, name};
 
       using VariantType = std::variant<std::remove_cvref_t<decltype(
           wrap_if_necessary<AlternativeTypes>(
@@ -166,6 +190,10 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
         if (auto* any_of = rfl::get_if<schema::Type::AnyOf>(&type.variant_)) {
           any_of->mutually_exclusive_ = true;
         }
+      }
+      if (active_unions[name]) {
+        (*_definitions)[name] = std::move(type);
+        return schema::Type{schema::Type::Reference{name}};
       }
       return type;
     }

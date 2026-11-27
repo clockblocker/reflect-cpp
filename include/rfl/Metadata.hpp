@@ -26,6 +26,9 @@ struct FieldMeta {
   /// Optional deprecation message. When non-empty, marks the field deprecated
   /// in generated schemas (alongside `description`, matching `rfl::Deprecated`).
   std::string_view deprecation_message = {};
+
+  /// Optional JSON Schema `title` annotation.
+  std::string_view title = {};
 };
 
 /// Specialize `rfl::Metadata<T>` to attach zero-bloat out-of-band metadata to

@@ -72,12 +72,16 @@ struct ParserEnum {
       return _r.template to_basic_type<std::string>(_var).and_then(
           [](const std::string& _s) {
             return rfl::parse_enum_icase<
-                T, internal::enum_names_only_v<ProcessorsType>>(_s);
+                T, internal::enum_names_only_v<ProcessorsType>,
+                ProcessorsType>(_s);
           });
     } else {
       return _r.template to_basic_type<std::string>(_var).and_then(
-          rfl::string_to_enum<T, internal::enum_names_only_v<
-              ProcessorsType>>);
+          [](const std::string& _s) {
+            return rfl::string_to_enum<
+                T, internal::enum_names_only_v<ProcessorsType>,
+                ProcessorsType>(_s);
+          });
     }
   }
 
@@ -99,7 +103,7 @@ struct ParserEnum {
       const auto val = static_cast<std::underlying_type_t<T>>(_var);
       ParentType::add_value(_w, val, _parent);
     } else {
-      const auto str = rfl::enum_to_string(_var);
+      const auto str = rfl::enum_to_string<T, ProcessorsType>(_var);
       ParentType::add_value(_w, str, _parent);
     }
   }
@@ -137,12 +141,20 @@ struct ParserEnum {
       constexpr auto enumerators = get_enumerator_array<U>();
       for (const auto& [name, value] : enumerators) {
         auto desc = config::enum_descriptions<U>::get(value);
+        auto wire =
+            internal::resolve_enum_wire_name<U, ProcessorsType>(value, name);
         described.values_.push_back(
             Type::DescribedLiteral::ValueWithDescription{
-                .value_ = std::string(name),
+                .value_ = std::move(wire),
                 .description_ = std::string(desc)});
       }
       return Type{std::move(described)};
+    } else if constexpr (internal::has_custom_enum_names_v<U, ProcessorsType>) {
+      std::vector<std::string> vals;
+      for (const auto& [wire, _v] : get_enum_wire_names<U, ProcessorsType>()) {
+        vals.push_back(wire);
+      }
+      return Type{Type::Literal{.values_ = std::move(vals)}};
     } else {
       return Parser<
           R, W,

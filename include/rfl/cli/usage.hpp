@@ -180,7 +180,7 @@ std::optional<std::string> format_default_value(
     } else if constexpr (rfl::internal::underlying_enums_v<ProcessorsType>) {
       return std::to_string(static_cast<std::underlying_type_t<U>>(_val));
     } else {
-      const auto s = rfl::enum_to_string(_val);
+      const auto s = rfl::enum_to_string<U, ProcessorsType>(_val);
       return s.empty() ? std::string("\"\"") : s;
     }
   } else if constexpr (parsing::is_optional_v<U> ||
@@ -756,11 +756,11 @@ class UsageWalker {
                                                             delimiter_)
                      : std::nullopt);
       } else {
-        constexpr auto enumerators = rfl::get_enumerator_array<U>();
+        const auto wire_names = rfl::get_enum_wire_names<U, ProcessorsType>();
         std::vector<std::string> values;
-        values.reserve(enumerators.size());
-        for (const auto& [name, val] : enumerators) {
-          values.emplace_back(name);
+        values.reserve(wire_names.size());
+        for (const auto& [name, val] : wire_names) {
+          values.push_back(name);
         }
         add_choices(values, std::move(_arg),
                     (_emit_default && _default_ptr)

@@ -25,7 +25,8 @@ struct CaseInsensitiveEnums {
 /// Case-insensitive ASCII lookup for declared enumerators of `EnumType`.
 /// Falls back to `rfl::string_to_enum<EnumType, _enum_names_only>` on no match
 /// so numeric strings and error wording match standard enum parsing.
-template <class EnumType, bool _enum_names_only = false>
+template <class EnumType, bool _enum_names_only = false,
+          class ProcessorsType = Processors<>>
 Result<EnumType> parse_enum_icase(const std::string_view _str) noexcept {
   const auto eq_icase = [](std::string_view _a, std::string_view _b) noexcept {
     if (_a.size() != _b.size()) {
@@ -39,13 +40,28 @@ Result<EnumType> parse_enum_icase(const std::string_view _str) noexcept {
     }
     return true;
   };
-  constexpr auto enumerators = get_enumerator_array<EnumType>();
-  for (const auto& [name, val] : enumerators) {
-    if (eq_icase(name, _str)) {
-      return val;
+  if constexpr (internal::has_custom_enum_names_v<EnumType, ProcessorsType>) {
+    for (const auto& [wire, val] :
+         get_enum_wire_names<EnumType, ProcessorsType>()) {
+      if (eq_icase(wire, _str)) {
+        return val;
+      }
+    }
+    for (const auto& [val, wire] : internal::get_enum_overrides<EnumType>()) {
+      if (eq_icase(wire, _str)) {
+        return val;
+      }
+    }
+  } else {
+    constexpr auto enumerators = get_enumerator_array<EnumType>();
+    for (const auto& [name, val] : enumerators) {
+      if (eq_icase(name, _str)) {
+        return val;
+      }
     }
   }
-  return string_to_enum<EnumType, _enum_names_only>(std::string(_str));
+  return string_to_enum<EnumType, _enum_names_only, ProcessorsType>(
+      std::string(_str));
 }
 
 }  // namespace rfl
