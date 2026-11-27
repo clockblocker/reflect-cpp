@@ -28,10 +28,25 @@ inline bool needs_bracket_quoting(const std::string_view _key) {
 }
 
 inline std::string quote_bracket_key(const std::string_view _key) {
+  static constexpr char kHex[] = "0123456789abcdef";
   std::string out = "[\"";
-  for (const char ch : _key) {
-    if (ch == '\\' || ch == '"') out.push_back('\\');
-    out.push_back(ch);
+  for (const unsigned char ch : _key) {
+    if (ch == '\\' || ch == '"') {
+      out.push_back('\\');
+      out.push_back(static_cast<char>(ch));
+    } else if (ch == '\n') {
+      out += "\\n";
+    } else if (ch == '\r') {
+      out += "\\r";
+    } else if (ch == '\t') {
+      out += "\\t";
+    } else if (ch < 0x20 || ch == 0x7f) {
+      out += "\\x";
+      out.push_back(kHex[(ch >> 4) & 0x0f]);
+      out.push_back(kHex[ch & 0x0f]);
+    } else {
+      out.push_back(static_cast<char>(ch));
+    }
   }
   return out + "\"]";
 }
@@ -72,21 +87,27 @@ inline void append_multiline(std::string& _out, const std::string_view _prefix,
 inline void render_children(const std::vector<TreeNode>& _nodes,
                             const size_t _node_idx,
                             const std::string& _prefix, std::string& _out) {
+  static constexpr std::string_view kBranchMid = "\xE2\x94\x9C\xE2\x94\x80 ";
+  static constexpr std::string_view kBranchLast = "\xE2\x94\x94\xE2\x94\x80 ";
+  static constexpr std::string_view kIndentMid = "\xE2\x94\x82  ";
+  static constexpr std::string_view kIndentLast = "   ";
   const auto& node = _nodes[_node_idx];
   const size_t total = node.messages.size() + node.children.size();
   size_t item = 0;
   for (const auto& msg : node.messages) {
     const bool is_last = (++item == total);
-    append_multiline(_out, _prefix, is_last ? "└─ " : "├─ ",
-                     _prefix + (is_last ? "   " : "│  "), msg);
+    append_multiline(_out, _prefix, is_last ? kBranchLast : kBranchMid,
+                     _prefix + std::string(is_last ? kIndentLast : kIndentMid),
+                     msg);
   }
   for (const auto& [segment, child_idx] : node.children) {
     const bool is_last = (++item == total);
     if (!_out.empty()) _out.push_back('\n');
     _out += _prefix;
-    _out += is_last ? "└─ " : "├─ ";
+    _out += is_last ? kBranchLast : kBranchMid;
     _out += format_segment_label(segment);
-    render_children(_nodes, child_idx, _prefix + (is_last ? "   " : "│  "),
+    render_children(_nodes, child_idx,
+                    _prefix + std::string(is_last ? kIndentLast : kIndentMid),
                     _out);
   }
 }
@@ -163,17 +184,7 @@ inline std::string format_error_tree(const Error& _err, LeafHook&& _hook) {
       }
       cur = next;
     }
-    std::string leaf(_hook(detail));
-    const auto append_location = [&](const auto& _d) {
-      if constexpr (requires { _d.location; }) {
-        if (_d.location.has_value()) {
-          leaf += " (line " + std::to_string(_d.location->line) + ", col " +
-                  std::to_string(_d.location->column) + ")";
-        }
-      }
-    };
-    append_location(detail);
-    nodes[cur].messages.emplace_back(std::move(leaf));
+    nodes[cur].messages.emplace_back(_hook(detail));
   }
 
   if (nodes[0].children.empty() && nodes[0].messages.size() == 1) {
