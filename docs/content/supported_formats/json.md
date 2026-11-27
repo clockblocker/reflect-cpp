@@ -118,3 +118,29 @@ rfl::Result<Person> Person::from_json_obj(const JSONVar& _obj) {
 This will force the compiler to only compile the JSON parsing when the
 source file is compiled.
 
+## Raw JSON Passthrough (`rfl::json::Raw`)
+
+Use `rfl::json::Raw` when a struct contains a JSON subtree that you want to
+pass through without converting into intermediate C++ types:
+
+```cpp
+struct Envelope {
+    int id;
+    rfl::json::Raw payload;
+};
+
+const auto env = rfl::json::read<Envelope>(
+    R"({"id":1,"payload":{"nested":[1,2,3]}})").value();
+const auto out = rfl::json::write(env);
+```
+
+When constructing `rfl::json::Raw` from untrusted input, prefer the validating
+factory `rfl::json::Raw::from_string(...)` (which returns `rfl::Result<rfl::json::Raw>`)
+rather than the unchecked `explicit` constructors, because writing emits the
+stored JSON text verbatim via `yyjson_mut_rawncpy`.
+
+On read, `rfl::json::Raw` captures the parsed `yyjson` subtree via
+`yyjson_val_write`, which canonicalizes whitespace. Pass `YYJSON_READ_BIGNUM_AS_RAW`
+to `rfl::json::read` if integers wider than 64 bits must be preserved verbatim.
+`rfl::json::Raw` is supported with `rfl::json` only.
+
