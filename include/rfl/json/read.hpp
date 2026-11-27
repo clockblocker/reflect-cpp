@@ -18,6 +18,56 @@
 namespace rfl {
 namespace json {
 
+/// Stop when done instead of issuing an error if there is additional content
+/// after a JSON document (e.g. NDJSON).
+inline constexpr yyjson_read_flag stop_when_done = YYJSON_READ_STOP_WHEN_DONE;
+
+/// Allow a single trailing comma at the end of an object or array.
+inline constexpr yyjson_read_flag allow_trailing_commas =
+    YYJSON_READ_ALLOW_TRAILING_COMMAS;
+
+/// Allow C-style single-line (//) and multi-line (/* */) comments.
+inline constexpr yyjson_read_flag allow_comments = YYJSON_READ_ALLOW_COMMENTS;
+
+/// Allow Inf/NaN numbers and literals (e.g. 1e999, NaN, inf, -Infinity).
+inline constexpr yyjson_read_flag read_allow_inf_and_nan =
+    YYJSON_READ_ALLOW_INF_AND_NAN;
+
+/// Allow invalid UTF-8 byte sequences when parsing string values.
+inline constexpr yyjson_read_flag read_allow_invalid_unicode =
+    YYJSON_READ_ALLOW_INVALID_UNICODE;
+
+/// Allow and skip a leading UTF-8 BOM before parsing.
+inline constexpr yyjson_read_flag allow_bom = YYJSON_READ_ALLOW_BOM;
+
+/// Allow extended number formats (hexadecimal, leading/trailing decimal point,
+/// leading plus sign).
+inline constexpr yyjson_read_flag allow_ext_number =
+    YYJSON_READ_ALLOW_EXT_NUMBER;
+
+/// Allow extended escape sequences in strings.
+inline constexpr yyjson_read_flag allow_ext_escape =
+    YYJSON_READ_ALLOW_EXT_ESCAPE;
+
+/// Allow extended whitespace characters.
+inline constexpr yyjson_read_flag allow_ext_whitespace =
+    YYJSON_READ_ALLOW_EXT_WHITESPACE;
+
+/// Allow strings enclosed in single quotes.
+inline constexpr yyjson_read_flag allow_single_quoted_str =
+    YYJSON_READ_ALLOW_SINGLE_QUOTED_STR;
+
+/// Allow unquoted object keys.
+inline constexpr yyjson_read_flag allow_unquoted_key =
+    YYJSON_READ_ALLOW_UNQUOTED_KEY;
+
+/// Convenience flag for JSONC (comments and trailing commas).
+inline constexpr yyjson_read_flag jsonc =
+    allow_comments | allow_trailing_commas;
+
+/// Convenience flag for JSON5.
+inline constexpr yyjson_read_flag json5 = YYJSON_READ_JSON5;
+
 using InputObjectType = typename Reader::InputObjectType;
 using InputVarType = typename Reader::InputVarType;
 
