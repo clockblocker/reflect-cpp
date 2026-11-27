@@ -33,6 +33,7 @@
 #include "../named_tuple_t.hpp"
 #include "../to_view.hpp"
 #include "AreReaderAndWriter.hpp"
+#include "DirectStructParser.hpp"
 #include "MapParser.hpp"
 #include "Parent.hpp"
 #include "ParserArray.hpp"
@@ -448,6 +449,10 @@ struct Parser {
         Parser<R, W, ReflectionType, ProcessorsType>::write(_w, r, _parent);
       }
 
+    } else if constexpr (can_use_direct_struct_parser_v<T, ProcessorsType, R>) {
+      DirectStructParser<R, W, std::remove_cvref_t<T>, ProcessorsType>::write(
+          _w, _var, _parent);
+
     } else {
       const auto ptr_named_tuple = ProcessorsType::template process<T>(
           internal::to_ptr_named_tuple(_var));
@@ -673,6 +678,30 @@ struct Parser {
         (*_definitions)[name] = Parser<R, W, typename Reflector<U>::ReflType,
                                        ProcessorsType>::to_schema(_definitions);
 
+      } else if constexpr (can_use_direct_struct_parser_v<U, ProcessorsType,
+                                                          R>) {
+        const auto field_meta = [&]() -> std::span<const FieldMeta> {
+          if constexpr (internal::has_field_metadata_v<MetaType>) {
+            return internal::get_field_metadata<MetaType>();
+          } else {
+            return {};
+          }
+        }();
+        if constexpr (internal::has_default_val_v<U>) {
+          static_assert(requires { U{}; },
+                        "A struct with rfl::DefaultVal fields must be "
+                        "default-constructible, because the default values "
+                        "come from a default-constructed instance.");
+          const auto defaults = U{};
+          (*_definitions)[name] =
+              DirectStructParser<R, W, U, ProcessorsType>::to_schema(
+                  _definitions, &defaults, field_meta);
+        } else {
+          (*_definitions)[name] =
+              DirectStructParser<R, W, U, ProcessorsType>::to_schema(
+                  _definitions, nullptr, field_meta);
+        }
+
       } else {
         using NamedTupleType = internal::processed_t<U, ProcessorsType>;
         // The schema takes the default values of rfl::DefaultVal fields from
@@ -768,20 +797,25 @@ struct Parser {
   /// might not be default-constructible.
   static RFL_ALWAYS_INLINE Result<T> read_struct(const R& _r,
                                                  const InputVarType& _var) {
-    alignas(T) unsigned char buf[sizeof(T)]{};
-    auto ptr = internal::ptr_cast<T*>(&buf);
-    auto raw_view = to_view(*ptr);
-    auto view = ProcessorsType::template process<T>(std::move(raw_view));
-    using ViewType = std::remove_cvref_t<decltype(view)>;
-    auto [set, err] =
-        Parser<R, W, ViewType, ProcessorsType>::read_view(_r, _var, &view);
-    if (err) [[unlikely]] {
+    if constexpr (can_use_direct_struct_parser_v<T, ProcessorsType, R>) {
+      return DirectStructParser<R, W, std::remove_cvref_t<T>,
+                                ProcessorsType>::read(_r, _var);
+    } else {
+      alignas(T) unsigned char buf[sizeof(T)]{};
+      auto ptr = internal::ptr_cast<T*>(&buf);
+      auto raw_view = to_view(*ptr);
+      auto view = ProcessorsType::template process<T>(std::move(raw_view));
+      using ViewType = std::remove_cvref_t<decltype(view)>;
+      auto [set, err] =
+          Parser<R, W, ViewType, ProcessorsType>::read_view(_r, _var, &view);
+      if (err) [[unlikely]] {
+        call_destructors_where_necessary(set, &view);
+        return error(std::move(*err));
+      }
+      auto res = Result<T>(std::move(*ptr));
       call_destructors_where_necessary(set, &view);
-      return error(std::move(*err));
+      return res;
     }
-    auto res = Result<T>(std::move(*ptr));
-    call_destructors_where_necessary(set, &view);
-    return res;
   }
 
   /// This is actually more straight-forward than the standard case - we
@@ -799,15 +833,26 @@ struct Parser {
       // satisfy its validator. The outer handler is for this line only.
       auto t = T{};
       try {
-        auto view = ProcessorsType::template process<T>(to_view(t));
-        using ViewType = decltype(view);
-        auto err =
-            Parser<R, W, ViewType, ProcessorsType>::read_view_with_default(
-                _r, _var, &view);
-        if (err) [[unlikely]] {
-          return error(std::move(*err));
+        if constexpr (can_use_direct_struct_parser_v<T, ProcessorsType, R>) {
+          auto err = DirectStructParser<R, W, std::remove_cvref_t<T>,
+                                        ProcessorsType>::read_with_default(_r,
+                                                                           _var,
+                                                                           &t);
+          if (err) [[unlikely]] {
+            return error(std::move(*err));
+          }
+          return t;
+        } else {
+          auto view = ProcessorsType::template process<T>(to_view(t));
+          using ViewType = decltype(view);
+          auto err =
+              Parser<R, W, ViewType, ProcessorsType>::read_view_with_default(
+                  _r, _var, &view);
+          if (err) [[unlikely]] {
+            return error(std::move(*err));
+          }
+          return t;
         }
-        return t;
       } catch (std::exception& e) {
         return error(e.what());
       }
