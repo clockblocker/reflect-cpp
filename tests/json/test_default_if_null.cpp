@@ -12,6 +12,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace test_default_if_null {
@@ -58,6 +59,52 @@ struct WithNullableFields {
   rfl::Rename<"opt_renamed", std::optional<int>> opt_renamed = 11;
   rfl::DefaultVal<std::optional<int>> opt_default_val = 13;
   rfl::Generic generic_val = 99;
+};
+
+struct WithOptionalDmi {
+  int port = 8080;
+  std::optional<int> opt_with_default = 5;
+  std::unique_ptr<int> uptr = std::make_unique<int>(7);
+  std::shared_ptr<int> sptr = std::make_shared<int>(9);
+  rfl::Rename<"opt_renamed", std::optional<int>> opt_renamed = 11;
+  const std::optional<int> const_opt = 15;
+};
+
+struct PositiveNoDefault {
+  static rfl::Result<NoDefault> validate(NoDefault _v) {
+    if (_v.v <= 0) {
+      return rfl::error("Must be positive");
+    }
+    return _v;
+  }
+};
+
+struct NoDefault2 {
+  using ReflectionType = std::string;
+  std::string s;
+  NoDefault2() = delete;
+  explicit NoDefault2(std::string _s) : s(std::move(_s)) {}
+  const std::string& reflection() const { return s; }
+};
+
+struct WrappedNoDefaultFields {
+  rfl::Description<"desc", NoDefault> desc;
+  rfl::Deprecated<"old", "dep", NoDefault> dep;
+  rfl::Commented<NoDefault> commented;
+  rfl::Box<NoDefault> box;
+  rfl::Ref<NoDefault> ref;
+  rfl::Attribute<NoDefault> attr;
+  rfl::Validator<NoDefault, PositiveNoDefault> validated;
+  rfl::Variant<NoDefault, NoDefault2> variant;
+  rfl::SkipSerialization<NoDefault> skipped_ser;
+  std::vector<int> tags;
+};
+
+struct WithNullableVariants {
+  std::variant<int, std::optional<std::string>> std_var = 42;
+  rfl::Variant<int, std::optional<std::string>> rfl_var = 42;
+  std::variant<int, std::string> plain_std_var = 7;
+  rfl::Variant<int, std::string> plain_rfl_var = 9;
 };
 
 struct WithDefaultValAndRename {
@@ -195,20 +242,86 @@ TEST(json, test_default_if_null_preserves_nullable_semantics) {
   EXPECT_TRUE(v.generic_val.is_null());
 }
 
-// Omitted optional with DMI keeps DMI under DefaultIfMissing + DefaultIfNull,
-// whereas explicit null clears it to std::nullopt.
+// Omitted optional with DMI:
+// - DefaultIfNull alone resets omitted nullable fields to empty (matching
+//   default read without DefaultIfMissing), and explicit null also decodes to
+//   empty.
+// - DefaultIfMissing + DefaultIfNull preserves the DMI when omitted, while
+//   explicit null clears it to empty.
 TEST(json, test_default_if_null_optional_omitted_vs_null) {
-  const auto res_omitted =
-      rfl::json::read<WithNullableFields, rfl::DefaultIfMissing,
+  // Baseline without processors: omitted nullable fields become empty.
+  const auto res_baseline =
+      rfl::json::read<WithOptionalDmi>(R"({"port": 80})");
+  ASSERT_TRUE(res_baseline.has_value()) << res_baseline.error().what();
+  EXPECT_EQ(res_baseline.value().port, 80);
+  EXPECT_FALSE(res_baseline.value().opt_with_default.has_value());
+  EXPECT_EQ(res_baseline.value().uptr, nullptr);
+  EXPECT_EQ(res_baseline.value().sptr, nullptr);
+  EXPECT_FALSE(res_baseline.value().opt_renamed.value().has_value());
+  EXPECT_FALSE(res_baseline.value().const_opt.has_value());
+
+  // DefaultIfNull alone + omitted nullable fields: must match baseline (empty).
+  const auto res_null_only_omitted =
+      rfl::json::read<WithOptionalDmi, rfl::DefaultIfNull>(R"({"port": null})");
+  ASSERT_TRUE(res_null_only_omitted.has_value())
+      << res_null_only_omitted.error().what();
+  EXPECT_EQ(res_null_only_omitted.value().port, 8080);
+  EXPECT_FALSE(res_null_only_omitted.value().opt_with_default.has_value());
+  EXPECT_EQ(res_null_only_omitted.value().uptr, nullptr);
+  EXPECT_EQ(res_null_only_omitted.value().sptr, nullptr);
+  EXPECT_FALSE(res_null_only_omitted.value().opt_renamed.value().has_value());
+  EXPECT_FALSE(res_null_only_omitted.value().const_opt.has_value());
+
+  // DefaultIfNull alone + explicit null: also empty.
+  const std::string explicit_null_json = R"({
+    "port": null,
+    "opt_with_default": null,
+    "uptr": null,
+    "sptr": null,
+    "opt_renamed": null,
+    "const_opt": null
+  })";
+  const auto res_null_only_explicit =
+      rfl::json::read<WithOptionalDmi, rfl::DefaultIfNull>(explicit_null_json);
+  ASSERT_TRUE(res_null_only_explicit.has_value())
+      << res_null_only_explicit.error().what();
+  EXPECT_EQ(res_null_only_explicit.value().port, 8080);
+  EXPECT_FALSE(res_null_only_explicit.value().opt_with_default.has_value());
+  EXPECT_EQ(res_null_only_explicit.value().uptr, nullptr);
+  EXPECT_EQ(res_null_only_explicit.value().sptr, nullptr);
+  EXPECT_FALSE(res_null_only_explicit.value().opt_renamed.value().has_value());
+  EXPECT_FALSE(res_null_only_explicit.value().const_opt.has_value());
+
+  // DefaultIfMissing + DefaultIfNull + omitted: preserves DMIs.
+  const auto res_combined_omitted =
+      rfl::json::read<WithOptionalDmi, rfl::DefaultIfMissing,
                       rfl::DefaultIfNull>(R"({"port": null})");
-  ASSERT_TRUE(res_omitted.has_value()) << res_omitted.error().what();
-  EXPECT_EQ(res_omitted.value().port, 8080);
-  ASSERT_TRUE(res_omitted.value().opt_with_default.has_value());
-  EXPECT_EQ(*res_omitted.value().opt_with_default, 5);
-  ASSERT_NE(res_omitted.value().uptr, nullptr);
-  EXPECT_EQ(*res_omitted.value().uptr, 7);
-  ASSERT_NE(res_omitted.value().sptr, nullptr);
-  EXPECT_EQ(*res_omitted.value().sptr, 9);
+  ASSERT_TRUE(res_combined_omitted.has_value())
+      << res_combined_omitted.error().what();
+  EXPECT_EQ(res_combined_omitted.value().port, 8080);
+  ASSERT_TRUE(res_combined_omitted.value().opt_with_default.has_value());
+  EXPECT_EQ(*res_combined_omitted.value().opt_with_default, 5);
+  ASSERT_NE(res_combined_omitted.value().uptr, nullptr);
+  EXPECT_EQ(*res_combined_omitted.value().uptr, 7);
+  ASSERT_NE(res_combined_omitted.value().sptr, nullptr);
+  EXPECT_EQ(*res_combined_omitted.value().sptr, 9);
+  ASSERT_TRUE(res_combined_omitted.value().opt_renamed.value().has_value());
+  EXPECT_EQ(*res_combined_omitted.value().opt_renamed.value(), 11);
+  ASSERT_TRUE(res_combined_omitted.value().const_opt.has_value());
+  EXPECT_EQ(*res_combined_omitted.value().const_opt, 15);
+
+  // DefaultIfMissing + DefaultIfNull + explicit null: resets to empty.
+  const auto res_combined_explicit =
+      rfl::json::read<WithOptionalDmi, rfl::DefaultIfMissing,
+                      rfl::DefaultIfNull>(explicit_null_json);
+  ASSERT_TRUE(res_combined_explicit.has_value())
+      << res_combined_explicit.error().what();
+  EXPECT_EQ(res_combined_explicit.value().port, 8080);
+  EXPECT_FALSE(res_combined_explicit.value().opt_with_default.has_value());
+  EXPECT_EQ(res_combined_explicit.value().uptr, nullptr);
+  EXPECT_EQ(res_combined_explicit.value().sptr, nullptr);
+  EXPECT_FALSE(res_combined_explicit.value().opt_renamed.value().has_value());
+  EXPECT_FALSE(res_combined_explicit.value().const_opt.has_value());
 }
 
 // DefaultVal, Rename, const fields, container DMIs, and field-level struct DMIs.
@@ -368,6 +481,137 @@ TEST(json, test_default_if_null_generic_and_standalone_types) {
   ASSERT_TRUE(nt.has_value());
   EXPECT_EQ(nt.value().get<"a">(), 0);
   EXPECT_EQ(nt.value().get<"b">(), "");
+}
+
+// Regression test: wrappers around non-default-constructible types must report
+// std::is_default_constructible_v == false and compile cleanly under
+// DefaultIfNull even when reading structs that contain them.
+TEST(json, test_default_if_null_wrapped_non_default_constructible) {
+  static_assert(
+      !std::is_default_constructible_v<rfl::Description<"x", NoDefault>>);
+  static_assert(
+      !std::is_default_constructible_v<rfl::Deprecated<"m", "x", NoDefault>>);
+  static_assert(!std::is_default_constructible_v<rfl::Commented<NoDefault>>);
+  static_assert(!std::is_default_constructible_v<
+                rfl::Validator<NoDefault, PositiveNoDefault>>);
+  static_assert(
+      !std::is_default_constructible_v<rfl::Variant<NoDefault, int>>);
+  static_assert(
+      std::is_default_constructible_v<rfl::Variant<int, NoDefault>>);
+  static_assert(
+      !std::is_default_constructible_v<rfl::SkipSerialization<NoDefault>>);
+  static_assert(!std::is_default_constructible_v<rfl::Attribute<NoDefault>>);
+  static_assert(!std::is_default_constructible_v<rfl::Box<NoDefault>>);
+  static_assert(!std::is_default_constructible_v<rfl::Ref<NoDefault>>);
+  static_assert(!std::is_default_constructible_v<rfl::Rename<"r", NoDefault>>);
+  static_assert(!std::is_default_constructible_v<rfl::DefaultVal<NoDefault>>);
+  static_assert(!std::is_default_constructible_v<rfl::Short<"s", NoDefault>>);
+  static_assert(!std::is_default_constructible_v<rfl::Positional<NoDefault>>);
+  static_assert(!std::is_default_constructible_v<WrappedNoDefaultFields>);
+
+  const std::string valid_json = R"({
+    "desc": 1,
+    "dep": 2,
+    "commented": 3,
+    "box": 4,
+    "ref": 5,
+    "attr": 6,
+    "validated": 7,
+    "variant": "hello",
+    "skipped_ser": 8,
+    "tags": null
+  })";
+  const auto ok =
+      rfl::json::read<WrappedNoDefaultFields, rfl::DefaultIfNull>(valid_json);
+  ASSERT_TRUE(ok.has_value()) << ok.error().what();
+  EXPECT_EQ(ok.value().desc.value().v, 1);
+  EXPECT_EQ(ok.value().dep.value().v, 2);
+  EXPECT_EQ(ok.value().commented.value().v, 3);
+  EXPECT_EQ(ok.value().box->v, 4);
+  EXPECT_EQ(ok.value().ref->v, 5);
+  EXPECT_EQ(ok.value().attr.value().v, 6);
+  EXPECT_EQ(ok.value().validated.value().v, 7);
+  ASSERT_TRUE(rfl::holds_alternative<NoDefault2>(ok.value().variant));
+  EXPECT_EQ(rfl::get<NoDefault2>(ok.value().variant).s, "hello");
+  EXPECT_EQ(ok.value().skipped_ser.value().v, 8);
+  EXPECT_TRUE(ok.value().tags.empty());
+
+  // Null for non-default-constructible wrapped fields fails cleanly.
+  EXPECT_FALSE(
+      (rfl::json::read<WrappedNoDefaultFields, rfl::DefaultIfNull>("null"))
+          .has_value());
+  EXPECT_FALSE((rfl::json::read<rfl::Box<NoDefault>, rfl::DefaultIfNull>("null"))
+                   .has_value());
+  EXPECT_FALSE((rfl::json::read<rfl::Ref<NoDefault>, rfl::DefaultIfNull>("null"))
+                   .has_value());
+  EXPECT_FALSE(
+      (rfl::json::read<rfl::Description<"x", NoDefault>, rfl::DefaultIfNull>(
+           "null"))
+          .has_value());
+}
+
+// Variants containing a nullable alternative must decode explicit null as that
+// nullable alternative (std::nullopt) rather than default-constructing the
+// first alternative.
+TEST(json, test_default_if_null_variants_with_nullable_alternative) {
+  using StdVar = std::variant<int, std::optional<std::string>>;
+  using RflVar = rfl::Variant<int, std::optional<std::string>>;
+
+  const auto sv_null = rfl::json::read<StdVar, rfl::DefaultIfNull>("null");
+  ASSERT_TRUE(sv_null.has_value()) << sv_null.error().what();
+  ASSERT_TRUE(std::holds_alternative<std::optional<std::string>>(sv_null.value()));
+  EXPECT_FALSE(std::get<std::optional<std::string>>(sv_null.value()).has_value());
+
+  const auto rv_null = rfl::json::read<RflVar, rfl::DefaultIfNull>("null");
+  ASSERT_TRUE(rv_null.has_value()) << rv_null.error().what();
+  ASSERT_TRUE(rfl::holds_alternative<std::optional<std::string>>(rv_null.value()));
+  EXPECT_FALSE(rfl::get<std::optional<std::string>>(rv_null.value()).has_value());
+
+  // Non-null values still decode as the matching alternative.
+  const auto sv_int = rfl::json::read<StdVar, rfl::DefaultIfNull>("42");
+  ASSERT_TRUE(sv_int.has_value()) << sv_int.error().what();
+  ASSERT_TRUE(std::holds_alternative<int>(sv_int.value()));
+  EXPECT_EQ(std::get<int>(sv_int.value()), 42);
+
+  // Non-nullable variants still default-construct to the first alternative.
+  const auto plain_sv =
+      rfl::json::read<std::variant<int, std::string>, rfl::DefaultIfNull>(
+          "null");
+  ASSERT_TRUE(plain_sv.has_value()) << plain_sv.error().what();
+  ASSERT_TRUE(std::holds_alternative<int>(plain_sv.value()));
+  EXPECT_EQ(std::get<int>(plain_sv.value()), 0);
+
+  const auto plain_rv =
+      rfl::json::read<rfl::Variant<int, std::string>, rfl::DefaultIfNull>(
+          "null");
+  ASSERT_TRUE(plain_rv.has_value()) << plain_rv.error().what();
+  ASSERT_TRUE(rfl::holds_alternative<int>(plain_rv.value()));
+  EXPECT_EQ(rfl::get<int>(plain_rv.value()), 0);
+
+  // Inside a struct with DMIs: nullable variants decode explicit null as
+  // std::nullopt, while non-nullable variants preserve their DMI.
+  const auto in_struct =
+      rfl::json::read<WithNullableVariants, rfl::DefaultIfNull>(R"({
+        "std_var": null,
+        "rfl_var": null,
+        "plain_std_var": null,
+        "plain_rfl_var": null
+      })");
+  ASSERT_TRUE(in_struct.has_value()) << in_struct.error().what();
+  ASSERT_TRUE(std::holds_alternative<std::optional<std::string>>(
+      in_struct.value().std_var));
+  EXPECT_FALSE(
+      std::get<std::optional<std::string>>(in_struct.value().std_var)
+          .has_value());
+  ASSERT_TRUE(rfl::holds_alternative<std::optional<std::string>>(
+      in_struct.value().rfl_var));
+  EXPECT_FALSE(
+      rfl::get<std::optional<std::string>>(in_struct.value().rfl_var)
+          .has_value());
+  ASSERT_TRUE(std::holds_alternative<int>(in_struct.value().plain_std_var));
+  EXPECT_EQ(std::get<int>(in_struct.value().plain_std_var), 7);
+  ASSERT_TRUE(rfl::holds_alternative<int>(in_struct.value().plain_rfl_var));
+  EXPECT_EQ(rfl::get<int>(in_struct.value().plain_rfl_var), 9);
 }
 
 }  // namespace test_default_if_null

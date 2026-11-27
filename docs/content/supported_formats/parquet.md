@@ -148,6 +148,7 @@ The following processors are **NOT supported** and will cause compilation errors
 - `rfl::AddTagsToVariants` - Cannot be used for tabular data
 - `rfl::NoOptionals` - Cannot be used for tabular data
 - `rfl::DefaultIfMissing` - Cannot be used for tabular data
+- `rfl::DefaultIfNull` - Cannot be used for tabular data
 - `rfl::NoExtraFields` - Cannot be used for tabular data
 - `rfl::NoFieldNames` - Cannot be used for tabular data
 

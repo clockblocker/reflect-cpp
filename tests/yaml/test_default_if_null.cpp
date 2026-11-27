@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 namespace test_default_if_null {
@@ -58,6 +59,45 @@ struct WithNullableFields {
   rfl::Rename<"opt_renamed", std::optional<int>> opt_renamed = 11;
   rfl::DefaultVal<std::optional<int>> opt_default_val = 13;
   rfl::Generic generic_val = 99;
+};
+
+struct WithOptionalDmi {
+  int port = 8080;
+  std::optional<int> opt_with_default = 5;
+  std::unique_ptr<int> uptr = std::make_unique<int>(7);
+  std::shared_ptr<int> sptr = std::make_shared<int>(9);
+  rfl::Rename<"opt_renamed", std::optional<int>> opt_renamed = 11;
+  const std::optional<int> const_opt = 15;
+};
+
+struct PositiveNoDefault {
+  static rfl::Result<NoDefault> validate(NoDefault _v) {
+    if (_v.v <= 0) {
+      return rfl::error("Must be positive");
+    }
+    return _v;
+  }
+};
+
+struct NoDefault2 {
+  using ReflectionType = std::string;
+  std::string s;
+  NoDefault2() = delete;
+  explicit NoDefault2(std::string _s) : s(std::move(_s)) {}
+  const std::string& reflection() const { return s; }
+};
+
+struct WrappedNoDefaultFields {
+  rfl::Description<"desc", NoDefault> desc;
+  rfl::Deprecated<"old", "dep", NoDefault> dep;
+  rfl::Commented<NoDefault> commented;
+  rfl::Box<NoDefault> box;
+  rfl::Ref<NoDefault> ref;
+  rfl::Attribute<NoDefault> attr;
+  rfl::Validator<NoDefault, PositiveNoDefault> validated;
+  rfl::Variant<NoDefault, NoDefault2> variant;
+  rfl::SkipSerialization<NoDefault> skipped_ser;
+  std::vector<int> tags;
 };
 
 struct WithDefaultValAndRename {
@@ -210,21 +250,76 @@ TEST(yaml, test_default_if_null_preserves_nullable_semantics) {
   EXPECT_TRUE(v.generic_val.is_null());
 }
 
-// Omitted optional with DMI keeps DMI under DefaultIfMissing + DefaultIfNull,
-// whereas explicit null clears it to std::nullopt.
+// Omitted optional with DMI:
+// - DefaultIfNull alone resets omitted nullable fields to empty (matching
+//   default read without DefaultIfMissing), and explicit null also decodes to
+//   empty.
+// - DefaultIfMissing + DefaultIfNull preserves the DMI when omitted, while
+//   explicit null clears it to empty.
 TEST(yaml, test_default_if_null_optional_omitted_vs_null) {
   const std::string yaml_omitted = "port: null\n";
-  const auto res_omitted =
-      rfl::yaml::read<WithNullableFields, rfl::DefaultIfMissing,
+  const std::string yaml_explicit_null =
+      "port: null\n"
+      "opt_with_default: null\n"
+      "uptr: ~\n"
+      "sptr:\n"
+      "opt_renamed: null\n"
+      "const_opt: null\n";
+
+  // DefaultIfNull alone + omitted: resets nullable fields to empty.
+  const auto res_null_only_omitted =
+      rfl::yaml::read<WithOptionalDmi, rfl::DefaultIfNull>(yaml_omitted);
+  ASSERT_TRUE(res_null_only_omitted.has_value())
+      << res_null_only_omitted.error().what();
+  EXPECT_EQ(res_null_only_omitted.value().port, 8080);
+  EXPECT_FALSE(res_null_only_omitted.value().opt_with_default.has_value());
+  EXPECT_EQ(res_null_only_omitted.value().uptr, nullptr);
+  EXPECT_EQ(res_null_only_omitted.value().sptr, nullptr);
+  EXPECT_FALSE(res_null_only_omitted.value().opt_renamed.value().has_value());
+  EXPECT_FALSE(res_null_only_omitted.value().const_opt.has_value());
+
+  // DefaultIfNull alone + explicit null: also empty.
+  const auto res_null_only_explicit =
+      rfl::yaml::read<WithOptionalDmi, rfl::DefaultIfNull>(yaml_explicit_null);
+  ASSERT_TRUE(res_null_only_explicit.has_value())
+      << res_null_only_explicit.error().what();
+  EXPECT_EQ(res_null_only_explicit.value().port, 8080);
+  EXPECT_FALSE(res_null_only_explicit.value().opt_with_default.has_value());
+  EXPECT_EQ(res_null_only_explicit.value().uptr, nullptr);
+  EXPECT_EQ(res_null_only_explicit.value().sptr, nullptr);
+  EXPECT_FALSE(res_null_only_explicit.value().opt_renamed.value().has_value());
+  EXPECT_FALSE(res_null_only_explicit.value().const_opt.has_value());
+
+  // DefaultIfMissing + DefaultIfNull + omitted: preserves DMIs.
+  const auto res_combined_omitted =
+      rfl::yaml::read<WithOptionalDmi, rfl::DefaultIfMissing,
                       rfl::DefaultIfNull>(yaml_omitted);
-  ASSERT_TRUE(res_omitted.has_value()) << res_omitted.error().what();
-  EXPECT_EQ(res_omitted.value().port, 8080);
-  ASSERT_TRUE(res_omitted.value().opt_with_default.has_value());
-  EXPECT_EQ(*res_omitted.value().opt_with_default, 5);
-  ASSERT_NE(res_omitted.value().uptr, nullptr);
-  EXPECT_EQ(*res_omitted.value().uptr, 7);
-  ASSERT_NE(res_omitted.value().sptr, nullptr);
-  EXPECT_EQ(*res_omitted.value().sptr, 9);
+  ASSERT_TRUE(res_combined_omitted.has_value())
+      << res_combined_omitted.error().what();
+  EXPECT_EQ(res_combined_omitted.value().port, 8080);
+  ASSERT_TRUE(res_combined_omitted.value().opt_with_default.has_value());
+  EXPECT_EQ(*res_combined_omitted.value().opt_with_default, 5);
+  ASSERT_NE(res_combined_omitted.value().uptr, nullptr);
+  EXPECT_EQ(*res_combined_omitted.value().uptr, 7);
+  ASSERT_NE(res_combined_omitted.value().sptr, nullptr);
+  EXPECT_EQ(*res_combined_omitted.value().sptr, 9);
+  ASSERT_TRUE(res_combined_omitted.value().opt_renamed.value().has_value());
+  EXPECT_EQ(*res_combined_omitted.value().opt_renamed.value(), 11);
+  ASSERT_TRUE(res_combined_omitted.value().const_opt.has_value());
+  EXPECT_EQ(*res_combined_omitted.value().const_opt, 15);
+
+  // DefaultIfMissing + DefaultIfNull + explicit null: resets to empty.
+  const auto res_combined_explicit =
+      rfl::yaml::read<WithOptionalDmi, rfl::DefaultIfMissing,
+                      rfl::DefaultIfNull>(yaml_explicit_null);
+  ASSERT_TRUE(res_combined_explicit.has_value())
+      << res_combined_explicit.error().what();
+  EXPECT_EQ(res_combined_explicit.value().port, 8080);
+  EXPECT_FALSE(res_combined_explicit.value().opt_with_default.has_value());
+  EXPECT_EQ(res_combined_explicit.value().uptr, nullptr);
+  EXPECT_EQ(res_combined_explicit.value().sptr, nullptr);
+  EXPECT_FALSE(res_combined_explicit.value().opt_renamed.value().has_value());
+  EXPECT_FALSE(res_combined_explicit.value().const_opt.has_value());
 }
 
 // DefaultVal, Rename, const fields, container DMIs, and field-level struct DMIs.
@@ -345,6 +440,51 @@ TEST(yaml, test_default_if_null_standalone_types) {
   ASSERT_TRUE(nt.has_value());
   EXPECT_EQ(nt.value().get<"a">(), 0);
   EXPECT_EQ(nt.value().get<"b">(), "");
+}
+
+TEST(yaml, test_default_if_null_wrapped_non_default_and_nullable_variants) {
+  const std::string valid_yaml =
+      "desc: 1\n"
+      "dep: 2\n"
+      "commented: 3\n"
+      "box: 4\n"
+      "ref: 5\n"
+      "attr: 6\n"
+      "validated: 7\n"
+      "variant: hello\n"
+      "skipped_ser: 8\n"
+      "tags:\n";
+  const auto ok =
+      rfl::yaml::read<WrappedNoDefaultFields, rfl::DefaultIfNull>(valid_yaml);
+  ASSERT_TRUE(ok.has_value()) << ok.error().what();
+  EXPECT_EQ(ok.value().desc.value().v, 1);
+  EXPECT_EQ(ok.value().dep.value().v, 2);
+  EXPECT_EQ(ok.value().commented.value().v, 3);
+  EXPECT_EQ(ok.value().box->v, 4);
+  EXPECT_EQ(ok.value().ref->v, 5);
+  EXPECT_EQ(ok.value().attr.value().v, 6);
+  EXPECT_EQ(ok.value().validated.value().v, 7);
+  ASSERT_TRUE(rfl::holds_alternative<NoDefault2>(ok.value().variant));
+  EXPECT_EQ(rfl::get<NoDefault2>(ok.value().variant).s, "hello");
+  EXPECT_EQ(ok.value().skipped_ser.value().v, 8);
+  EXPECT_TRUE(ok.value().tags.empty());
+
+  using StdVar = std::variant<int, std::optional<std::string>>;
+  using RflVar = rfl::Variant<int, std::optional<std::string>>;
+
+  const auto sv_null = rfl::yaml::read<StdVar, rfl::DefaultIfNull>("null"sv);
+  ASSERT_TRUE(sv_null.has_value()) << sv_null.error().what();
+  ASSERT_TRUE(
+      std::holds_alternative<std::optional<std::string>>(sv_null.value()));
+  EXPECT_FALSE(
+      std::get<std::optional<std::string>>(sv_null.value()).has_value());
+
+  const auto rv_null = rfl::yaml::read<RflVar, rfl::DefaultIfNull>(""sv);
+  ASSERT_TRUE(rv_null.has_value()) << rv_null.error().what();
+  ASSERT_TRUE(
+      rfl::holds_alternative<std::optional<std::string>>(rv_null.value()));
+  EXPECT_FALSE(
+      rfl::get<std::optional<std::string>>(rv_null.value()).has_value());
 }
 
 }  // namespace test_default_if_null

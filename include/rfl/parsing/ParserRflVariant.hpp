@@ -16,6 +16,7 @@
 #include "Parser_base.hpp"
 #include "VariantAlternativeWrapper.hpp"
 #include "default_construct.hpp"
+#include "is_nullable.hpp"
 #include "schema/Type.hpp"
 #include "schemaful/IsSchemafulReader.hpp"
 #include "schemaful/IsSchemafulWriter.hpp"
@@ -55,6 +56,7 @@ class ParserRflVariant<R, W, rfl::Variant<AlternativeTypes...>,
   static Result<rfl::Variant<AlternativeTypes...>> read(
       const R& _r, const InputVarType& _var) noexcept {
     if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                  !(is_nullable_v<AlternativeTypes> || ...) &&
                   std::is_default_constructible_v<
                       internal::nth_element_t<0, AlternativeTypes...>>) {
       if (_r.is_empty(_var)) {
@@ -231,6 +233,13 @@ class ParserRflVariant<R, W, rfl::Variant<AlternativeTypes...>,
     if (!*_result) {
       using AltType =
           std::remove_cvref_t<internal::nth_element_t<_i, AlternativeTypes...>>;
+      if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                    (is_nullable_v<AlternativeTypes> || ...) &&
+                    !is_nullable_v<AltType>) {
+        if (_r.is_empty(_var)) {
+          return;
+        }
+      }
       auto res = Parser<R, W, AltType, ProcessorsType>::read(_r, _var);
       if (res) {
         *_result = std::move(*res);
