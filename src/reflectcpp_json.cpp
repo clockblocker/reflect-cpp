@@ -30,4 +30,5 @@ SOFTWARE.
 // compilation.
 
 #include "rfl/json/Writer.cpp"
+#include "rfl/json/stream.cpp"
 #include "rfl/json/to_schema.cpp"
