@@ -4,8 +4,13 @@
 #include <type_traits>
 #include <utility>
 
+#include "../Alias.hpp"
 #include "../DefaultVal.hpp"
+#include "../Deprecated.hpp"
+#include "../Description.hpp"
+#include "../Positional.hpp"
 #include "../Rename.hpp"
+#include "../Short.hpp"
 #include "StringLiteral.hpp"
 
 namespace rfl::internal {
@@ -20,8 +25,29 @@ template <class T>
 class is_default_val<DefaultVal<T>> : public std::true_type {};
 
 template <class T, internal::StringLiteral _new_name>
-class is_default_val<Rename<_new_name, DefaultVal<T>>> : public std::true_type {
-};
+class is_default_val<Rename<_new_name, T>>
+    : public is_default_val<std::remove_cvref_t<T>> {};
+
+template <class T, internal::StringLiteral _alias_name>
+class is_default_val<Alias<_alias_name, T>>
+    : public is_default_val<std::remove_cvref_t<T>> {};
+
+template <class T, internal::StringLiteral _short_name>
+class is_default_val<Short<_short_name, T>>
+    : public is_default_val<std::remove_cvref_t<T>> {};
+
+template <class T>
+class is_default_val<Positional<T>>
+    : public is_default_val<std::remove_cvref_t<T>> {};
+
+template <class T, internal::StringLiteral _description>
+class is_default_val<Description<_description, T>>
+    : public is_default_val<std::remove_cvref_t<T>> {};
+
+template <class T, internal::StringLiteral _deprecation_message,
+          internal::StringLiteral _description>
+class is_default_val<Deprecated<_deprecation_message, _description, T>>
+    : public is_default_val<std::remove_cvref_t<T>> {};
 
 template <class T>
 constexpr bool is_default_val_v =
@@ -35,7 +61,7 @@ const DefaultVal<T>& get_default_val(const DefaultVal<T>& _field) noexcept {
 
 template <class T>
   requires is_default_val_v<T>
-const auto& get_default_val(const T& _field) noexcept {
+const auto& get_default_val(const T& _field) {
   return get_default_val(_field.value());
 }
 

@@ -12,6 +12,7 @@
 #include "../Result.hpp"
 #include "../internal/always_inline.hpp"
 #include "../internal/default_if_missing_v.hpp"
+#include "../internal/field_aliases.hpp"
 #include "../internal/has_default_val_v.hpp"
 #include "../internal/has_reflection_method_v.hpp"
 #include "../internal/has_reflection_type_v.hpp"
@@ -71,7 +72,7 @@ concept CanWriteGeneric =
 /// it must be a `DefaultVal` that satisfies `CanWriteGeneric`.
 template <class T>
 concept CanEmitDefault =
-    is_default_val_v<T> && CanWriteGeneric<typename T::Type>;
+    is_default_val_v<T> && CanWriteGeneric<typename default_val_t<T>::Type>;
 
 }  // namespace internal
 }  // namespace rfl
@@ -114,6 +115,10 @@ struct NamedTupleParser {
   static_assert(NamedTupleType::pos_extra_fields() == -1 || !_no_field_names,
                 "You cannot use the rfl::NoFieldNames processor if you are "
                 "including rfl::ExtraFields.");
+
+  static_assert(
+      internal::no_alias_collisions<typename NamedTupleType::Fields>(),
+      "Field alias collides with another field's name or alias.");
 
  public:
   /**
@@ -297,8 +302,8 @@ struct NamedTupleParser {
         s.variant_.visit([&](auto& value) {
           if constexpr (std::is_same_v<std::remove_cvref_t<decltype(value)>,
                                        schema::Type::DefaultVal>) {
-            value.default_value_ =
-                rfl::to_generic<ProcessorsType>((*rfl::get<_i>(*_view)).get());
+            value.default_value_ = rfl::to_generic<ProcessorsType>(
+                internal::get_default_val(*rfl::get<_i>(*_view)).get());
           }
         });
       }
