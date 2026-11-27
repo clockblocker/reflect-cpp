@@ -204,8 +204,9 @@ class ViewReader {
       if (!already_assigned) {
         std::stringstream stream;
         stream << "Value named '" << _current_name_or_index << "' not used.";
-        _errors->emplace_back(make_nested_error(
-            to_path_segment(_current_name_or_index), stream.str()));
+        _errors->emplace_back(
+            make_nested_error(to_path_segment(_current_name_or_index),
+                              stream.str(), ErrorKind::unknown_field));
       }
     }
   }

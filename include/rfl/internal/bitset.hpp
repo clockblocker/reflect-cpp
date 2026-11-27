@@ -19,12 +19,13 @@ Result<std::bitset<N>> bitset_from_string(const std::string_view _str) {
     message += ", got ";
     message += std::to_string(_str.size());
     message += ".";
-    return error(std::move(message));
+    return error(std::move(message), ErrorKind::invalid_value);
   }
   std::bitset<N> bits;
   for (std::size_t i = 0; i < N; ++i) {
     if (_str[i] != '0' && _str[i] != '1') {
-      return error("Bitset strings may contain only '0' and '1'.");
+      return error("Bitset strings may contain only '0' and '1'.",
+                   ErrorKind::invalid_value);
     }
     bits[N - 1 - i] = _str[i] == '1';
   }
@@ -56,12 +57,13 @@ Result<std::bitset<N>> bitset_from_bytes(const Bytes& _bytes) {
     message += " packed bitset bytes, got ";
     message += std::to_string(_bytes.size());
     message += ".";
-    return error(std::move(message));
+    return error(std::move(message), ErrorKind::invalid_value);
   }
   if constexpr (N % 8 != 0) {
     constexpr auto mask = (1u << (8 - N % 8)) - 1;
     if ((static_cast<unsigned char>(_bytes.back()) & mask) != 0) {
-      return error("Packed bitset padding bits must be zero.");
+      return error("Packed bitset padding bits must be zero.",
+                   ErrorKind::invalid_value);
     }
   }
   std::bitset<N> bits;

@@ -138,7 +138,8 @@ class ParserVariant<R, W, std::variant<AlternativeTypes...>, ProcessorsType> {
                                     "Could not parse the variant. Each of the "
                                     "possible alternatives failed "
                                     "for the following reasons: ",
-                                    100000));
+                                    100000),
+            ErrorKind::invalid_value);
       }
     }
   }

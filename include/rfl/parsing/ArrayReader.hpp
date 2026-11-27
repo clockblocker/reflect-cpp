@@ -37,7 +37,8 @@ class ArrayReader {
   std::optional<Error> check_size() const {
     if (num_set_ != size_) {
       return Error("Expected " + std::to_string(size_) + " elements, got " +
-                   std::to_string(num_set_) + ".");
+                       std::to_string(num_set_) + ".",
+                   ErrorKind::invalid_length);
     }
     return std::nullopt;
   }
@@ -56,8 +57,9 @@ class ArrayReader {
   std::optional<Error> read(const InputVarType& _var) const {
     if (num_set_ == size_) {
       return Error("Expected " + std::to_string(size_) +
-                   " elements, got at least " + std::to_string(size_ + 1) +
-                   ".");
+                       " elements, got at least " + std::to_string(size_ + 1) +
+                       ".",
+                   ErrorKind::invalid_length);
     }
     auto res =
         Parser<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(*r_, _var);

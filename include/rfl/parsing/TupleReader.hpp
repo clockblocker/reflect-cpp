@@ -66,7 +66,7 @@ class TupleReader {
     if (num_set_ == size_) {
       std::stringstream stream;
       stream << "Expected " << size_ << " fields, but got at least one more.";
-      return Error(stream.str());
+      return Error(stream.str(), ErrorKind::invalid_length);
     }
     std::optional<Error> err;
     [&]<size_t... _is>(std::integer_sequence<size_t, _is...>) {
@@ -96,7 +96,8 @@ class TupleReader {
                     is_required<CurrentType, _ignore_empty_containers>()) {
         *_err = make_nested_error(
             static_cast<size_t>(_i),
-            "Field " + std::to_string(_i) + " was required, but missing.");
+            "Field " + std::to_string(_i) + " was required, but missing.",
+            ErrorKind::missing_field);
         return;
       } else if constexpr (std::is_nothrow_default_constructible_v<
                                CurrentType>) {
@@ -114,7 +115,8 @@ class TupleReader {
               "Field " + std::to_string(_i) +
                   " was missing, and its default value could not be "
                   "constructed: " +
-                  e.what());
+                  e.what(),
+              ErrorKind::missing_field);
           return;
         }
       }

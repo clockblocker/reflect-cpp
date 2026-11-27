@@ -165,8 +165,8 @@ class ViewReaderWithDefault {
         stream << "Value named '" << std::string(_current_name)
                << "' not used. Remove the rfl::NoExtraFields processor or add "
                   "rfl::ExtraFields to avoid this error message.";
-        _errors->emplace_back(
-            make_nested_error(std::string(_current_name), stream.str()));
+        _errors->emplace_back(make_nested_error(
+            std::string(_current_name), stream.str(), ErrorKind::unknown_field));
       }
     }
   }

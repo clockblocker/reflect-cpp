@@ -74,7 +74,7 @@ class Timestamp {
     try {
       return Timestamp(_str);
     } catch (std::exception& e) {
-      return error(e.what());
+      return error(e.what(), ErrorKind::invalid_value);
     }
   }
 
@@ -82,8 +82,13 @@ class Timestamp {
   /// This is an alternative to the throwing constructor for error handling without exceptions.
   /// @param _str The string to parse in the format specified by the template parameter
   /// @return Result containing the Timestamp if parsing succeeded, or an error otherwise
-  static Result<Timestamp> from_string(const std::string& _str) {
+  static Result<Timestamp> from_string(const std::string& _str) noexcept {
     return from_string(_str.c_str());
+  }
+
+  /// Exception-free reflection hook for parsers.
+  static Result<Timestamp> from_reflection(const std::string& _str) noexcept {
+    return from_string(_str);
   }
 
   /// Generic factory method for creating a Timestamp from a string.
