@@ -24,6 +24,8 @@ struct Attribute {
   using ReflectionType = T;
 
   /// Default constructor.
+  template <class U = Type>
+    requires std::is_default_constructible_v<U>
   Attribute() : value_(Type()) {}
 
   /// Constructs from a const reference to the value.
