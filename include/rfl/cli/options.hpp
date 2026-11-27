@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -14,6 +15,7 @@
 #include "../DefaultVal.hpp"
 #include "../Deprecated.hpp"
 #include "../Description.hpp"
+#include "../Hidden.hpp"
 #include "../ImplicitValue.hpp"
 #include "../Positional.hpp"
 #include "../Rename.hpp"
@@ -105,6 +107,10 @@ struct Options {
   /// inside one such value, with paths relative to it, so that
   /// `--servers.eu.port` is looked up as `port`.
   std::map<std::string, rfl::Box<Options>> open_prefix_options;
+
+  /// Paths of fields wrapped in rfl::Hidden, which are parsed normally but
+  /// omitted from usage() and --help.
+  std::set<std::string> hidden_options;
 
   /// Whether options that match no field are an error (rfl::NoExtraFields).
   bool reject_unknown = false;
@@ -265,6 +271,7 @@ template <class T>
 struct cli_annotations {
   static constexpr bool is_short = false;
   static constexpr bool is_positional = false;
+  static constexpr bool is_hidden = false;
   static constexpr size_t num_implicit_value = 0;
   static constexpr rfl::internal::StringLiteral<1> short_name = "";
   static constexpr int count = 0;
@@ -311,6 +318,11 @@ struct cli_annotations<ImplicitValue<T, _implicit>> : cli_annotations_t<T> {
   static constexpr size_t num_implicit_value =
       cli_annotations_t<T>::num_implicit_value + 1;
   static constexpr auto implicit_value = _implicit;
+};
+
+template <class T>
+struct cli_annotations<Hidden<T>> : cli_annotations_t<T> {
+  static constexpr bool is_hidden = true;
 };
 
 /// The CLI metadata of the _i-th field of a NamedTuple. InnerType is the
@@ -545,6 +557,9 @@ void collect_value_options(Options* _options) {
 template <class T, class ProcessorsType, class VisitedType>
 void add_option(const std::string& _path, Options* _options) {
   using U = unwrapped_option_t<T, ProcessorsType>;
+  if constexpr (cli_annotations_t<T>::is_hidden) {
+    _options->hidden_options.insert(_path);
+  }
   if constexpr (cli_annotations_t<T>::num_implicit_value > 0) {
     _options->long_options[_path] =
         implicit_value_option<T, ProcessorsType>();
