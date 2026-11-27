@@ -44,6 +44,7 @@
 #include "rfl/Processors.hpp"
 #include "rfl/Ref.hpp"
 #include "rfl/Rename.hpp"
+#include "rfl/SchemaExt.hpp"
 #include "rfl/Settings.hpp"
 #include "rfl/Short.hpp"
 #include "rfl/Size.hpp"

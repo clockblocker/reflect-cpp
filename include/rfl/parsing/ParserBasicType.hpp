@@ -1,10 +1,13 @@
 #ifndef RFL_PARSING_PARSER_BASIC_TYPE_HPP_
 #define RFL_PARSING_PARSER_BASIC_TYPE_HPP_
 
+#include <cstdint>
+#include <limits>
 #include <map>
 #include <type_traits>
 
 #include "../Result.hpp"
+#include "../SchemaExt.hpp"
 #include "../always_false.hpp"
 #include "../enums.hpp"
 #include "../from_named_tuple.hpp"
@@ -77,6 +80,22 @@ struct ParserBasicType {
     using Type = schema::Type;
     if constexpr (std::is_same<U, bool>()) {
       return Type{Type::Boolean{}};
+
+    } else if constexpr (std::is_integral_v<U> &&
+                         internal::integer_bounds_v<ProcessorsType> &&
+                         !schemaful::IsSchemafulReader<R> &&
+                         !schemaful::IsSchemafulWriter<W>) {
+      if constexpr (std::is_unsigned_v<U>) {
+        return Type{Type::BoundedInteger{
+            .minimum_ = 0,
+            .maximum_ = rfl::Variant<int64_t, uint64_t>(
+                static_cast<uint64_t>(std::numeric_limits<U>::max()))}};
+      } else {
+        return Type{Type::BoundedInteger{
+            .minimum_ = static_cast<int64_t>(std::numeric_limits<U>::min()),
+            .maximum_ = rfl::Variant<int64_t, uint64_t>(
+                static_cast<int64_t>(std::numeric_limits<U>::max()))}};
+      }
 
     } else if constexpr (std::is_same<U, std::int32_t>()) {
       return Type{Type::Int32{}};

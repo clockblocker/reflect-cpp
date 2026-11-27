@@ -1,10 +1,13 @@
 #ifndef RFL_JSON_SCHEMA_TYPE_HPP_
 #define RFL_JSON_SCHEMA_TYPE_HPP_
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
+#include "../../ExtraFields.hpp"
 #include "../../Flatten.hpp"
 #include "../../Generic.hpp"
 #include "../../Literal.hpp"
@@ -19,20 +22,25 @@ namespace rfl::json::schema {
 struct Type {
   /// Common annotation fields shared by all schema subtypes.
   struct Annotations {
+    std::optional<std::string> title{};
     std::optional<std::string> description{};
     std::optional<bool> deprecated{};
     std::optional<std::string> deprecationMessage{};
     rfl::Rename<"default", std::optional<rfl::Generic>> defaultValue{};
+    std::optional<std::vector<rfl::Generic>> examples{};
+    rfl::ExtraFields<rfl::Generic> extensions{};
   };
 
   struct Boolean {
-    rfl::Flatten<Annotations> annotations{};
     Literal<"boolean"> type{};
+    rfl::Flatten<Annotations> annotations{};
   };
 
   struct Integer {
     Literal<"integer"> type{};
     rfl::Flatten<Annotations> annotations{};
+    std::optional<int64_t> minimum{};
+    std::optional<rfl::Variant<int64_t, uint64_t>> maximum{};
   };
 
   struct Number {
@@ -101,7 +109,7 @@ struct Type {
     Literal<"object"> type{};
     rfl::Flatten<Annotations> annotations{};
     rfl::Object<Type> properties{};
-    std::vector<std::string> required{};
+    std::optional<std::vector<std::string>> required{};
     std::optional<rfl::Variant<std::shared_ptr<Type>, bool>>
         additionalProperties{};
   };
@@ -144,6 +152,8 @@ struct Type {
     rfl::Flatten<Annotations> annotations{};
     std::vector<Type> prefixItems{};
     bool items = false;
+    std::optional<size_t> minItems{};
+    std::optional<size_t> maxItems{};
   };
 
   struct TypedArray {

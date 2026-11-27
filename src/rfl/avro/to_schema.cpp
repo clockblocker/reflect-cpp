@@ -26,6 +26,9 @@ SOFTWARE.
 
 #include "rfl/avro/to_schema.hpp"
 
+#include <cstdint>
+#include <limits>
+
 #include "rfl/avro/schema/Type.hpp"
 #include "rfl/json.hpp"
 #include "rfl/parsing/schemaful/tuple_to_object.hpp"
@@ -35,8 +38,12 @@ namespace rfl::avro {
 inline bool is_named_type(const parsing::schema::Type& _type) {
   return _type.variant_.visit([&](const auto& _v) -> bool {
     using T = std::remove_cvref_t<decltype(_v)>;
-    return std::is_same<T, parsing::schema::Type::Object>() ||
-           std::is_same<T, parsing::schema::Type::Literal>();
+    if constexpr (std::is_same_v<T, parsing::schema::Type::Annotated>) {
+      return is_named_type(*_v.type_);
+    } else {
+      return std::is_same<T, parsing::schema::Type::Object>() ||
+             std::is_same<T, parsing::schema::Type::Literal>();
+    }
   });
 }
 
@@ -63,6 +70,22 @@ schema::Type type_to_avro_schema_type(
                          std::is_same<T, Type::UInt64>()) {
       return schema::Type{.value = schema::Type::Long{}};
 
+    } else if constexpr (std::is_same<T, Type::BoundedInteger>()) {
+      const bool fits_i32 =
+          _t.minimum_ >= std::numeric_limits<int32_t>::min() &&
+          _t.maximum_.visit([](const auto _m) {
+            if constexpr (std::is_signed_v<decltype(_m)>) {
+              return _m <= std::numeric_limits<int32_t>::max();
+            } else {
+              return _m <=
+                     static_cast<uint64_t>(std::numeric_limits<int32_t>::max());
+            }
+          });
+      if (fits_i32) {
+        return schema::Type{.value = schema::Type::Int{}};
+      }
+      return schema::Type{.value = schema::Type::Long{}};
+
     } else if constexpr (std::is_same<T, Type::Float>()) {
       return schema::Type{.value = schema::Type::Float{}};
 
@@ -80,7 +103,8 @@ schema::Type type_to_avro_schema_type(
       }
       return schema::Type{.value = any_of};
 
-    } else if constexpr (std::is_same<T, Type::Deprecated>()) {
+    } else if constexpr (std::is_same<T, Type::Deprecated>() ||
+                         std::is_same<T, Type::Annotated>()) {
       return type_to_avro_schema_type(*_t.type_, _definitions, _already_known,
                                       _num_unnamed);
 
