@@ -13,6 +13,7 @@
 #include "../internal/default_if_missing_v.hpp"
 #include "../internal/default_if_null_v.hpp"
 #include "../internal/has_default_val_v.hpp"
+#include "../internal/has_flattened_tagged_union.hpp"
 #include "../internal/has_reflection_method_v.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/has_reflector.hpp"
@@ -22,12 +23,14 @@
 #include "../internal/is_description.hpp"
 #include "../internal/is_literal.hpp"
 #include "../internal/is_safe_default_constructible.hpp"
+#include "../internal/is_tagged_union.hpp"
 #include "../internal/is_validator.hpp"
 #include "../internal/processed_t.hpp"
 #include "../internal/ptr_cast.hpp"
 #include "../internal/to_ptr_named_tuple.hpp"
 #include "../to_view.hpp"
 #include "AreReaderAndWriter.hpp"
+#include "FlattenedTaggedUnionParser.hpp"
 #include "MapParser.hpp"
 #include "Parent.hpp"
 #include "ParserArray.hpp"
@@ -140,8 +143,16 @@ struct Parser {
     } else if constexpr (is_rfl_variant_v<T>) {
       return ParserRflVariant<R, W, T, ProcessorsType>::read(_r, _var);
 
-    } else if constexpr (is_tagged_union_v<T>) {
-      return ParserTaggedUnion<R, W, T, ProcessorsType>::read(_r, _var);
+    } else if constexpr (internal::is_tagged_union_based<T>) {
+      using BaseTU = internal::tagged_union_base_t<T>;
+      if constexpr (std::is_same_v<std::remove_cvref_t<T>, BaseTU>) {
+        return ParserTaggedUnion<R, W, BaseTU, ProcessorsType>::read(_r, _var);
+      } else {
+        return ParserTaggedUnion<R, W, BaseTU, ProcessorsType>::read(_r, _var)
+            .transform([](BaseTU&& _base) -> T {
+              return internal::from_tagged_union_base<T>(std::move(_base));
+            });
+      }
 
     } else if constexpr (is_rename_v<T>) {
       return ParserRename<R, W, T, ProcessorsType>::read(_r, _var);
@@ -313,6 +324,10 @@ struct Parser {
         };
         return Parser<R, W, ReflectionType, ProcessorsType>::read(_r, _var)
             .and_then(wrap_in_t);
+
+      } else if constexpr (internal::has_flattened_tagged_union_v<T>) {
+        return FlattenedTaggedUnionParser<R, W, T, ProcessorsType>::read(_r,
+                                                                         _var);
 
       } else if constexpr (internal::default_if_missing_v<ProcessorsType> ||
                            internal::has_unwrapped_default_val_v<T> ||
@@ -555,8 +570,10 @@ struct Parser {
     } else if constexpr (is_rfl_variant_v<T>) {
       ParserRflVariant<R, W, T, ProcessorsType>::write(_w, _var, _parent);
 
-    } else if constexpr (is_tagged_union_v<T>) {
-      ParserTaggedUnion<R, W, T, ProcessorsType>::write(_w, _var, _parent);
+    } else if constexpr (internal::is_tagged_union_based<T>) {
+      using BaseTU = internal::tagged_union_base_t<T>;
+      ParserTaggedUnion<R, W, BaseTU, ProcessorsType>::write(
+          _w, static_cast<const BaseTU&>(_var), _parent);
 
     } else if constexpr (is_rename_v<T>) {
       ParserRename<R, W, T, ProcessorsType>::write(_w, _var, _parent);
@@ -659,6 +676,10 @@ struct Parser {
         Parser<R, W, ReflectionType, ProcessorsType>::write(_w, r, _parent);
       }
 
+    } else if constexpr (internal::has_flattened_tagged_union_v<T>) {
+      FlattenedTaggedUnionParser<R, W, T, ProcessorsType>::write(_w, _var,
+                                                                 _parent);
+
     } else {
       const auto ptr_named_tuple = ProcessorsType::template process<T>(
           internal::to_ptr_named_tuple(_var));
@@ -722,8 +743,9 @@ struct Parser {
     } else if constexpr (is_rfl_variant_v<U>) {
       return ParserRflVariant<R, W, U, ProcessorsType>::to_schema(_definitions);
 
-    } else if constexpr (is_tagged_union_v<U>) {
-      return ParserTaggedUnion<R, W, U, ProcessorsType>::to_schema(
+    } else if constexpr (internal::is_tagged_union_based<U>) {
+      using BaseTU = internal::tagged_union_base_t<U>;
+      return ParserTaggedUnion<R, W, BaseTU, ProcessorsType>::to_schema(
           _definitions);
 
     } else if constexpr (is_rename_v<U>) {
@@ -881,6 +903,11 @@ struct Parser {
                            internal::has_write_reflector<U>) {
         (*_definitions)[name] = Parser<R, W, typename Reflector<U>::ReflType,
                                        ProcessorsType>::to_schema(_definitions);
+
+      } else if constexpr (internal::has_flattened_tagged_union_v<U>) {
+        (*_definitions)[name] =
+            FlattenedTaggedUnionParser<R, W, U, ProcessorsType>::to_schema(
+                _definitions);
 
       } else {
         using NamedTupleType = internal::processed_t<U, ProcessorsType>;

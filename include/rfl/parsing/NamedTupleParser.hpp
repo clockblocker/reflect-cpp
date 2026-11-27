@@ -650,6 +650,25 @@ struct NamedTupleParser {
     }
   }
 
+  template <int _i>
+  static void write_single_field(const W& _w,
+                                 const NamedTuple<FieldTypes...>& _tup,
+                                 OutputObjectOrArrayType* _ptr) {
+    add_field_to_object<_i>(_w, _tup, _ptr);
+  }
+
+  static void write_fields(const W& _w, const NamedTuple<FieldTypes...>& _tup,
+                           OutputObjectOrArrayType* _ptr) {
+    build_object(_w, _tup, _ptr, std::make_integer_sequence<int, size_>());
+  }
+
+  template <typename View, size_t _i>
+  static void add_single_field_to_schema(
+      std::map<std::string, schema::Type>* _definitions, SchemaType* _schema,
+      View* _view) noexcept {
+    add_field_to_schema<View, _i>(_definitions, _schema, _view);
+  }
+
   /**
    * @brief Generates the schema for the named tuple.
    *
