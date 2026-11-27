@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "../DefaultHint.hpp"
 #include "../DefaultVal.hpp"
 #include "../Deprecated.hpp"
 #include "../Description.hpp"
@@ -35,6 +36,7 @@
 #include "../internal/processed_t.hpp"
 #include "../parsing/is_string_map.hpp"
 #include "AllowAbbreviations.hpp"
+#include "Opt.hpp"
 #include "OptionsFirst.hpp"
 #include "Parser.hpp"
 #include "PureFlags.hpp"
@@ -459,6 +461,57 @@ struct cli_annotations<ValueName<_value_name, T>> : cli_annotations_t<T> {
 template <class T>
 struct cli_annotations<MultiToken<T>> : cli_annotations_t<T> {
   static constexpr bool is_multi_token = true;
+};
+
+template <rfl::internal::StringLiteral _hint, class T>
+struct cli_annotations<DefaultHint<_hint, T>> : cli_annotations_t<T> {};
+
+template <class T, class... Attrs>
+struct cli_annotations<Opt<T, Attrs...>> {
+  using Inner = cli_annotations_t<T>;
+  using Info = typename Opt<T, Attrs...>::AttrsInfo;
+
+  static constexpr bool is_short = Info::is_short || Inner::is_short;
+  static constexpr bool is_positional =
+      Info::is_positional || Inner::is_positional;
+  static constexpr bool is_hidden = Info::is_hidden || Inner::is_hidden;
+  static constexpr bool has_group = Info::has_group || Inner::has_group;
+  static constexpr bool has_value_name =
+      Info::has_value_name || Inner::has_value_name;
+  static constexpr bool is_multi_token =
+      Info::is_multi_token || Inner::is_multi_token;
+  static constexpr size_t num_implicit_value =
+      Info::num_implicit_value + Inner::num_implicit_value;
+  static constexpr int count = Info::count + Inner::count;
+
+  static constexpr auto short_name = []() {
+    if constexpr (Info::is_short) {
+      return Info::short_name;
+    } else {
+      return Inner::short_name;
+    }
+  }();
+  static constexpr auto implicit_value = []() {
+    if constexpr (Info::num_implicit_value > 0) {
+      return Info::implicit_value;
+    } else {
+      return Inner::implicit_value;
+    }
+  }();
+  static constexpr auto group_name = []() {
+    if constexpr (Info::has_group) {
+      return Info::group_name;
+    } else {
+      return Inner::group_name;
+    }
+  }();
+  static constexpr auto value_name = []() {
+    if constexpr (Info::has_value_name) {
+      return Info::value_name;
+    } else {
+      return Inner::value_name;
+    }
+  }();
 };
 
 /// The CLI metadata of the _i-th field of a NamedTuple. InnerType is the

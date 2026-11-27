@@ -17,6 +17,7 @@
 #include <variant>
 #include <vector>
 
+#include "../DefaultHint.hpp"
 #include "../Processors.hpp"
 #include "../Result.hpp"
 #include "../SnakeCaseToKebabCase.hpp"
@@ -50,6 +51,7 @@
 #include "../to_view.hpp"
 #include "App.hpp"
 #include "ListDelimiter.hpp"
+#include "Opt.hpp"
 #include "OptionsFirst.hpp"
 #include "Reader.hpp"
 #include "options.hpp"
@@ -116,6 +118,8 @@ struct UsageArg {
   /// Rendered constraints, such as "Range: 1..65535.".
   std::vector<std::string> constraints;
   std::optional<std::string> default_value;
+  /// Display-only default value hint (from rfl::DefaultHint or attr::DefaultHint).
+  std::string default_hint;
   /// Optional help section header (from rfl::Group).
   std::string group;
 };
@@ -407,6 +411,7 @@ struct usage_peel_base {
   static constexpr std::string_view description = {};
   static constexpr bool is_deprecated = false;
   static constexpr std::string_view deprecation_message = {};
+  static constexpr std::string_view default_hint = {};
   static constexpr bool has_outermost_default_val = false;
   static constexpr bool has_any_default_val = false;
   static constexpr bool has_nullable = false;
@@ -426,6 +431,7 @@ struct usage_peel<Description<_desc, T>, _outermost> {
   static constexpr bool is_deprecated = Next::is_deprecated;
   static constexpr std::string_view deprecation_message =
       Next::deprecation_message;
+  static constexpr std::string_view default_hint = Next::default_hint;
   static constexpr bool has_outermost_default_val =
       Next::has_outermost_default_val;
   static constexpr bool has_any_default_val = Next::has_any_default_val;
@@ -447,6 +453,7 @@ struct usage_peel<Deprecated<_msg, _desc, T>, _outermost> {
   static constexpr bool is_deprecated = true;
   static constexpr std::string_view deprecation_message =
       Next::is_deprecated ? Next::deprecation_message : _msg.string_view();
+  static constexpr std::string_view default_hint = Next::default_hint;
   static constexpr bool has_outermost_default_val =
       Next::has_outermost_default_val;
   static constexpr bool has_any_default_val = Next::has_any_default_val;
@@ -458,11 +465,58 @@ struct usage_peel<Deprecated<_msg, _desc, T>, _outermost> {
   }
 };
 
+template <rfl::internal::StringLiteral _hint, class T, bool _outermost>
+struct usage_peel<DefaultHint<_hint, T>, _outermost> {
+  using Next = usage_peel<std::remove_cvref_t<T>, _outermost>;
+  using CoreType = typename Next::CoreType;
+  static constexpr std::string_view description = Next::description;
+  static constexpr bool is_deprecated = Next::is_deprecated;
+  static constexpr std::string_view deprecation_message =
+      Next::deprecation_message;
+  static constexpr std::string_view default_hint =
+      _hint.string_view().empty() ? Next::default_hint : _hint.string_view();
+  static constexpr bool has_outermost_default_val =
+      Next::has_outermost_default_val;
+  static constexpr bool has_any_default_val = Next::has_any_default_val;
+  static constexpr bool has_nullable = Next::has_nullable;
+
+  static inline const CoreType* unwrap_ptr(
+      const DefaultHint<_hint, T>* _p) noexcept {
+    return Next::unwrap_ptr(_p ? &_p->value() : nullptr);
+  }
+};
+
+template <class T, class... Attrs, bool _outermost>
+struct usage_peel<Opt<T, Attrs...>, _outermost> {
+  using Info = typename Opt<T, Attrs...>::AttrsInfo;
+  using Next = usage_peel<std::remove_cvref_t<T>, _outermost>;
+  using CoreType = typename Next::CoreType;
+  static constexpr std::string_view description =
+      Info::description.empty() ? Next::description : Info::description;
+  static constexpr bool is_deprecated =
+      Info::is_deprecated || Next::is_deprecated;
+  static constexpr std::string_view deprecation_message =
+      Next::is_deprecated ? Next::deprecation_message
+                          : Info::deprecation_message;
+  static constexpr std::string_view default_hint =
+      Info::default_hint.empty() ? Next::default_hint : Info::default_hint;
+  static constexpr bool has_outermost_default_val =
+      Next::has_outermost_default_val;
+  static constexpr bool has_any_default_val = Next::has_any_default_val;
+  static constexpr bool has_nullable = Next::has_nullable;
+
+  static inline const CoreType* unwrap_ptr(
+      const Opt<T, Attrs...>* _p) noexcept {
+    return Next::unwrap_ptr(_p ? &_p->value() : nullptr);
+  }
+};
+
 template <class T, bool _outermost>
-  requires(rfl::internal::is_short_v<T> || rfl::internal::is_positional_v<T> ||
-           rfl::internal::is_transparent_wrapper_v<T> ||
-           parsing::is_rename_v<T> || parsing::is_skip_v<T> ||
-           parsing::is_commented_v<T>)
+  requires((rfl::internal::is_short_v<T> || rfl::internal::is_positional_v<T> ||
+            rfl::internal::is_transparent_wrapper_v<T> ||
+            parsing::is_rename_v<T> || parsing::is_skip_v<T> ||
+            parsing::is_commented_v<T>) &&
+           !rfl::internal::is_default_hint_v<T> && !is_cli_opt_v<T>)
 struct usage_peel<T, _outermost> {
   using Next = usage_peel<std::remove_cvref_t<typename T::Type>, _outermost>;
   using CoreType = typename Next::CoreType;
@@ -470,6 +524,7 @@ struct usage_peel<T, _outermost> {
   static constexpr bool is_deprecated = Next::is_deprecated;
   static constexpr std::string_view deprecation_message =
       Next::deprecation_message;
+  static constexpr std::string_view default_hint = Next::default_hint;
   static constexpr bool has_outermost_default_val =
       Next::has_outermost_default_val;
   static constexpr bool has_any_default_val = Next::has_any_default_val;
@@ -488,6 +543,7 @@ struct usage_peel<DefaultVal<T>, _outermost> {
   static constexpr bool is_deprecated = Next::is_deprecated;
   static constexpr std::string_view deprecation_message =
       Next::deprecation_message;
+  static constexpr std::string_view default_hint = Next::default_hint;
   static constexpr bool has_outermost_default_val = _outermost;
   static constexpr bool has_any_default_val = true;
   static constexpr bool has_nullable = Next::has_nullable;
@@ -505,6 +561,7 @@ struct usage_peel<std::optional<T>, _outermost> {
   static constexpr bool is_deprecated = Next::is_deprecated;
   static constexpr std::string_view deprecation_message =
       Next::deprecation_message;
+  static constexpr std::string_view default_hint = Next::default_hint;
   static constexpr bool has_outermost_default_val =
       Next::has_outermost_default_val;
   static constexpr bool has_any_default_val = Next::has_any_default_val;
@@ -526,6 +583,7 @@ struct usage_peel<T, _outermost> {
   static constexpr bool is_deprecated = Next::is_deprecated;
   static constexpr std::string_view deprecation_message =
       Next::deprecation_message;
+  static constexpr std::string_view default_hint = Next::default_hint;
   static constexpr bool has_outermost_default_val =
       Next::has_outermost_default_val;
   static constexpr bool has_any_default_val = Next::has_any_default_val;
@@ -548,6 +606,7 @@ struct usage_peel<T, _outermost> {
   static constexpr bool is_deprecated = Next::is_deprecated;
   static constexpr std::string_view deprecation_message =
       Next::deprecation_message;
+  static constexpr std::string_view default_hint = Next::default_hint;
   static constexpr bool has_outermost_default_val =
       Next::has_outermost_default_val;
   static constexpr bool has_any_default_val = Next::has_any_default_val;
@@ -616,6 +675,11 @@ class UsageWalker {
     }
     if constexpr (Peel::is_deprecated) {
       _arg.deprecation = std::string(Peel::deprecation_message);
+    }
+    if constexpr (!Peel::default_hint.empty()) {
+      if (_arg.default_hint.empty()) {
+        _arg.default_hint = std::string(Peel::default_hint);
+      }
     }
     if constexpr (Peel::has_outermost_default_val) {
       if (_default_ptr != nullptr) {
@@ -957,6 +1021,9 @@ class UsageWalker {
     }
     if (_default && !(pure_flag && *_default == "false")) {
       _arg.default_value = std::move(_default);
+    } else if (!_arg.default_hint.empty() &&
+               !(pure_flag && _arg.default_hint == "false")) {
+      _arg.default_value = _arg.default_hint;
     }
     if (const auto grp = options_->find_group(_arg.name); !grp.empty()) {
       _arg.group = std::string(grp);

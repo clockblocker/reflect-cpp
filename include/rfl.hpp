@@ -19,6 +19,7 @@
 #include "rfl/CamelCaseToSnakeCase.hpp"
 #include "rfl/CodePoints.hpp"
 #include "rfl/Commented.hpp"
+#include "rfl/DefaultHint.hpp"
 #include "rfl/DefaultIfMissing.hpp"
 #include "rfl/DefaultVal.hpp"
 #include "rfl/Description.hpp"

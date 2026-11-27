@@ -196,9 +196,10 @@ class ViewReaderWithDefault {
     if (idx >= 0 && !(*_found)[static_cast<size_t>(idx)]) {
       (*_found)[static_cast<size_t>(idx)] = true;
       already_assigned = true;
-      ((idx == is ? (assign_one_field<is>(_r, _var, _view, _errors), true)
-                  : false) ||
-       ...);
+      static_cast<void>(
+          ((idx == is ? (assign_one_field<is>(_r, _var, _view, _errors), true)
+                      : false) ||
+           ...));
     }
 
     if constexpr (ViewType::pos_extra_fields() != -1) {

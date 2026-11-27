@@ -1,9 +1,12 @@
 #ifndef RFL_CLI_READ_HPP_
 #define RFL_CLI_READ_HPP_
 
+#include <algorithm>
 #include <initializer_list>
+#include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "../Processors.hpp"
 #include "../SnakeCaseToKebabCase.hpp"
@@ -18,9 +21,57 @@
 
 namespace rfl::cli {
 
+/// Result returned by `rfl::cli::read_detailed`: holds the parsed struct along
+/// with the sorted canonical long names of every option and positional argument
+/// that was explicitly passed on the command line (including options whose
+/// given value equals their default).
+template <class T>
+struct ReadResult {
+  T value;
+  std::vector<std::string> provided;
+
+  /// Returns true if the canonical option or positional name `_name` was
+  /// explicitly supplied on the command line.
+  bool was_provided(const std::string_view _name) const {
+    const auto it = std::lower_bound(provided.begin(), provided.end(), _name);
+    return it != provided.end() && *it == _name;
+  }
+};
+
 namespace internal {
 
 static_assert(list_delimiter_v<Processors<>> == array_delimiter);
+
+/// Resolves the parsed arguments and reads them into T, also capturing the
+/// sorted list of explicitly provided canonical option names.
+template <class T, class ProcessorsType>
+rfl::Result<ReadResult<T>> read_parsed_detailed(ParsedArgs _parsed,
+                                                const Options& _options) {
+  static_assert(!internal::keep_empty_items_v<ProcessorsType>
+                    || internal::list_delimiter_v<ProcessorsType>.has_value(),
+                "rfl::cli::KeepEmptyItems has no effect with "
+                "rfl::cli::ListDelimiter<\"\">, which does not split lists, "
+                "so an empty item is kept as \"\" anyway. Remove one of "
+                "them.");
+  return resolve_args(std::move(_parsed), _options)
+      .and_then([](auto _args) -> rfl::Result<ReadResult<T>> {
+        std::vector<std::string> provided;
+        provided.reserve(_args.values.size());
+        for (const auto& [key, _] : _args.values) {
+          provided.push_back(key);
+        }
+        const auto r =
+            Reader(internal::list_delimiter_v<ProcessorsType>,
+                   internal::keep_empty_items_v<ProcessorsType>,
+                   std::move(_args.verbatim_list));
+        const auto var = CliVarType{&_args.values, "", std::nullopt,
+                                    &_args.later_occurrences};
+        return Parser<T, ProcessorsType>::read(r, var).transform(
+            [&](T&& _val) {
+              return ReadResult<T>{std::move(_val), std::move(provided)};
+            });
+      });
+}
 
 /// Resolves the parsed arguments and reads them into T.
 template <class T, class ProcessorsType>
@@ -40,6 +91,25 @@ rfl::Result<T> read_parsed(ParsedArgs _parsed, const Options& _options) {
         const auto var = CliVarType{&_args.values, "", std::nullopt,
                                     &_args.later_occurrences};
         return Parser<T, ProcessorsType>::read(r, var);
+      });
+}
+
+/// Categorizes the arguments with `_parse`, which takes the options of T
+/// (see make_options) and returns ParsedArgs, and turns them into ReadResult<T>.
+template <class T, class... Ps, class ParseFn>
+rfl::Result<ReadResult<T>> parse_and_read_detailed(const ParseFn& _parse) {
+  using ProcessorsType =
+      rfl::internal::flatten_processors_t<SnakeCaseToKebabCase, Ps...>;
+  static_assert(!internal::has_app_v<ProcessorsType>,
+                "rfl::cli::App turns on --help and --version, which "
+                "rfl::cli::read_detailed cannot report. Call rfl::cli::read_app "
+                "instead.");
+  const auto& options = cached_options<T, ProcessorsType>();
+  return check_short_names(options)
+      .and_then([&](bool) { return _parse(options); })
+      .and_then([&](ParsedArgs _parsed) {
+        return read_parsed_detailed<T, ProcessorsType>(std::move(_parsed),
+                                                       options);
       });
 }
 
@@ -137,6 +207,46 @@ rfl::Result<T> read(int argc, const wchar_t* const argv[]) {
 template <class T, class... Ps>
 rfl::Result<T> read(int argc, wchar_t* argv[]) {
   return read<T, Ps...>(argc, static_cast<const wchar_t* const*>(argv));
+}
+
+/// Like `rfl::cli::read`, returning `ReadResult<T>` containing both the parsed
+/// struct and the sorted canonical names of explicitly provided options.
+template <class T, class... Ps,
+          class R = std::initializer_list<std::string_view>>
+  requires internal::StringRange<R> || internal::WideStringRange<R>
+rfl::Result<ReadResult<T>> read_detailed(R&& _args) {
+  return internal::parse_and_read_detailed<T, Ps...>(
+      [&](const auto& _options) {
+        return internal::parse_argv(std::forward<R>(_args), _options);
+      });
+}
+
+template <class T, class... Ps>
+rfl::Result<ReadResult<T>> read_detailed(int argc, const char* const argv[]) {
+  return internal::parse_and_read_detailed<T, Ps...>(
+      [&](const auto& _options) {
+        return internal::parse_argv(argc, argv, _options);
+      });
+}
+
+template <class T, class... Ps>
+rfl::Result<ReadResult<T>> read_detailed(int argc, char* argv[]) {
+  return read_detailed<T, Ps...>(argc, static_cast<const char* const*>(argv));
+}
+
+template <class T, class... Ps>
+rfl::Result<ReadResult<T>> read_detailed(int argc,
+                                         const wchar_t* const argv[]) {
+  return internal::parse_and_read_detailed<T, Ps...>(
+      [&](const auto& _options) {
+        return internal::parse_argv(argc, argv, _options);
+      });
+}
+
+template <class T, class... Ps>
+rfl::Result<ReadResult<T>> read_detailed(int argc, wchar_t* argv[]) {
+  return read_detailed<T, Ps...>(argc,
+                                 static_cast<const wchar_t* const*>(argv));
 }
 
 }  // namespace rfl::cli
