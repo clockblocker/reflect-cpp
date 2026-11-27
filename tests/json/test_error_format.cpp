@@ -77,6 +77,8 @@ TEST(json, test_format_path) {
             "cfg[\"a.b\"][\"has space\"][\"k[0]\"][\"x]y\"]");
   EXPECT_EQ(rfl::format_path(Path{""}), "[\"\"]");
   EXPECT_EQ(rfl::format_path(Path{"a\"b\\c"}), "[\"a\\\"b\\\\c\"]");
+  EXPECT_EQ(rfl::format_path(Path{"line1\nline2\t\r\x01"}),
+            "[\"line1\\nline2\\t\\r\\x01\"]");
 }
 
 TEST(json, test_format_json_pointer) {
