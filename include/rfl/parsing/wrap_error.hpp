@@ -58,6 +58,9 @@ RFL_COLD inline Error wrap_field_error(const std::string_view _name,
  */
 RFL_COLD inline Error wrap_error(const std::string_view _prefix, Error&& _err) {
   auto what = std::string(_prefix) + _err.what();
+  if (!internal::has_allocated_details(_err)) {
+    return Error(std::move(what), _err.kind());
+  }
   auto details = std::move(_err).details();
   for (auto& detail : details) {
     if (detail.path.empty()) {
@@ -73,12 +76,14 @@ RFL_COLD inline Error wrap_error(const std::string_view _prefix, Error&& _err) {
  *
  * @param _segment The location of the nested value relative to its parent.
  * @param _msg The error message.
+ * @param _kind Coarse classification of the error.
  * @return The error as seen from the parent.
  */
 RFL_COLD inline Error make_nested_error(
-    const ErrorDetail::PathSegment& _segment, std::string _msg) {
+    const ErrorDetail::PathSegment& _segment, std::string _msg,
+    const ErrorKind _kind = ErrorKind::other) {
   auto details = std::vector<ErrorDetail>(
-      {ErrorDetail{.path = {_segment}, .message = _msg}});
+      {ErrorDetail{.path = {_segment}, .message = _msg, .kind = _kind}});
   return Error(std::move(_msg), std::move(details));
 }
 

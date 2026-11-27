@@ -35,7 +35,7 @@ struct Validator {
     try {
       return wrap_validated(ValidationType::validate(_value));
     } catch (std::exception& e) {
-      return error(e.what());
+      return error(e.what(), ErrorKind::constraint_violation);
     }
   }
 
@@ -47,7 +47,7 @@ struct Validator {
     try {
       return wrap_validated(ValidationType::validate(std::move(_value)));
     } catch (std::exception& e) {
-      return error(e.what());
+      return error(e.what(), ErrorKind::constraint_violation);
     }
   }
 
@@ -199,8 +199,15 @@ struct Validator {
 
   /// Wraps the result of a validation without throwing if it failed.
   static Result<Validator> wrap_validated(Result<T>&& _res) {
-    return std::move(_res).transform(
-        [](T&& _v) { return Validator(AlreadyValidated{}, std::move(_v)); });
+    return std::move(_res)
+        .transform([](T&& _v) {
+          return Validator(AlreadyValidated{}, std::move(_v));
+        })
+        .transform_error([](Error&& _err) -> Error {
+          internal::set_error_kind_if_other(_err,
+                                            ErrorKind::constraint_violation);
+          return std::move(_err);
+        });
   }
 
  private:

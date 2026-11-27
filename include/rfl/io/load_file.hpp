@@ -20,7 +20,8 @@ Result<Container> load_file(const std::string& _fname,
   try {
     std::ifstream input(_fname, _mode);
     if (!input.is_open()) {
-      return error("Unable to open file '" + _fname + "' for reading.");
+      return error("Unable to open file '" + _fname + "' for reading.",
+                   ErrorKind::io_error);
     }
     Container bytes;
     std::error_code ec;
@@ -29,21 +30,24 @@ Result<Container> load_file(const std::string& _fname,
       if (size > bytes.max_size() ||
           size > static_cast<std::uintmax_t>(
                      (std::numeric_limits<std::streamsize>::max)())) {
-        return error("File '" + _fname + "' is too large to read.");
+        return error("File '" + _fname + "' is too large to read.",
+                     ErrorKind::io_error);
       }
       bytes.resize(static_cast<std::size_t>(size));
       if (!bytes.empty()) {
         input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
         bytes.resize(static_cast<std::size_t>(input.gcount()));
         if (input.bad() || (input.fail() && !input.eof())) {
-          return error("Unable to read file '" + _fname + "'.");
+          return error("Unable to read file '" + _fname + "'.",
+                       ErrorKind::io_error);
         }
         if (input.eof()) {
           return bytes;
         }
       }
     } else if (std::filesystem::is_directory(_fname, ec)) {
-      return error("Cannot read directory '" + _fname + "' as a file.");
+      return error("Cannot read directory '" + _fname + "' as a file.",
+                   ErrorKind::io_error);
     }
     // The size is only a hint: text conversion, growing files, and special
     // files can produce a different number of bytes. Never require seeking.
@@ -51,13 +55,15 @@ Result<Container> load_file(const std::string& _fname,
     do {
       input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
       if (input.bad() || (input.fail() && !input.eof())) {
-        return error("Unable to read file '" + _fname + "'.");
+        return error("Unable to read file '" + _fname + "'.",
+                     ErrorKind::io_error);
       }
       bytes.insert(bytes.end(), buffer.data(), buffer.data() + input.gcount());
     } while (!input.eof());
     return bytes;
   } catch (const std::exception& e) {
-    return error("Unable to read file '" + _fname + "': " + e.what());
+    return error("Unable to read file '" + _fname + "': " + e.what(),
+                 ErrorKind::io_error);
   }
 }
 

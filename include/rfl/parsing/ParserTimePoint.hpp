@@ -118,7 +118,8 @@ struct ParserTimePoint {
       const char* str = _str.c_str();
       const char* rest = parse_datetime(str, &tm);
       if (!rest) {
-        return error("Could not parse time point from '" + _str + "'.");
+        return error("Could not parse time point from '" + _str + "'.",
+                     ErrorKind::invalid_value);
       }
 
       auto t = to_time_t(tm);
@@ -152,17 +153,19 @@ struct ParserTimePoint {
       if (*rest == '+' || *rest == '-') {
         const auto offset = parse_tz_offset(rest);
         if (!offset) {
-          return error("Could not parse timezone offset from '" + _str + "'.");
+          return error("Could not parse timezone offset from '" + _str + "'.",
+                       ErrorKind::invalid_value);
         }
         tp -= *offset;
       } else if (*rest != 'Z' && *rest != '\0') {
         return error("Could not parse time point from '" + _str +
-                     "': expected 'Z', timezone offset, or end of string.");
+                         "': expected 'Z', timezone offset, or end of string.",
+                     ErrorKind::invalid_value);
       }
 
       return std::chrono::time_point_cast<Duration>(tp);
     } catch (std::exception& e) {
-      return error(e.what());
+      return error(e.what(), ErrorKind::invalid_value);
     }
   }
 

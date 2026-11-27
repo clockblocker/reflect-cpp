@@ -12,6 +12,7 @@
 #include "../internal/is_array.hpp"
 #include "../internal/nth_element_t.hpp"
 #include "Parser_base.hpp"
+#include "wrap_error.hpp"
 
 namespace rfl::parsing {
 
@@ -46,7 +47,8 @@ class FieldVariantReader {
     if (*field_variant_) {
       *field_variant_ = error(
           "Could not parse rfl::Variant: Expected the object to have "
-          "exactly one field, but found more than one.");
+          "exactly one field, but found more than one.",
+          ErrorKind::invalid_value);
       return;
     }
     try_matching_fields(
@@ -57,7 +59,7 @@ class FieldVariantReader {
       stream << "Could not parse rfl::Variant, could not match field named "
                 "'"
              << _disc_value << "'.";
-      *field_variant_ = error(stream.str());
+      *field_variant_ = error(stream.str(), ErrorKind::invalid_value);
     }
   }
 
@@ -80,11 +82,11 @@ class FieldVariantReader {
       const auto to_variant = [](ValueType&& _val) {
         return rfl::Variant<FieldTypes...>(FieldType(std::move(_val)));
       };
-      const auto embellish_error = [&](const Error& _e) {
+      const auto embellish_error = [&](Error _e) {
         std::stringstream stream;
         stream << "Could not parse rfl::Variant with field '"
-               << std::string(_disc_value) << "': " << _e.what();
-        return Error(stream.str());
+               << std::string(_disc_value) << "': ";
+        return wrap_error(stream.str(), std::move(_e));
       };
       *field_variant_ = Parser<R, W, ValueType, ProcessorsType>::read(*r_, _var)
                             .transform(to_variant)

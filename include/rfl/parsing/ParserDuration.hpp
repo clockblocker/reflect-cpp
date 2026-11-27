@@ -138,7 +138,7 @@ struct ParserDuration {
         return SupportedTypes(std::chrono::years(_r.count));
 
       default:
-        return error("Unsupported unit.");
+        return error("Unsupported unit.", ErrorKind::invalid_value);
     }
   }
 

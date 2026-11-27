@@ -158,7 +158,10 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
              << _discriminator.str() << " '" << _disc_value
              << "'. The following tags are allowed: "
              << internal::strings::join(", ", names);
-      return error(stream.str());
+      const ErrorDetail::PathSegment seg =
+          no_field_names_ ? ErrorDetail::PathSegment(size_t{0})
+                          : ErrorDetail::PathSegment(_discriminator.str());
+      return error(stream.str(), ErrorKind::invalid_value, {seg});
     }
   }
 
@@ -213,11 +216,16 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
       return _r.template to_basic_type<std::string>(_var);
     };
 
-    const auto embellish_error = [](const auto&) {
+    const auto embellish_error = [](const Error& _e) {
       std::stringstream stream;
       stream << "Could not parse tagged union: Could not find field '"
              << _discriminator.str() << "' or type of field was not a string.";
-      return Error(stream.str());
+      const auto kind = _e.kind() != ErrorKind::other ? _e.kind()
+                                                      : ErrorKind::invalid_value;
+      const ErrorDetail::PathSegment seg =
+          no_field_names_ ? ErrorDetail::PathSegment(size_t{0})
+                          : ErrorDetail::PathSegment(_discriminator.str());
+      return make_nested_error(seg, stream.str(), kind);
     };
 
     if constexpr (no_field_names_) {
