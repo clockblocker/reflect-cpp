@@ -12,6 +12,7 @@
 
 #include "../../Literal.hpp"
 #include "../concat_literals.hpp"
+#include "../is_alias.hpp"
 #include "../is_flatten_field.hpp"
 #include "../is_rename.hpp"
 #include "get_ith_field_from_fake_object.hpp"
@@ -88,8 +89,9 @@ consteval auto get_field_name() {
 #else
   using Type = std::remove_cvref_t<std::remove_pointer_t<decltype(ptr)>>;
 #endif
-  if constexpr (is_rename_v<Type>) {
-    using Name = typename Type::Name;
+  using UnwrappedType = remove_alias_t<Type>;
+  if constexpr (is_rename_v<UnwrappedType>) {
+    using Name = typename UnwrappedType::Name;
     return Name();
   } else if constexpr (is_flatten_field_v<Type>) {
     return get_field_names<std::remove_cvref_t<typename Type::Type>>();

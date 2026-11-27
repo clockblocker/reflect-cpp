@@ -2,6 +2,7 @@
 #define RFL_SNAKECASETOCAMELCASE_HPP_
 
 #include "Field.hpp"
+#include "internal/is_alias.hpp"
 #include "internal/is_rename.hpp"
 #include "internal/transform_case.hpp"
 
@@ -18,7 +19,8 @@ struct SnakeCaseToCamelCase {
   static auto process(const auto& _named_tuple) {
     return _named_tuple.transform([]<class FieldType>(const FieldType& _f) {
       if constexpr (FieldType::name() != "xml_content" &&
-                    !internal::is_rename_v<typename FieldType::Type>) {
+                    !internal::is_rename_v<
+                        internal::remove_alias_t<typename FieldType::Type>>) {
         return handle_one_field(_f);
       } else {
         return _f;

@@ -2,6 +2,7 @@
 #define RFL_SNAKECASETOKEBABCASE_HPP_
 
 #include "Field.hpp"
+#include "internal/is_alias.hpp"
 #include "internal/is_rename.hpp"
 #include "internal/transform_case.hpp"
 
@@ -20,7 +21,8 @@ struct SnakeCaseToKebabCase {
       // "xml_content" is a reserved name used by the XML Reader/Writer;
       // all case-transform processors must leave it unchanged.
       if constexpr (FieldType::name() != "xml_content" &&
-                    !internal::is_rename_v<typename FieldType::Type>) {
+                    !internal::is_rename_v<
+                        internal::remove_alias_t<typename FieldType::Type>>) {
         return handle_one_field(_f);
       } else {
         return _f;

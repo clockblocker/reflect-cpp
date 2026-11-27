@@ -10,6 +10,7 @@
 
 #include "../Tuple.hpp"
 #include "../internal/always_inline.hpp"
+#include "../internal/field_aliases.hpp"
 #include "../internal/is_array.hpp"
 #include "../internal/no_extra_fields_v.hpp"
 #include "FieldErrors.hpp"
@@ -90,7 +91,14 @@ class ViewReader {
 
   template <int i, class FieldType>
   static bool is_matching(const std::string_view& _current_name) {
-    return _current_name == FieldType::name();
+    if (_current_name == FieldType::name()) {
+      return true;
+    }
+    using Aliases = internal::field_aliases_t<typename FieldType::Type>;
+    if constexpr (Aliases::size > 0) {
+      return Aliases::contains(_current_name);
+    }
+    return false;
   }
 
   static ErrorDetail::PathSegment to_path_segment(const int _current_index) {
@@ -111,25 +119,58 @@ class ViewReader {
     using OriginalType = typename FieldType::Type;
     using T =
         std::remove_cvref_t<std::remove_pointer_t<typename FieldType::Type>>;
-    if (!(*_already_assigned) && !std::get<i>(*_found) &&
-        is_matching<i, FieldType>(_current_name_or_index)) {
-      std::get<i>(*_found) = true;
-      *_already_assigned = true;
-      auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
-      if (!res) [[unlikely]] {
-        constexpr auto name = FieldType::name();
-        // Reserve lazily to avoid error-vector reallocations while keeping
-        // successful reads allocation-free.
-        _errors->reserve(size_);
-        _errors->emplace_back(wrap_field_error(name, std::move(res).error()));
-        return;
+    using Aliases = internal::field_aliases_t<OriginalType>;
+    if constexpr (Aliases::size == 0) {
+      if (!(*_already_assigned) && !std::get<i>(*_found) &&
+          is_matching<i, FieldType>(_current_name_or_index)) {
+        std::get<i>(*_found) = true;
+        *_already_assigned = true;
+        auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
+        if (!res) [[unlikely]] {
+          constexpr auto name = FieldType::name();
+          // Reserve lazily to avoid error-vector reallocations while keeping
+          // successful reads allocation-free.
+          _errors->reserve(size_);
+          _errors->emplace_back(wrap_field_error(name, std::move(res).error()));
+          return;
+        }
+        if constexpr (std::is_pointer_v<OriginalType>) {
+          move_to(rfl::get<i>(*_view), &(*res));
+        } else {
+          rfl::get<i>(*_view) = std::move(*res);
+        }
+        std::get<i>(*_set) = true;
       }
-      if constexpr (std::is_pointer_v<OriginalType>) {
-        move_to(rfl::get<i>(*_view), &(*res));
-      } else {
-        rfl::get<i>(*_view) = std::move(*res);
+    } else {
+      if (!(*_already_assigned) &&
+          is_matching<i, FieldType>(_current_name_or_index)) {
+        if (std::get<i>(*_found)) [[unlikely]] {
+          *_already_assigned = true;
+          std::stringstream stream;
+          stream << "Field named '" << FieldType::name()
+                 << "' was specified more than once (conflicting key '"
+                 << _current_name_or_index << "').";
+          _errors->reserve(size_);
+          _errors->emplace_back(make_nested_error(
+              to_path_segment(_current_name_or_index), stream.str()));
+          return;
+        }
+        std::get<i>(*_found) = true;
+        *_already_assigned = true;
+        auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
+        if (!res) [[unlikely]] {
+          constexpr auto name = FieldType::name();
+          _errors->reserve(size_);
+          _errors->emplace_back(wrap_field_error(name, std::move(res).error()));
+          return;
+        }
+        if constexpr (std::is_pointer_v<OriginalType>) {
+          move_to(rfl::get<i>(*_view), &(*res));
+        } else {
+          rfl::get<i>(*_view) = std::move(*res);
+        }
+        std::get<i>(*_set) = true;
       }
-      std::get<i>(*_set) = true;
     }
   }
 
