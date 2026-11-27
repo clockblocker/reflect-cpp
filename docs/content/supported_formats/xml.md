@@ -252,3 +252,35 @@ const auto person = Person{...};
 rfl::xml::save("/path/to/file.xml", person);
 ```
 
+## Interoperating directly with `pugixml`
+
+You can combine `pugixml` DOM / XPath navigation with `reflect-cpp` on clean subtrees:
+
+```cpp
+pugi::xml_document doc;
+doc.load_file("project.xml");
+
+// Read a reflected struct directly from a pugi::xml_node (or pugi::xml_document):
+const auto node = doc.select_node("//settings/compiler").node();
+const auto cfg = rfl::xml::read<CompilerConfig>(node).value();
+
+// Splice a reflected struct under an existing parent node without disturbing siblings:
+const pugi::xml_node appended = rfl::xml::write<"compiler">(cfg, target_parent);
+// Or with a runtime element name (returns an empty node if parent or name is empty):
+const pugi::xml_node dynamic = rfl::xml::write(cfg, target_parent, "compiler");
+```
+
+For individual fields with mixed content, XML namespaces, or custom XPath logic,
+provide a static `from_xml_obj(const pugi::xml_node&)` method returning `T` or
+`rfl::Result<T>`:
+
+```cpp
+struct RichText {
+    std::string raw_text;
+
+    static rfl::Result<RichText> from_xml_obj(const pugi::xml_node& _node) {
+        return RichText{_node.text().as_string()};
+    }
+};
+```
+
