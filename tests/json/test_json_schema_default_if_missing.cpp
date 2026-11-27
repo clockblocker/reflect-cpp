@@ -681,7 +681,7 @@ TEST(json, test_wrapped_default_unsafe_construct_and_throwing_is_empty) {
       R"({"jobs":8,"boxed":5})");
   ASSERT_TRUE(box_ok.has_value()) << box_ok.error().what();
   EXPECT_EQ(box_ok->jobs().value(), 8);
-  EXPECT_EQ(box_ok->boxed->v, 5);
+  EXPECT_EQ(box_ok->boxed->value, 5);
   EXPECT_FALSE(
       rfl::json::read<WrappedDefaultWithBoxNoDefault>(R"({"boxed":5})")
           .has_value());
@@ -698,7 +698,7 @@ TEST(json, test_wrapped_default_unsafe_construct_and_throwing_is_empty) {
       R"({"jobs":8,"ref":5})");
   ASSERT_TRUE(ref_ok.has_value()) << ref_ok.error().what();
   EXPECT_EQ(ref_ok->jobs().value(), 8);
-  EXPECT_EQ(ref_ok->ref->v, 5);
+  EXPECT_EQ(ref_ok->ref->value, 5);
   const auto ref_schema = rfl::json::to_schema<WrappedDefaultWithRefNoDefault>();
   EXPECT_EQ(ref_schema.find("\"default\""), std::string::npos) << ref_schema;
   const auto ref_schema_dim =

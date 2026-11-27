@@ -3,8 +3,10 @@
 
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -16,6 +18,7 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #if __has_include(<expected>)
 #include <expected>
@@ -35,6 +38,7 @@
 #include "../NamedTuple.hpp"
 #include "../Object.hpp"
 #include "../Positional.hpp"
+#include "../Processors.hpp"
 #include "../Ref.hpp"
 #include "../Rename.hpp"
 #include "../Result.hpp"
@@ -424,6 +428,191 @@ concept CanEmitDefault =
 
 namespace rfl::parsing {
 
+template <class ProcessorsType>
+struct call_to_generic {
+  template <class T>
+  static Generic apply(const T& _val) {
+    return rfl::to_generic<ProcessorsType>(_val);
+  }
+};
+
+template <class... Ps>
+struct call_to_generic<Processors<Ps...>> {
+  template <class T>
+  static Generic apply(const T& _val) {
+    return rfl::to_generic<Ps...>(_val);
+  }
+};
+
+template <class T>
+struct is_std_optional_for_default : std::false_type {};
+
+template <class T>
+struct is_std_optional_for_default<std::optional<T>> : std::true_type {};
+
+template <class T>
+struct is_transparent_default_wrapper : std::false_type {};
+
+template <class T>
+struct is_transparent_default_wrapper<DefaultVal<T>> : std::true_type {};
+
+template <internal::StringLiteral _name, class T>
+struct is_transparent_default_wrapper<Rename<_name, T>> : std::true_type {};
+
+template <internal::StringLiteral _name, class T>
+struct is_transparent_default_wrapper<Short<_name, T>> : std::true_type {};
+
+template <class T>
+struct is_transparent_default_wrapper<Positional<T>> : std::true_type {};
+
+template <internal::StringLiteral _desc, class T>
+struct is_transparent_default_wrapper<Description<_desc, T>> : std::true_type {};
+
+template <internal::StringLiteral _msg, internal::StringLiteral _desc, class T>
+struct is_transparent_default_wrapper<Deprecated<_msg, _desc, T>>
+    : std::true_type {};
+
+template <class T>
+struct is_transparent_default_wrapper<Commented<T>> : std::true_type {};
+
+template <class T>
+struct is_transparent_default_wrapper<Attribute<T>> : std::true_type {};
+
+/// Unwraps metadata/CLI wrappers before serializing a field's default value to
+/// `rfl::Generic` so `to_generic` is only instantiated on the underlying value
+/// type (never per-field `Description<StringLiteral<N>, T>`).
+template <class T>
+constexpr const auto& unwrap_default_value(const T& _val) noexcept {
+  using U = std::remove_cvref_t<T>;
+  if constexpr (is_transparent_default_wrapper<U>::value) {
+    return unwrap_default_value(_val.value());
+  } else {
+    return _val;
+  }
+}
+
+template <class T>
+constexpr bool is_plain_integer_for_default_v =
+    std::is_integral_v<T> && !std::is_same_v<T, bool> &&
+    !std::is_same_v<T, char> && !std::is_same_v<T, wchar_t> &&
+    !std::is_same_v<T, char8_t> && !std::is_same_v<T, char16_t> &&
+    !std::is_same_v<T, char32_t>;
+
+/// Fast-path conversion of a default field value to `rfl::Generic` for schema
+/// emission. Peels metadata wrappers, constructs `rfl::Generic` directly for
+/// common scalars/containers, and unpacks `Processors<Ps...>` so
+/// `rfl::to_generic` never double-wraps `ProcessorsType`.
+template <class ProcessorsType, class U>
+inline Generic to_default_generic(const U& _val) {
+  const auto& raw = unwrap_default_value(_val);
+  using T = std::remove_cvref_t<decltype(raw)>;
+  if constexpr (std::is_same_v<T, bool>) {
+    return Generic(raw);
+  } else if constexpr (is_plain_integer_for_default_v<T>) {
+    if constexpr (std::is_unsigned_v<T> && sizeof(T) >= sizeof(int64_t)) {
+      if (raw <= static_cast<T>(std::numeric_limits<int64_t>::max())) {
+        return Generic(static_cast<int64_t>(raw));
+      }
+      return call_to_generic<ProcessorsType>::apply(raw);
+    } else {
+      return Generic(static_cast<int64_t>(raw));
+    }
+  } else if constexpr (std::is_floating_point_v<T>) {
+    return Generic(static_cast<double>(raw));
+  } else if constexpr (std::is_same_v<T, std::string>) {
+    return Generic(raw);
+  } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
+    Generic::Array arr;
+    arr.reserve(raw.size());
+    for (const auto& s : raw) {
+      arr.emplace_back(s);
+    }
+    return Generic(std::move(arr));
+  } else if constexpr (is_std_optional_for_default<T>::value) {
+    if (raw.has_value()) {
+      return to_default_generic<ProcessorsType>(*raw);
+    }
+    return Generic();
+  } else {
+    return call_to_generic<ProcessorsType>::apply(raw);
+  }
+}
+
+/// Sets the default value of the DefaultVal node in `_schema`. Rename, Short
+/// and Positional leave no node in the schema, but Description and
+/// Deprecated wrap the DefaultVal node in one of their own.
+inline void set_schema_default_value(Generic _default, schema::Type* _schema) {
+  _schema->variant_.visit([&](auto& _s) {
+    using S = std::remove_cvref_t<decltype(_s)>;
+    if constexpr (std::is_same_v<S, schema::Type::DefaultVal>) {
+      _s.default_value_ = std::move(_default);
+    } else if constexpr (std::is_same_v<S, schema::Type::Description> ||
+                         std::is_same_v<S, schema::Type::Deprecated>) {
+      set_schema_default_value(std::move(_default), &*_s.type_);
+    }
+  });
+}
+
+/// Free per-field schema helper parameterized only by the individual field's
+/// type (never by `View` or the enclosing struct's `FieldTypes...`).
+template <class R, class W, bool _no_field_names, class ProcessorsType, class U,
+          class SchemaType, class FieldValPtrT>
+void build_named_tuple_field_schema(
+    const std::string_view _name,
+    std::map<std::string, schema::Type>* _definitions, SchemaType* _schema,
+    const FieldValPtrT _field_val) noexcept {
+  if constexpr (!internal::is_skip_v<U> && !internal::is_extra_fields_v<U>) {
+    auto s = Parser<R, W, U, ProcessorsType>::to_schema(_definitions);
+    if constexpr (!std::is_same_v<FieldValPtrT, const void*>) {
+      if (_field_val != nullptr) {
+        if constexpr (internal::is_default_val_v<U>) {
+          if constexpr (internal::CanEmitDefault<U>) {
+            try {
+              set_schema_default_value(
+                  to_default_generic<ProcessorsType>(
+                      internal::get_default_val(*_field_val).value()),
+                  &s);
+            } catch (...) {
+            }
+          }
+        } else if constexpr (internal::default_if_missing_v<ProcessorsType> &&
+                             internal::CanWriteGeneric<U>) {
+          try {
+            bool skip_default = false;
+            if constexpr (std::is_pointer_v<U>) {
+              skip_default = (*_field_val == nullptr);
+            } else if constexpr (!is_required<U, false>()) {
+              skip_default = is_empty(*_field_val);
+            }
+            if (!skip_default) {
+              auto default_val =
+                  to_default_generic<ProcessorsType>(*_field_val);
+              s = schema::Type{schema::Type::DefaultVal{
+                  .type_ = Ref<schema::Type>::make(std::move(s)),
+                  .default_value_ = std::move(default_val)}};
+            }
+          } catch (...) {
+          }
+        }
+      }
+    }
+    if constexpr (_no_field_names) {
+      _schema->types_.emplace_back(std::move(s));
+    } else {
+      _schema->types_[std::string(_name)] = std::move(s);
+    }
+  }
+}
+
+template <class SlotT>
+RFL_ALWAYS_INLINE auto extract_schema_field_ptr(const SlotT& _slot) noexcept {
+  if constexpr (std::is_pointer_v<SlotT>) {
+    return static_cast<const std::remove_pointer_t<SlotT>*>(_slot);
+  } else {
+    return &_slot;
+  }
+}
+
 template <class R, class W, bool _ignore_empty_containers, bool _all_required,
           bool _no_field_names, class ProcessorsType, class... FieldTypes>
   requires AreReaderAndWriter<R, W, NamedTuple<FieldTypes...>>
@@ -637,65 +826,20 @@ struct NamedTupleParser {
       View* _view) noexcept {
     using F = internal::nth_element_t<_i, FieldTypes...>;
     using U = std::remove_cvref_t<typename F::Type>;
-    if constexpr (!internal::is_skip_v<U> && !internal::is_extra_fields_v<U>) {
-      // Add default value here
-      auto s = Parser<R, W, U, ProcessorsType>::to_schema(_definitions);
-      if constexpr (!std::is_same_v<View, void>) {
-        if (_view != nullptr) {
-          if constexpr (internal::is_default_val_v<U>) {
-            if constexpr (internal::CanEmitDefault<U>) {
-              try {
-                set_default_value(
-                    rfl::to_generic<ProcessorsType>(
-                        internal::get_default_val(*rfl::get<_i>(*_view))
-                            .value()),
-                    &s);
-              } catch (...) {
-              }
-            }
-          } else if constexpr (internal::default_if_missing_v<ProcessorsType> &&
-                               internal::CanWriteGeneric<U>) {
-            const auto& field_val = *rfl::get<_i>(*_view);
-            try {
-              bool skip_default = false;
-              if constexpr (std::is_pointer_v<U>) {
-                skip_default = (field_val == nullptr);
-              } else if constexpr (!is_required<U, false>()) {
-                skip_default = is_empty(field_val);
-              }
-              if (!skip_default) {
-                auto default_val = rfl::to_generic<ProcessorsType>(field_val);
-                s = schema::Type{schema::Type::DefaultVal{
-                    .type_ = Ref<schema::Type>::make(std::move(s)),
-                    .default_value_ = std::move(default_val)}};
-              }
-            } catch (...) {
-            }
-          }
-        }
-      }
-      if constexpr (_no_field_names) {
-        _schema->types_.emplace_back(std::move(s));
-      } else {
-        _schema->types_[std::string(F::name())] = std::move(s);
-      }
+    if constexpr (std::is_same_v<View, void>) {
+      build_named_tuple_field_schema<R, W, _no_field_names, ProcessorsType, U>(
+          F::name(), _definitions, _schema, static_cast<const void*>(nullptr));
+    } else {
+      const auto field_ptr =
+          _view != nullptr
+              ? extract_schema_field_ptr(rfl::get<_i>(*_view))
+              : static_cast<
+                    decltype(extract_schema_field_ptr(rfl::get<_i>(*_view)))>(
+                    nullptr);
+      build_named_tuple_field_schema<R, W, _no_field_names, ProcessorsType, U>(
+          F::name(), _definitions, _schema, field_ptr);
     }
   };
-
-  /// Sets the default value of the DefaultVal node in `_schema`. Rename, Short
-  /// and Positional leave no node in the schema, but Description and
-  /// Deprecated wrap the DefaultVal node in one of their own.
-  static void set_default_value(Generic _default, schema::Type* _schema) {
-    _schema->variant_.visit([&](auto& _s) {
-      using S = std::remove_cvref_t<decltype(_s)>;
-      if constexpr (std::is_same_v<S, schema::Type::DefaultVal>) {
-        _s.default_value_ = std::move(_default);
-      } else if constexpr (std::is_same_v<S, schema::Type::Description> ||
-                           std::is_same_v<S, schema::Type::Deprecated>) {
-        set_default_value(std::move(_default), &*_s.type_);
-      }
-    });
-  }
 
   template <int... _is>
   static void build_object(const W& _w, const NamedTuple<FieldTypes...>& _tup,
