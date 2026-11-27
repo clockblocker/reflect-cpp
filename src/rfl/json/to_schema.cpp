@@ -32,7 +32,7 @@ SOFTWARE.
 namespace rfl::json {
 
 schema::Type type_to_json_schema_type(const parsing::schema::Type& _type,
-                                      const bool _no_required);
+                                      const SchemaRenderOptions& _options);
 
 bool is_optional(const parsing::schema::Type& _t) {
   return _t.variant_.visit([&](const auto& _v) -> bool {
@@ -42,6 +42,9 @@ bool is_optional(const parsing::schema::Type& _t) {
 
     } else if constexpr (std::is_same_v<T,
                                         parsing::schema::Type::Description>) {
+      return is_optional(*_v.type_);
+
+    } else if constexpr (std::is_same_v<T, parsing::schema::Type::Annotated>) {
       return is_optional(*_v.type_);
 
     } else if constexpr (std::is_same_v<T, parsing::schema::Type::Validated>) {
@@ -62,7 +65,8 @@ std::string numeric_type_to_string(const parsing::schema::Type& _type) {
                   std::is_same<T, Type::Int64>() ||
                   std::is_same<T, Type::UInt32>() ||
                   std::is_same<T, Type::UInt64>() ||
-                  std::is_same<T, Type::Integer>()) {
+                  std::is_same<T, Type::Integer>() ||
+                  std::is_same<T, Type::BoundedInteger>()) {
       return schema::Type::Integer{}.type.str();
     } else {
       return schema::Type::Number{}.type.str();
@@ -74,28 +78,28 @@ std::string numeric_type_to_string(const parsing::schema::Type& _type) {
 schema::Type handle_validation_type(
     const parsing::schema::Type& _type,
     const parsing::schema::ValidationType& _validation_type,
-    const bool _no_required) {
+    const SchemaRenderOptions& _options) {
   auto handle_variant = [&](const auto& _v) -> schema::Type {
     using T = std::remove_cvref_t<decltype(_v)>;
     using ValidationType = parsing::schema::ValidationType;
     if constexpr (std::is_same<T, ValidationType::AllOf>()) {
       auto all_of = std::vector<schema::Type>();
       for (const auto& t : _v.types_) {
-        all_of.emplace_back(handle_validation_type(_type, t, _no_required));
+        all_of.emplace_back(handle_validation_type(_type, t, _options));
       }
       return schema::Type{.value = schema::Type::AllOf{.allOf = all_of}};
 
     } else if constexpr (std::is_same<T, ValidationType::AnyOf>()) {
       auto any_of = std::vector<schema::Type>();
       for (const auto& t : _v.types_) {
-        any_of.emplace_back(handle_validation_type(_type, t, _no_required));
+        any_of.emplace_back(handle_validation_type(_type, t, _options));
       }
       return schema::Type{.value = schema::Type::AnyOf{.anyOf = any_of}};
 
     } else if constexpr (std::is_same<T, ValidationType::OneOf>()) {
       auto one_of = std::vector<schema::Type>();
       for (const auto& t : _v.types_) {
-        one_of.emplace_back(handle_validation_type(_type, t, _no_required));
+        one_of.emplace_back(handle_validation_type(_type, t, _options));
       }
       return schema::Type{.value = schema::Type::OneOf{.oneOf = one_of}};
 
@@ -103,7 +107,7 @@ schema::Type handle_validation_type(
       return schema::Type{.value = schema::Type::Regex{.pattern = _v.pattern_}};
 
     } else if constexpr (std::is_same<T, ValidationType::Size>()) {
-      auto t = type_to_json_schema_type(_type, _no_required);
+      auto t = type_to_json_schema_type(_type, _options);
       // Size validates decoded bytes, not the length of the Base64 text.
       if (const auto* str = rfl::get_if<schema::Type::String>(&t.value);
           str && str->contentEncoding) {
@@ -138,7 +142,7 @@ schema::Type handle_validation_type(
                   .size_limit_ = rfl::Ref<ValidationType>::make(limiter)}});
             }
             return handle_validation_type(_type, ValidationType{.variant_ = v},
-                                          _no_required);
+                                          _options);
           }
         }
         return t;
@@ -197,12 +201,16 @@ schema::Type handle_validation_type(
 }
 
 schema::Type type_to_json_schema_type(const parsing::schema::Type& _type,
-                                      const bool _no_required) {
+                                      const SchemaRenderOptions& _options) {
   auto handle_variant = [&](const auto& _t) -> schema::Type {
     using T = std::remove_cvref_t<decltype(_t)>;
     using Type = parsing::schema::Type;
     if constexpr (std::is_same<T, Type::Boolean>()) {
       return schema::Type{.value = schema::Type::Boolean{}};
+
+    } else if constexpr (std::is_same<T, Type::BoundedInteger>()) {
+      return schema::Type{.value = schema::Type::Integer{
+                              .minimum = _t.minimum_, .maximum = _t.maximum_}};
 
     } else if constexpr (std::is_same<T, Type::Int32>() ||
                          std::is_same<T, Type::Int64>() ||
@@ -226,12 +234,28 @@ schema::Type type_to_json_schema_type(const parsing::schema::Type& _type,
     } else if constexpr (std::is_same<T, Type::AnyOf>()) {
       auto any_of = std::vector<schema::Type>();
       for (const auto& t : _t.types_) {
-        any_of.emplace_back(type_to_json_schema_type(t, _no_required));
+        any_of.emplace_back(type_to_json_schema_type(t, _options));
       }
       return schema::Type{.value = schema::Type::AnyOf{.anyOf = any_of}};
 
+    } else if constexpr (std::is_same<T, Type::Annotated>()) {
+      auto res = type_to_json_schema_type(*_t.type_, _options);
+      const auto update_annotations = [&](auto _v) -> schema::Type {
+        if (_t.title_ && !_t.title_->empty()) {
+          _v.annotations.value_.title = *_t.title_;
+        }
+        if (_t.examples_ && !_t.examples_->empty()) {
+          _v.annotations.value_.examples = *_t.examples_;
+        }
+        for (const auto& [k, val] : _t.extensions_) {
+          _v.annotations.value_.extensions[k] = val;
+        }
+        return schema::Type{std::move(_v)};
+      };
+      return rfl::visit(update_annotations, std::move(res.value));
+
     } else if constexpr (std::is_same<T, Type::DefaultVal>()) {
-      auto res = type_to_json_schema_type(*_t.type_, _no_required);
+      auto res = type_to_json_schema_type(*_t.type_, _options);
       if (!_t.default_value_.has_value()) {
         return res;
       }
@@ -242,7 +266,7 @@ schema::Type type_to_json_schema_type(const parsing::schema::Type& _type,
       return rfl::visit(update_prediction, res.value);
 
     } else if constexpr (std::is_same<T, Type::Deprecated>()) {
-      auto res = type_to_json_schema_type(*_t.type_, _no_required);
+      auto res = type_to_json_schema_type(*_t.type_, _options);
       const auto update_prediction = [&](auto _v) -> schema::Type {
         _v.annotations.value_.description = _t.description_;
         _v.annotations.value_.deprecated = true;
@@ -252,7 +276,7 @@ schema::Type type_to_json_schema_type(const parsing::schema::Type& _type,
       return rfl::visit(update_prediction, res.value);
 
     } else if constexpr (std::is_same<T, Type::Description>()) {
-      auto res = type_to_json_schema_type(*_t.type_, _no_required);
+      auto res = type_to_json_schema_type(*_t.type_, _options);
       const auto update_prediction = [&](auto _v) -> schema::Type {
         _v.annotations.value_.description = _t.description_;
         return schema::Type{_v};
@@ -263,7 +287,7 @@ schema::Type type_to_json_schema_type(const parsing::schema::Type& _type,
       return schema::Type{
           .value = schema::Type::FixedSizeTypedArray{
               .items = Ref<schema::Type>::make(
-                  type_to_json_schema_type(*_t.type_, _no_required)),
+                  type_to_json_schema_type(*_t.type_, _options)),
               .minItems = _t.size_,
               .maxItems = _t.size_}};
 
@@ -291,8 +315,8 @@ schema::Type type_to_json_schema_type(const parsing::schema::Type& _type,
       auto properties = rfl::Object<schema::Type>();
       auto required = std::vector<std::string>();
       for (const auto& [k, v] : _t.types_) {
-        properties[k] = type_to_json_schema_type(v, _no_required);
-        if (!is_optional(v) && !_no_required) {
+        properties[k] = type_to_json_schema_type(v, _options);
+        if (!is_optional(v) && !_options.no_required) {
           required.push_back(k);
         }
       }
@@ -308,20 +332,44 @@ schema::Type type_to_json_schema_type(const parsing::schema::Type& _type,
                 return std::nullopt;
               }
               return std::make_shared<schema::Type>(
-                  type_to_json_schema_type(*_a, _no_required));
+                  type_to_json_schema_type(*_a, _options));
             }
           },
           _t.additional_properties_);
+      std::optional<std::vector<std::string>> req_field =
+          (_options.omit_empty_required && required.empty())
+              ? std::nullopt
+              : std::optional<std::vector<std::string>>(std::move(required));
       return schema::Type{.value = schema::Type::Object{
                               .properties = properties,
-                              .required = required,
+                              .required = std::move(req_field),
                               .additionalProperties = additional_properties}};
 
     } else if constexpr (std::is_same<T, Type::Optional>()) {
+      auto inner = type_to_json_schema_type(*_t.type_, _options);
+      if (auto* any_of = rfl::get_if<schema::Type::AnyOf>(&inner.value);
+          any_of && !any_of->annotations.value_.title &&
+          !any_of->annotations.value_.description &&
+          !any_of->annotations.value_.deprecated &&
+          !any_of->annotations.value_.deprecationMessage &&
+          !any_of->annotations.value_.defaultValue.value().has_value() &&
+          !any_of->annotations.value_.examples &&
+          any_of->annotations.value_.extensions.empty()) {
+        bool has_null = false;
+        for (const auto& branch : any_of->anyOf) {
+          if (rfl::holds_alternative<schema::Type::Null>(branch.value)) {
+            has_null = true;
+            break;
+          }
+        }
+        if (!has_null) {
+          any_of->anyOf.emplace_back(schema::Type{schema::Type::Null{}});
+        }
+        return inner;
+      }
       return schema::Type{
           .value = schema::Type::AnyOf{
-              .anyOf = {type_to_json_schema_type(*_t.type_, _no_required),
-                        schema::Type{schema::Type::Null{}}}}};
+              .anyOf = {std::move(inner), schema::Type{schema::Type::Null{}}}}};
 
     } else if constexpr (std::is_same<T, Type::Reference>()) {
       return schema::Type{
@@ -331,23 +379,36 @@ schema::Type type_to_json_schema_type(const parsing::schema::Type& _type,
       return schema::Type{
           .value = schema::Type::StringMap{
               .additionalProperties = Ref<schema::Type>::make(
-                  type_to_json_schema_type(*_t.value_type_, _no_required))}};
+                  type_to_json_schema_type(*_t.value_type_, _options))}};
 
     } else if constexpr (std::is_same<T, Type::Tuple>()) {
       auto items = std::vector<schema::Type>();
       for (const auto& t : _t.types_) {
-        items.emplace_back(type_to_json_schema_type(t, _no_required));
+        items.emplace_back(type_to_json_schema_type(t, _options));
       }
-      return schema::Type{.value = schema::Type::Tuple{.prefixItems = items}};
+      auto tuple_schema = schema::Type::Tuple{.prefixItems = items};
+      if (_options.tuple_bounds) {
+        tuple_schema.minItems = items.size();
+        tuple_schema.maxItems = items.size();
+      }
+      return schema::Type{.value = std::move(tuple_schema)};
 
     } else if constexpr (std::is_same<T, Type::TypedArray>()) {
       return schema::Type{
           .value = schema::Type::TypedArray{
               .items = Ref<schema::Type>::make(
-                  type_to_json_schema_type(*_t.type_, _no_required))}};
+                  type_to_json_schema_type(*_t.type_, _options))}};
 
     } else if constexpr (std::is_same<T, Type::Validated>()) {
-      return handle_validation_type(*_t.type_, _t.validation_, _no_required);
+      auto validated =
+          handle_validation_type(*_t.type_, _t.validation_, _options);
+      if (rfl::holds_alternative<Type::BoundedInteger>(_t.type_->variant_)) {
+        auto bounded = type_to_json_schema_type(*_t.type_, _options);
+        return schema::Type{
+            .value = schema::Type::AllOf{
+                .allOf = {std::move(bounded), std::move(validated)}}};
+      }
+      return validated;
 
     } else {
       static_assert(rfl::always_false_v<T>, "Not all cases were covered.");
@@ -359,11 +420,11 @@ schema::Type type_to_json_schema_type(const parsing::schema::Type& _type,
 
 std::string to_schema_internal_schema(
     const parsing::schema::Definition& internal_schema,
-    const yyjson_write_flag _flag, const bool _no_required,
+    const yyjson_write_flag _flag, const SchemaRenderOptions& _options,
     const std::string& comment) {
   auto definitions = std::map<std::string, schema::Type>();
   for (const auto& [k, v] : internal_schema.definitions_) {
-    definitions[k] = type_to_json_schema_type(v, _no_required);
+    definitions[k] = type_to_json_schema_type(v, _options);
   }
   using JSONSchemaType =
       typename TypeHelper<schema::Type::ReflectionType>::JSONSchemaType;
@@ -376,9 +437,18 @@ std::string to_schema_internal_schema(
         .definitions = definitions,
     };
   };
-  auto root = type_to_json_schema_type(internal_schema.root_, _no_required);
+  auto root = type_to_json_schema_type(internal_schema.root_, _options);
   const auto json_schema = rfl::visit(to_schema, std::move(root.value));
   return write(json_schema, _flag);
+}
+
+std::string to_schema_internal_schema(
+    const parsing::schema::Definition& internal_schema,
+    const yyjson_write_flag _flag, const bool _no_required,
+    const std::string& comment) {
+  return to_schema_internal_schema(
+      internal_schema, _flag,
+      SchemaRenderOptions{.no_required = _no_required}, comment);
 }
 
 }  // namespace rfl::json
