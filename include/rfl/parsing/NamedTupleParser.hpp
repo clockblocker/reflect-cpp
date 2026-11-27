@@ -415,10 +415,11 @@ template <class T>
 concept CanWriteGeneric = can_write_generic<std::remove_cvref_t<T>>::value;
 
 /// Satisfied when a schema `default` can be emitted for the field type `T`:
-/// it must be a `DefaultVal` that satisfies `CanWriteGeneric`.
+/// it must contain a `DefaultVal` (see `is_default_val_v`) whose value
+/// satisfies `CanWriteGeneric`.
 template <class T>
 concept CanEmitDefault =
-    is_default_val_v<T> && CanWriteGeneric<typename T::Type>;
+    is_default_val_v<T> && CanWriteGeneric<typename default_val_t<T>::Type>;
 
 }  // namespace internal
 }  // namespace rfl
@@ -498,9 +499,10 @@ struct NamedTupleParser {
    * @param _var The input variable to read from.
    * @param _view The view to read into.
    * @param _value_initialize_default_vals Whether a missing rfl::DefaultVal
-   *         field is value-initialized. Otherwise it is required, because
-   *         the default value in the struct's in-class initializer is not
-   *         available.
+   *         field that is not inside rfl::Short, rfl::Positional,
+   *         rfl::Description or rfl::Deprecated is value-initialized.
+   *         Otherwise it is required, because the default value in the
+   *         struct's in-class initializer is not available.
    * @return A pair containing a boolean array indicating which fields were
    *         found and an optional error.
    */
@@ -644,16 +646,14 @@ struct NamedTupleParser {
         if (_view != nullptr) {
           if constexpr (internal::is_default_val_v<U>) {
             if constexpr (internal::CanEmitDefault<U>) {
-              s.variant_.visit([&](auto& value) {
-                if constexpr (std::is_same_v<std::remove_cvref_t<decltype(value)>,
-                                             schema::Type::DefaultVal>) {
-                  try {
-                    value.default_value_ = rfl::to_generic<ProcessorsType>(
-                        (*rfl::get<_i>(*_view)).get());
-                  } catch (...) {
-                  }
-                }
-              });
+              try {
+                set_default_value(
+                    rfl::to_generic<ProcessorsType>(
+                        internal::get_default_val(*rfl::get<_i>(*_view))
+                            .value()),
+                    &s);
+              } catch (...) {
+              }
             }
           } else if constexpr (internal::default_if_missing_v<ProcessorsType> &&
                                internal::CanWriteGeneric<U>) {
@@ -683,6 +683,21 @@ struct NamedTupleParser {
       }
     }
   };
+
+  /// Sets the default value of the DefaultVal node in `_schema`. Rename, Short
+  /// and Positional leave no node in the schema, but Description and
+  /// Deprecated wrap the DefaultVal node in one of their own.
+  static void set_default_value(Generic _default, schema::Type* _schema) {
+    _schema->variant_.visit([&](auto& _s) {
+      using S = std::remove_cvref_t<decltype(_s)>;
+      if constexpr (std::is_same_v<S, schema::Type::DefaultVal>) {
+        _s.default_value_ = std::move(_default);
+      } else if constexpr (std::is_same_v<S, schema::Type::Description> ||
+                           std::is_same_v<S, schema::Type::Deprecated>) {
+        set_default_value(std::move(_default), &*_s.type_);
+      }
+    });
+  }
 
   template <int... _is>
   static void build_object(const W& _w, const NamedTuple<FieldTypes...>& _tup,
@@ -737,7 +752,7 @@ struct NamedTupleParser {
       // available, so the field is required.
       const bool defaults_constructed = _set == nullptr;
 
-      if constexpr (is_default_val_field) {
+      if constexpr (internal::is_unwrapped_default_val_v<ValueType>) {
         if constexpr (can_value_initialize_default_val<ValueType>()) {
           if (_value_initialize_default_vals && !defaults_constructed) {
             // The value's constructor can throw, for instance a Validator
