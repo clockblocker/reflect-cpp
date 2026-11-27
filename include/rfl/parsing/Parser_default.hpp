@@ -40,6 +40,7 @@
 #include "ParserEnum.hpp"
 #include "ParserExpected.hpp"
 #include "ParserFilepath.hpp"
+#include "ParserNullable.hpp"
 #include "ParserOptional.hpp"
 #include "ParserPair.hpp"
 #include "ParserPositional.hpp"
@@ -58,6 +59,7 @@
 #include "ParserStringView.hpp"
 #include "ParserTaggedUnion.hpp"
 #include "ParserTimePoint.hpp"
+#include "ParserTriState.hpp"
 #include "ParserTuple.hpp"
 #include "ParserUniquePtr.hpp"
 #include "ParserVariant.hpp"
@@ -117,6 +119,14 @@ struct Parser {
 
     } else if constexpr (is_optional_v<T>) {
       return ParserOptional<R, W, typename std::remove_cvref_t<T>::value_type,
+                            ProcessorsType>::read(_r, _var);
+
+    } else if constexpr (is_nullable_wrapper_v<T>) {
+      return ParserNullable<R, W, typename std::remove_cvref_t<T>::value_type,
+                            ProcessorsType>::read(_r, _var);
+
+    } else if constexpr (is_tri_state_v<T>) {
+      return ParserTriState<R, W, typename std::remove_cvref_t<T>::value_type,
                             ProcessorsType>::read(_r, _var);
 
     } else if constexpr (is_box_v<T>) {
@@ -314,6 +324,14 @@ struct Parser {
       ParserOptional<R, W, typename std::remove_cvref_t<T>::value_type,
                      ProcessorsType>::write(_w, _var, _parent);
 
+    } else if constexpr (is_nullable_wrapper_v<T>) {
+      ParserNullable<R, W, typename std::remove_cvref_t<T>::value_type,
+                     ProcessorsType>::write(_w, _var, _parent);
+
+    } else if constexpr (is_tri_state_v<T>) {
+      ParserTriState<R, W, typename std::remove_cvref_t<T>::value_type,
+                     ProcessorsType>::write(_w, _var, _parent);
+
     } else if constexpr (is_box_v<T>) {
       using IsBox = is_box<std::remove_cvref_t<T>>;
       ParserBox<R, W, typename IsBox::element_type, IsBox::copyability,
@@ -485,6 +503,14 @@ struct Parser {
 
     } else if constexpr (is_optional_v<U>) {
       return ParserOptional<R, W, typename U::value_type,
+                            ProcessorsType>::to_schema(_definitions);
+
+    } else if constexpr (is_nullable_wrapper_v<U>) {
+      return ParserNullable<R, W, typename U::value_type,
+                            ProcessorsType>::to_schema(_definitions);
+
+    } else if constexpr (is_tri_state_v<U>) {
+      return ParserTriState<R, W, typename U::value_type,
                             ProcessorsType>::to_schema(_definitions);
 
     } else if constexpr (is_box_v<U>) {
