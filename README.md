@@ -136,6 +136,8 @@ The resulting JSON string looks like this:
 {"firstName":"Homer","lastName":"Simpson","age":45}
 ```
 
+For large datasets or live streams, `rfl::json::StreamReader` and `rfl::json::StreamWriter` also support record-level JSON streaming (NDJSON, RFC 7464 JSON Text Sequences, and JSON arrays) — see the [JSON documentation](https://munich-data-engineering.github.io/reflect-cpp/supported_formats/json/#record-level-streaming).
+
 Or you can use another format, such as YAML.
 
 ```cpp

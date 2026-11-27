@@ -33,6 +33,37 @@ struct MoveOnlyRow {
   std::unique_ptr<std::string> label;
 };
 
+struct IdOnly {
+  int id;
+  bool operator==(const IdOnly&) const = default;
+};
+
+// Unbuffered streambuf: yields 1 byte per underflow() with in_avail() == 0,
+// simulating unbuffered streams such as synced std::cin.
+class UnbufferedBuf : public std::streambuf {
+ public:
+  explicit UnbufferedBuf(std::string _data) : data_(std::move(_data)) {}
+
+ protected:
+  int_type underflow() override {
+    if (idx_ >= data_.size()) {
+      return traits_type::eof();
+    }
+    return traits_type::to_int_type(data_[idx_]);
+  }
+
+  int_type uflow() override {
+    if (idx_ >= data_.size()) {
+      return traits_type::eof();
+    }
+    return traits_type::to_int_type(data_[idx_++]);
+  }
+
+ private:
+  std::string data_;
+  size_t idx_ = 0;
+};
+
 static_assert(std::input_iterator<rfl::json::StreamReader<Row>::Iterator>);
 static_assert(std::ranges::input_range<rfl::json::StreamReader<Row>>);
 static_assert(
@@ -287,7 +318,8 @@ TEST(json, test_stream_writer_errors_and_flags) {
     }
   }
 
-  // Bad / failbit ostream returns rfl::Error from write(), flush(), finish()
+  // Bad / failbit ostream returns rfl::Error from write(), flush(), finish(),
+  // and a failed finish() continues returning Error on retry.
   {
     std::stringstream ss;
     ss.setstate(std::ios::badbit);
@@ -295,6 +327,7 @@ TEST(json, test_stream_writer_errors_and_flags) {
     EXPECT_FALSE(writer.write(sample).has_value());
     EXPECT_FALSE(writer.flush().has_value());
     EXPECT_FALSE(writer.finish().has_value());
+    EXPECT_FALSE(writer.finish().has_value());  // retry still returns error
   }
   {
     std::stringstream ss;
@@ -302,6 +335,18 @@ TEST(json, test_stream_writer_errors_and_flags) {
     rfl::json::StreamWriter writer(ss, rfl::json::StreamFormat::json_array);
     EXPECT_FALSE(writer.write(sample).has_value());
     EXPECT_FALSE(writer.finish().has_value());
+    EXPECT_FALSE(writer.finish().has_value());  // retry still returns error
+  }
+
+  // eofbit alone (without failbit/badbit) does not block writing
+  {
+    std::stringstream ss;
+    ss.setstate(std::ios::eofbit);
+    rfl::json::StreamWriter writer(ss, rfl::json::StreamFormat::ndjson);
+    EXPECT_TRUE(writer.write(sample).has_value());
+    EXPECT_TRUE(writer.finish().has_value());
+    EXPECT_TRUE(writer.flush().has_value());
+    EXPECT_NE(ss.str().find("\"Alice\""), std::string::npos);
   }
 
   // Serialization failure (e.g. NaN without ALLOW_INF_AND_NAN) returns Error
@@ -856,6 +901,242 @@ TEST(json, test_stream_error_handling) {
                                         rfl::json::StreamFormat::json_array,
                                         YYJSON_READ_ALLOW_TRAILING_COMMAS);
   EXPECT_EQ(collect_ok(trailing), (std::vector<int>{1, 2}));
+}
+
+TEST(json, test_stream_eof_after_compaction_regression) {
+  // Blocker #1 repro: default chunk_size, no trailing '\n' on last record.
+  {
+    std::istringstream in("{\"id\":1}\n{\"id\":22}");
+    rfl::json::StreamReader<IdOnly> reader(in, rfl::json::StreamFormat::ndjson);
+    EXPECT_EQ(collect_ok(reader), (std::vector<IdOnly>{{1}, {22}}));
+  }
+
+  // Primitive at EOF after compaction (forces refill_raw -> compact_buffer -> EOF).
+  {
+    std::istringstream in("11111111\n22");
+    rfl::json::StreamReader<int> reader(in, rfl::json::StreamFormat::ndjson);
+    EXPECT_EQ(collect_ok(reader), (std::vector<int>{11111111, 22}));
+  }
+
+  // Truncated record at EOF after compaction.
+  {
+    std::istringstream in("{\"id\":1}\n{\"id\":22");
+    rfl::json::StreamReader<IdOnly> reader(in, rfl::json::StreamFormat::ndjson);
+    const auto r1 = reader.next();
+    ASSERT_TRUE(r1.has_value() && r1->has_value());
+    EXPECT_EQ(**r1, (IdOnly{1}));
+    const auto r2 = reader.next();
+    ASSERT_TRUE(r2.has_value());
+    EXPECT_FALSE(r2->has_value());
+    EXPECT_FALSE(reader.next().has_value());
+  }
+}
+
+TEST(json, test_stream_exact_max_record_bytes_crlf) {
+  // Blocker #3 repro: exact-size record (8 bytes) followed by \r\n.
+  const std::string crlf_objs = "{\"id\":1}\r\n{\"id\":2}\r\n";
+  const std::string crlf_seq = "\x1e{\"id\":1}\r\n\x1e{\"id\":2}\r\n";
+  const std::string crlf_arr = "[{\"id\":1}\r\n,{\"id\":2}\r\n]";
+  const std::vector<IdOnly> expected_ids{{1}, {2}};
+
+  for (const size_t chunk :
+       {size_t{1}, size_t{3}, size_t{8}, size_t{9}, size_t{65536}}) {
+    {
+      std::istringstream in(crlf_objs);
+      rfl::json::StreamReader<IdOnly> reader(
+          in, rfl::json::StreamFormat::ndjson, 0, chunk, 8);
+      EXPECT_EQ(collect_ok(reader), expected_ids) << "ndjson chunk=" << chunk;
+    }
+    {
+      std::istringstream in(crlf_seq);
+      rfl::json::StreamReader<IdOnly> reader(
+          in, rfl::json::StreamFormat::json_seq, 0, chunk, 8);
+      EXPECT_EQ(collect_ok(reader), expected_ids) << "json_seq chunk=" << chunk;
+    }
+    {
+      std::istringstream in(crlf_arr);
+      rfl::json::StreamReader<IdOnly> reader(
+          in, rfl::json::StreamFormat::json_array, 0, chunk, 8);
+      EXPECT_EQ(collect_ok(reader), expected_ids)
+          << "json_array chunk=" << chunk;
+    }
+  }
+
+  // Exact-size string ("abcdef" = 8 bytes) and primitive (12345678 = 8 bytes) + \r\n
+  for (const size_t chunk : {size_t{1}, size_t{8}, size_t{65536}}) {
+    {
+      std::istringstream in("\"abcdef\"\r\n\"ghijkl\"\r\n");
+      rfl::json::StreamReader<std::string> reader(
+          in, rfl::json::StreamFormat::ndjson, 0, chunk, 8);
+      EXPECT_EQ(collect_ok(reader),
+                (std::vector<std::string>{"abcdef", "ghijkl"}));
+    }
+    {
+      std::istringstream in("12345678\r\n87654321\r\n");
+      rfl::json::StreamReader<int> reader(
+          in, rfl::json::StreamFormat::ndjson, 0, chunk, 8);
+      EXPECT_EQ(collect_ok(reader), (std::vector<int>{12345678, 87654321}));
+    }
+  }
+
+  // string_view overload with exact-size record + \r\n
+  {
+    rfl::json::StreamReader<IdOnly> reader(
+        std::string_view{crlf_objs}, rfl::json::StreamFormat::ndjson, 0, 8);
+    EXPECT_EQ(collect_ok(reader), expected_ids);
+  }
+
+  // 1 byte over cap (max_record_bytes = 7 on 8-byte record) must fail
+  {
+    std::istringstream in(crlf_objs);
+    rfl::json::StreamReader<IdOnly> reader(
+        in, rfl::json::StreamFormat::ndjson, 0, 65536, 7);
+    const auto r = reader.next();
+    ASSERT_TRUE(r.has_value());
+    EXPECT_FALSE(r->has_value());
+    EXPECT_FALSE(reader.next().has_value());
+  }
+  {
+    std::istringstream in("12345678\r\n");
+    rfl::json::StreamReader<int> reader(
+        in, rfl::json::StreamFormat::ndjson, 0, 65536, 7);
+    const auto r = reader.next();
+    ASSERT_TRUE(r.has_value());
+    EXPECT_FALSE(r->has_value());
+    EXPECT_FALSE(reader.next().has_value());
+  }
+}
+
+TEST(json, test_stream_4kib_chunks_and_unbuffered_linear) {
+  auto feed_in_chunks = [](ChunkedPipeBuf& _pipe, const std::string& _payload,
+                           const size_t _chunk_bytes) {
+    for (size_t off = 0; off < _payload.size(); off += _chunk_bytes) {
+      _pipe.push_chunk(_payload.substr(off, _chunk_bytes));
+    }
+  };
+
+  auto measure_ms = [](auto&& _fn) {
+    const auto t0 = std::chrono::steady_clock::now();
+    _fn();
+    const auto t1 = std::chrono::steady_clock::now();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0)
+        .count();
+  };
+
+  // 512 KiB single record fed in 4 KiB chunks (simulates std::ifstream / pipe).
+  // True O(R) incremental scanner invokes yyjson_read_opts once when record closes.
+  const Row big_row{99, std::string(512 * 1024, 'q'), 2.75};
+  constexpr long long kBudgetMs = 2000;
+
+  for (const auto fmt :
+       {rfl::json::StreamFormat::ndjson, rfl::json::StreamFormat::json_seq,
+        rfl::json::StreamFormat::json_array}) {
+    std::stringstream ss;
+    {
+      rfl::json::StreamWriter w(ss, fmt);
+      ASSERT_TRUE(w.write(big_row).has_value());
+    }
+    const std::string payload = ss.str();
+
+    ChunkedPipeBuf pipe;
+    feed_in_chunks(pipe, payload, 4096);
+    std::istream in(&pipe);
+
+    const auto ms = measure_ms([&] {
+      rfl::json::StreamReader<Row> reader(in, fmt);
+      const auto res = reader.next();
+      ASSERT_TRUE(res.has_value() && res->has_value())
+          << (res.has_value() ? res->error().what() : "unexpected eof");
+      EXPECT_EQ(**res, big_row);
+      EXPECT_FALSE(reader.next().has_value());
+    });
+    EXPECT_LT(ms, kBudgetMs) << "4KiB chunked 512KiB record took " << ms << "ms";
+  }
+
+  // Multi-line pretty-printed 256 KiB record in 4 KiB chunks (ndjson)
+  {
+    const Row pretty_big{7, std::string(256 * 1024, 'p'), 1.5};
+    const std::string payload =
+        rfl::json::write(pretty_big, rfl::json::pretty) + "\n";
+    ChunkedPipeBuf pipe;
+    feed_in_chunks(pipe, payload, 4096);
+    std::istream in(&pipe);
+
+    const auto ms = measure_ms([&] {
+      rfl::json::StreamReader<Row> reader(in, rfl::json::StreamFormat::ndjson);
+      const auto res = reader.next();
+      ASSERT_TRUE(res.has_value() && res->has_value());
+      EXPECT_EQ(**res, pretty_big);
+      EXPECT_FALSE(reader.next().has_value());
+    });
+    EXPECT_LT(ms, kBudgetMs) << "4KiB chunked pretty record took " << ms << "ms";
+  }
+
+  // Unbuffered 1-byte-at-a-time stream (in_avail() == 0) in json_array & ndjson
+  {
+    const Row med_row{11, std::string(64 * 1024, 'u'), -4.5};
+    std::stringstream arr_ss;
+    {
+      rfl::json::StreamWriter w(arr_ss, rfl::json::StreamFormat::json_array);
+      ASSERT_TRUE(w.write(med_row).has_value());
+    }
+    UnbufferedBuf ubuf(arr_ss.str());
+    std::istream in(&ubuf);
+    const auto ms = measure_ms([&] {
+      rfl::json::StreamReader<Row> reader(in,
+                                          rfl::json::StreamFormat::json_array);
+      const auto res = reader.next();
+      ASSERT_TRUE(res.has_value() && res->has_value());
+      EXPECT_EQ(**res, med_row);
+      EXPECT_FALSE(reader.next().has_value());
+    });
+    EXPECT_LT(ms, kBudgetMs) << "unbuffered 64KiB json_array took " << ms << "ms";
+  }
+
+  // Non-blocking primitives on live pipe
+  {
+    ChunkedPipeBuf pipe;
+    pipe.push_chunk("123\n");
+    pipe.push_chunk("456\n");
+    std::istream in(&pipe);
+    rfl::json::StreamReader<int> reader(in, rfl::json::StreamFormat::ndjson);
+    const auto r1 = reader.next();
+    ASSERT_TRUE(r1.has_value() && r1->has_value());
+    EXPECT_EQ(**r1, 123);
+    EXPECT_EQ(pipe.underflow_count(), 1u);
+    const auto r2 = reader.next();
+    ASSERT_TRUE(r2.has_value() && r2->has_value());
+    EXPECT_EQ(**r2, 456);
+    EXPECT_EQ(pipe.underflow_count(), 2u);
+  }
+
+  // Comments containing braces/quotes inside containers + unclosed brace recovery
+  {
+    const std::string with_inner_comments =
+        "{\n"
+        "  /* } ] \"tricky\" */ \"id\": 1,\n"
+        "  // another } brace and \" quote\n"
+        "  \"name\": \"ok\", \"score\": 1.5\n"
+        "}\n";
+    std::istringstream in(with_inner_comments);
+    rfl::json::StreamReader<Row> reader(in, rfl::json::StreamFormat::ndjson,
+                                        YYJSON_READ_ALLOW_COMMENTS, 7);
+    EXPECT_EQ(collect_ok(reader), (std::vector<Row>{{1, "ok", 1.5}}));
+  }
+  {
+    const std::string unclosed_bad_line =
+        "{not valid\n"
+        "{\"id\":2,\"name\":\"recovered\",\"score\":2.5}\n";
+    std::istringstream in(unclosed_bad_line);
+    rfl::json::StreamReader<Row> reader(in, rfl::json::StreamFormat::ndjson);
+    const auto r1 = reader.next();
+    ASSERT_TRUE(r1.has_value());
+    EXPECT_FALSE(r1->has_value());
+    const auto r2 = reader.next();
+    ASSERT_TRUE(r2.has_value() && r2->has_value());
+    EXPECT_EQ(**r2, (Row{2, "recovered", 2.5}));
+    EXPECT_FALSE(reader.next().has_value());
+  }
 }
 
 }  // namespace test_stream

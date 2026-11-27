@@ -92,8 +92,8 @@ rfl::json::StreamWriter writer(my_ostream, rfl::json::StreamFormat::ndjson);
 for (const auto& person : people) {
     writer.write(person).value();
 }
-writer.flush().value();
 writer.finish().value();
+writer.flush().value();
 
 // Reading records incrementally (C++20 input_range or next())
 rfl::json::StreamReader<Person> reader(my_istream, rfl::json::StreamFormat::ndjson);
