@@ -56,7 +56,12 @@ TEST(json, test_json_flags_values_disambiguated) {
                 YYJSON_READ_ALLOW_INF_AND_NAN);
   static_assert(rfl::json::read_allow_invalid_unicode ==
                 YYJSON_READ_ALLOW_INVALID_UNICODE);
+#if defined(YYJSON_VERSION_HEX) && YYJSON_VERSION_HEX >= 0x000B00
   static_assert(rfl::json::allow_bom == YYJSON_READ_ALLOW_BOM);
+#endif
+  static_assert(rfl::json::jsonc ==
+                (YYJSON_READ_ALLOW_COMMENTS | YYJSON_READ_ALLOW_TRAILING_COMMAS));
+#if defined(YYJSON_VERSION_HEX) && YYJSON_VERSION_HEX >= 0x000C00
   static_assert(rfl::json::allow_ext_number == YYJSON_READ_ALLOW_EXT_NUMBER);
   static_assert(rfl::json::allow_ext_escape == YYJSON_READ_ALLOW_EXT_ESCAPE);
   static_assert(rfl::json::allow_ext_whitespace ==
@@ -65,9 +70,8 @@ TEST(json, test_json_flags_values_disambiguated) {
                 YYJSON_READ_ALLOW_SINGLE_QUOTED_STR);
   static_assert(rfl::json::allow_unquoted_key ==
                 YYJSON_READ_ALLOW_UNQUOTED_KEY);
-  static_assert(rfl::json::jsonc ==
-                (YYJSON_READ_ALLOW_COMMENTS | YYJSON_READ_ALLOW_TRAILING_COMMAS));
   static_assert(rfl::json::json5 == YYJSON_READ_JSON5);
+#endif
 
   // Confirm read/write flags with similar names have distinct bit values.
   static_assert(rfl::json::read_allow_inf_and_nan !=
@@ -231,6 +235,7 @@ TEST(json, test_jsonc_combined_flags) {
   EXPECT_EQ(res_stream.value().port, 9000);
 }
 
+#if defined(YYJSON_VERSION_HEX) && YYJSON_VERSION_HEX >= 0x000B00
 TEST(json, test_allow_bom) {
   const std::string json_with_bom = "\xEF\xBB\xBF{\"text\":\"bom\"}";
 
@@ -241,6 +246,7 @@ TEST(json, test_allow_bom) {
   ASSERT_TRUE(res.has_value());
   EXPECT_EQ(res.value().text, "bom");
 }
+#endif
 
 TEST(json, test_stop_when_done) {
   const std::string ndjson = "{\"text\":\"first\"}\n{\"text\":\"second\"}\n";
@@ -307,6 +313,7 @@ TEST(json, test_invalid_unicode_flags) {
   EXPECT_EQ(written, invalid_utf8_json);
 }
 
+#if defined(YYJSON_VERSION_HEX) && YYJSON_VERSION_HEX >= 0x000C00
 TEST(json, test_json5_flags) {
   const std::string json5_doc = R"({
     // JSON5 document
@@ -333,6 +340,7 @@ TEST(json, test_json5_flags) {
   EXPECT_EQ(res_composed.value().name, "json5-app");
   EXPECT_EQ(res_composed.value().port, 0x1F90);
 }
+#endif
 
 TEST(json, test_save_and_load_with_flags) {
   const auto path =
