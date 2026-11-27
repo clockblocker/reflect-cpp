@@ -37,6 +37,7 @@
 #include "ParserDuration.hpp"
 #include "ParserExpected.hpp"
 #include "ParserFilepath.hpp"
+#include "ParserNullable.hpp"
 #include "ParserOptional.hpp"
 #include "ParserPair.hpp"
 #include "ParserPositional.hpp"
@@ -52,6 +53,7 @@
 #include "ParserSkip.hpp"
 #include "ParserTaggedUnion.hpp"
 #include "ParserTimePoint.hpp"
+#include "ParserTriState.hpp"
 #include "ParserTuple.hpp"
 #include "ParserUniquePtr.hpp"
 #include "ParserVariant.hpp"
@@ -151,8 +153,9 @@ void check_default_value(const T& _value, DefaultValueCheck* _check) {
   } else if constexpr (holds_no_validator_v<U>) {
     return;
 
-  } else if constexpr (is_optional_v<U>) {
-    if (_value) {
+  } else if constexpr (is_optional_v<U> || is_nullable_wrapper_v<U> ||
+                       is_tri_state_v<U>) {
+    if (_value.has_value()) {
       check_default_value(*_value, _check);
     }
 

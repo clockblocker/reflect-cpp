@@ -3,6 +3,8 @@
 
 #include <type_traits>
 
+#include "../Nullable.hpp"
+#include "../TriState.hpp"
 #include "../internal/has_reflection_method_v.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/is_alias.hpp"
@@ -15,6 +17,22 @@
 
 namespace rfl {
 namespace parsing {
+
+namespace internal_empty {
+
+template <class T>
+struct is_nullable_wrapper : std::false_type {};
+
+template <class T>
+struct is_nullable_wrapper<Nullable<T>> : std::true_type {};
+
+template <class T>
+struct is_tri_state : std::false_type {};
+
+template <class T>
+struct is_tri_state<TriState<T>> : std::true_type {};
+
+}  // namespace internal_empty
 
 /**
  * @brief Checks if a variable is empty.
@@ -32,6 +50,12 @@ static bool is_empty(const T& _var) {
     return true;
   } else if constexpr (internal::is_skip_v<Type>) {
     return false;
+  } else if constexpr (internal_empty::is_nullable_wrapper<Type>::value) {
+    // rfl::Nullable<T> always serializes explicitly ("field": null when null).
+    return false;
+  } else if constexpr (internal_empty::is_tri_state<Type>::value) {
+    // rfl::TriState<T> omits only when State::omitted; State::null emits null.
+    return _var.is_omitted();
   } else if constexpr (internal::has_reflection_type_v<Type>) {
     if constexpr (internal::has_reflection_method_v<Type>) {
       return is_empty(_var.reflection());

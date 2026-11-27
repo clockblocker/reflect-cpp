@@ -6,9 +6,11 @@
 #include <type_traits>
 
 #include "../Generic.hpp"
+#include "../Nullable.hpp"
 #include "../Positional.hpp"
 #include "../Rename.hpp"
 #include "../Short.hpp"
+#include "../TriState.hpp"
 #include "../internal/StringLiteral.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/is_alias.hpp"
@@ -34,6 +36,12 @@ class is_never_required : public std::false_type {};
 
 template <class T>
 class is_never_required<std::optional<T>> : public std::true_type {};
+
+template <class T>
+class is_never_required<Nullable<T>> : public std::true_type {};
+
+template <class T>
+class is_never_required<TriState<T>> : public std::true_type {};
 
 template <class T>
 class is_never_required<std::shared_ptr<T>> : public std::true_type {};

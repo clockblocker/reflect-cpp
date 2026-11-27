@@ -313,6 +313,11 @@ struct ErrorDetail {
   /// no finer-grained code applies.
   std::string code = {};
 
+  /// Nested per-branch failures for untagged unions (`std::variant`,
+  /// `rfl::Variant`) and disjunctive validators (`rfl::AnyOf`). Paths inside
+  /// `causes` are relative to this detail's `path`. Empty for leaf errors.
+  std::vector<ErrorDetail> causes = {};
+
   bool operator==(const ErrorDetail&) const = default;
 };
 

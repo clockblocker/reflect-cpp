@@ -9,10 +9,13 @@
 #include "../Box.hpp"
 #include "../Commented.hpp"
 #include "../DefaultVal.hpp"
+#include "../Nullable.hpp"
 #include "../Ref.hpp"
+#include "../TriState.hpp"
 #include "../Variant.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/has_reflector.hpp"
+#include "../internal/is_alias.hpp"
 #include "../internal/is_positional.hpp"
 #include "../internal/is_rename.hpp"
 #include "../internal/is_short.hpp"
@@ -30,6 +33,18 @@ struct is_optional : std::false_type {};
 
 template <class T>
 struct is_optional<std::optional<T>> : std::true_type {};
+
+template <class T>
+struct is_nullable_wrapper : std::false_type {};
+
+template <class T>
+struct is_nullable_wrapper<Nullable<T>> : std::true_type {};
+
+template <class T>
+struct is_tri_state : std::false_type {};
+
+template <class T>
+struct is_tri_state<TriState<T>> : std::true_type {};
 
 template <class T>
 struct is_unique_ptr : std::false_type {};
@@ -110,6 +125,8 @@ consteval bool is_nullable() {
   if constexpr ((std::is_same_v<U, Seen> || ...)) {
     return false;
   } else if constexpr (internal_nullable::is_optional<U>::value ||
+                       internal_nullable::is_nullable_wrapper<U>::value ||
+                       internal_nullable::is_tri_state<U>::value ||
                        internal_nullable::is_unique_ptr<U>::value ||
                        internal_nullable::is_shared_ptr<U>::value ||
                        std::is_pointer_v<U>) {
@@ -118,7 +135,8 @@ consteval bool is_nullable() {
                        internal_nullable::is_rfl_variant<U>::value) {
     return internal_nullable::has_nullable_alternative<U, U, Seen...>::value;
   } else if constexpr (internal::is_rename_v<U> || internal::is_short_v<U> ||
-                       internal::is_positional_v<U>) {
+                       internal::is_positional_v<U> ||
+                       internal::is_alias_v<U>) {
     return is_nullable<typename U::Type, U, Seen...>();
   } else if constexpr (internal_nullable::is_default_val<U>::value) {
     return is_nullable<

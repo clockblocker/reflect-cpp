@@ -130,19 +130,25 @@ class ParserVariant<R, W, std::variant<AlternativeTypes...>, ProcessorsType> {
     } else {
       std::optional<std::variant<AlternativeTypes...>> result;
       std::vector<std::string> errors;
+      std::vector<ErrorDetail> causes;
       read_variant(
-          _r, _var, &result, &errors,
+          _r, _var, &result, &errors, &causes,
           std::make_integer_sequence<int, sizeof...(AlternativeTypes)>());
       if (result) {
         return std::move(*result);
       } else {
-        return error(
-            to_single_error_message(errors,
-                                    "Could not parse the variant. Each of the "
-                                    "possible alternatives failed "
-                                    "for the following reasons: ",
-                                    100000),
-            ErrorKind::invalid_value);
+        auto msg = to_single_error_message(
+            errors,
+            "Could not parse the variant. Each of the "
+            "possible alternatives failed "
+            "for the following reasons: ",
+            100000);
+        return error(Error(
+            msg, std::vector<ErrorDetail>{ErrorDetail{
+                     .path = {},
+                     .message = msg,
+                     .kind = ErrorKind::invalid_value,
+                     .causes = std::move(causes)}}));
       }
     }
   }
@@ -281,7 +287,8 @@ class ParserVariant<R, W, std::variant<AlternativeTypes...>, ProcessorsType> {
   static void read_one_alternative(
       const R& _r, const InputVarType& _var,
       std::optional<std::variant<AlternativeTypes...>>* _result,
-      std::vector<std::string>* _errors) noexcept {
+      std::vector<std::string>* _errors,
+      std::vector<ErrorDetail>* _causes) noexcept {
     if (!*_result) {
       using AltType =
           std::remove_cvref_t<internal::nth_element_t<_i, AlternativeTypes...>>;
@@ -298,8 +305,14 @@ class ParserVariant<R, W, std::variant<AlternativeTypes...>, ProcessorsType> {
       } else {
         // Reserve lazily, so that reading an alternative that matches
         // does not allocate.
+        auto alt_err = std::move(res).error();
         _errors->reserve(sizeof...(AlternativeTypes));
-        _errors->emplace_back(std::move(res).error().what());
+        _errors->emplace_back(alt_err.what());
+        auto alt_details = std::move(alt_err).details();
+        _causes->reserve(_causes->size() + alt_details.size());
+        for (auto& d : alt_details) {
+          _causes->emplace_back(std::move(d));
+        }
       }
     }
   }
@@ -312,14 +325,15 @@ class ParserVariant<R, W, std::variant<AlternativeTypes...>, ProcessorsType> {
    * @param _var The input variable to read from.
    * @param _result The result pointer to store the parsed alternative.
    * @param _errors The vector of errors to add parsing errors to.
+   * @param _causes The vector of structured per-branch failure details.
    */
   template <int... _is>
   static void read_variant(
       const R& _r, const InputVarType& _var,
       std::optional<std::variant<AlternativeTypes...>>* _result,
-      std::vector<std::string>* _errors,
+      std::vector<std::string>* _errors, std::vector<ErrorDetail>* _causes,
       std::integer_sequence<int, _is...>) noexcept {
-    (read_one_alternative<_is>(_r, _var, _result, _errors), ...);
+    (read_one_alternative<_is>(_r, _var, _result, _errors, _causes), ...);
   }
 };
 
