@@ -50,32 +50,20 @@ Error compose_prefixed_validator_error(Error&& _inner_err,
                                        ComposeFn&& _compose_builtin) {
   set_error_code_if_empty(_inner_err, validator_code<V>());
   auto msg = std::string(_msg_prefix) + _inner_err.what();
-  const auto inner_builtin = builtin_error_code_of(_inner_err);
   if (has_allocated_details(_inner_err)) {
-    std::string composed_code;
-    if (inner_builtin != BuiltinErrorCode::none) {
-      const auto composed = _compose_builtin(inner_builtin);
-      if (composed != BuiltinErrorCode::none) {
-        composed_code = std::string(builtin_error_code_str(composed));
-      }
-    }
-    if (composed_code.empty()) {
-      const auto inner_code = _inner_err.code();
-      composed_code =
-          inner_code.empty()
-              ? std::string(builtin_error_code_str(_fallback_builtin))
-              : std::string(_code_prefix) + std::string(inner_code);
-    }
     auto details = std::move(_inner_err).details();
+    const auto fallback_str = builtin_error_code_str(_fallback_builtin);
     for (auto& d : details) {
       d.message = std::string(_msg_prefix) + d.message;
       if (d.kind == ErrorKind::other) {
         d.kind = ErrorKind::constraint_violation;
       }
-      d.code = composed_code;
+      d.code = d.code.empty() ? std::string(fallback_str)
+                              : std::string(_code_prefix) + d.code;
     }
     return Error(std::move(msg), std::move(details));
   }
+  const auto inner_builtin = builtin_error_code_of(_inner_err);
   if (inner_builtin != BuiltinErrorCode::none) {
     const auto composed = _compose_builtin(inner_builtin);
     if (composed != BuiltinErrorCode::none) {

@@ -107,9 +107,6 @@ class TriState {
              !internal::is_bool_optional_like_conversion_v<T, U> &&
              std::is_constructible_v<T, U&&> && std::is_assignable_v<T&, U&&>)
   constexpr TriState& operator=(U&& _val) {
-    if (!value_.has_value()) {
-      state_ = State::omitted;
-    }
     value_ = std::forward<U>(_val);
     state_ = State::value;
     return *this;

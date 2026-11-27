@@ -186,9 +186,9 @@ class Nullable {
   }
 
   template <class U>
-    requires(!std::is_same_v<std::remove_cvref_t<U>, Nullable> &&
+    requires(!internal::is_nullable_wrapper_v<U> &&
+             !internal::is_std_optional_type<std::remove_cvref_t<U>>::value &&
              !std::is_same_v<std::remove_cvref_t<U>, std::nullopt_t> &&
-             !std::is_same_v<std::remove_cvref_t<U>, std::optional<T>> &&
              requires(const T& _a, const U& _b) {
                { _a == _b } -> std::convertible_to<bool>;
              })
