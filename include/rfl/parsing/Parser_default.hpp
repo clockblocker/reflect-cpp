@@ -19,6 +19,7 @@
 #include "../internal/is_deprecated.hpp"
 #include "../internal/is_description.hpp"
 #include "../internal/is_literal.hpp"
+#include "../internal/is_safe_default_constructible.hpp"
 #include "../internal/is_validator.hpp"
 #include "../internal/processed_t.hpp"
 #include "../internal/ptr_cast.hpp"
@@ -688,16 +689,22 @@ struct Parser {
                 Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
                     _definitions);
           }
-        } else if constexpr (internal::default_if_missing_v<ProcessorsType> &&
-                             std::is_default_constructible_v<DefaultsType>) {
-          try {
-            auto defaults = DefaultsType{};
-            auto view = ProcessorsType::template process<DefaultsType>(
-                to_view(defaults));
-            (*_definitions)[name] =
-                Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-                    _definitions, &view);
-          } catch (...) {
+        } else if constexpr (internal::default_if_missing_v<ProcessorsType>) {
+          if constexpr (internal::is_safe_default_constructible_v<
+                            DefaultsType>) {
+            try {
+              auto defaults = DefaultsType{};
+              auto view = ProcessorsType::template process<DefaultsType>(
+                  to_view(defaults));
+              (*_definitions)[name] =
+                  Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
+                      _definitions, &view);
+            } catch (...) {
+              (*_definitions)[name] =
+                  Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
+                      _definitions);
+            }
+          } else {
             (*_definitions)[name] =
                 Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
                     _definitions);
