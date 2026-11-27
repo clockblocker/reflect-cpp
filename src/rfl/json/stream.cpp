@@ -31,7 +31,9 @@ SOFTWARE.
 #include <limits>
 #include <streambuf>
 
-namespace rfl::json::detail {
+namespace rfl::internal::json {
+
+using rfl::json::StreamFormat;
 
 namespace {
 
@@ -461,12 +463,12 @@ void StreamReaderEngine::resync_to_rs() {
 }
 
 StreamReaderEngine::ScanResult StreamReaderEngine::scan_value(
-    const bool _line_mode, const bool _is_seq, const bool _check_first_nl,
-    std::string* _first_nl_err) {
+    const bool _line_mode, const bool _is_seq) {
   const bool allow_comments = (flag_ & YYJSON_READ_ALLOW_COMMENTS) != 0;
   const bool allow_single_quote =
       (flag_ & YYJSON_READ_ALLOW_SINGLE_QUOTED_STR) != 0;
   const bool allow_ext_escape = (flag_ & YYJSON_READ_ALLOW_EXT_ESCAPE) != 0;
+  const bool strict_ndjson = _line_mode && !_is_seq;
   const char c0 = data_ptr()[pos_];
 
   // Case 1: JSON object or array container.
@@ -476,7 +478,6 @@ StreamReaderEngine::ScanResult StreamReaderEngine::scan_value(
     char quote = 0;
     bool escape = false;
     CommentMode comment = CommentMode::none;
-    bool checked_first_nl = !_check_first_nl;
     size_t refill_step = chunk_size_;
 
     while (true) {
@@ -508,34 +509,27 @@ StreamReaderEngine::ScanResult StreamReaderEngine::scan_value(
             comment = CommentMode::none;
             // Not a comment; fall through to process `c` normally.
           } else if (comment == CommentMode::line) {
+            if (strict_ndjson && c == '\n') {
+              return ScanResult{ScanOutcome::syntax_break, scan_offset};
+            }
             ++scan_offset;
             if (c == '\n' || c == '\r') {
               comment = CommentMode::none;
-              if (c == '\n' && !checked_first_nl) {
-                checked_first_nl = true;
-                yyjson_read_err err{};
-                yyjson_doc* probe = yyjson_read_opts(
-                    const_cast<char*>(ptr), scan_offset,
-                    flag_ | YYJSON_READ_STOP_WHEN_DONE, nullptr, &err);
-                if (probe) {
-                  yyjson_doc_free(probe);
-                } else if (err.code != YYJSON_READ_ERROR_UNEXPECTED_END &&
-                           err.code != YYJSON_READ_ERROR_EMPTY_CONTENT) {
-                  if (_first_nl_err) {
-                    *_first_nl_err = err.msg ? err.msg : "unknown error";
-                  }
-                  return ScanResult{ScanOutcome::syntax_break, scan_offset};
-                }
-              }
             }
             continue;
           } else if (comment == CommentMode::block) {
+            if (strict_ndjson && c == '\n') {
+              return ScanResult{ScanOutcome::syntax_break, scan_offset};
+            }
             if (c == '*') {
               comment = CommentMode::block_star;
             }
             ++scan_offset;
             continue;
           } else {  // CommentMode::block_star
+            if (strict_ndjson && c == '\n') {
+              return ScanResult{ScanOutcome::syntax_break, scan_offset};
+            }
             if (c == '/') {
               comment = CommentMode::none;
             } else if (c != '*') {
@@ -563,11 +557,17 @@ StreamReaderEngine::ScanResult StreamReaderEngine::scan_value(
             continue;
           }
           if (!allow_ext_escape && (c == '\n' || c == '\r')) {
-            ++scan_offset;
+            return ScanResult{ScanOutcome::syntax_break, scan_offset};
+          }
+          if (strict_ndjson && c == '\n') {
             return ScanResult{ScanOutcome::syntax_break, scan_offset};
           }
           ++scan_offset;
           continue;
+        }
+
+        if (strict_ndjson && c == '\n') {
+          return ScanResult{ScanOutcome::syntax_break, scan_offset};
         }
 
         if (c == '"' || (allow_single_quote && c == '\'')) {
@@ -600,22 +600,6 @@ StreamReaderEngine::ScanResult StreamReaderEngine::scan_value(
         }
 
         ++scan_offset;
-        if (c == '\n' && !checked_first_nl) {
-          checked_first_nl = true;
-          yyjson_read_err err{};
-          yyjson_doc* probe = yyjson_read_opts(
-              const_cast<char*>(ptr), scan_offset,
-              flag_ | YYJSON_READ_STOP_WHEN_DONE, nullptr, &err);
-          if (probe) {
-            yyjson_doc_free(probe);
-          } else if (err.code != YYJSON_READ_ERROR_UNEXPECTED_END &&
-                     err.code != YYJSON_READ_ERROR_EMPTY_CONTENT) {
-            if (_first_nl_err) {
-              *_first_nl_err = err.msg ? err.msg : "unknown error";
-            }
-            return ScanResult{ScanOutcome::syntax_break, scan_offset};
-          }
-        }
       }
 
       if (max_record_bytes_ > 0 && scan_offset >= max_record_bytes_) {
@@ -777,8 +761,7 @@ std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::parse_delimited_value(
     return std::nullopt;
   }
 
-  std::string first_nl_err;
-  const ScanResult scan = scan_value(true, _is_seq, !_is_seq, &first_nl_err);
+  const ScanResult scan = scan_value(true, _is_seq);
 
   if (scan.outcome == ScanOutcome::too_large) {
     return fail("JSON record exceeds maximum allowed size.",
@@ -786,19 +769,6 @@ std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::parse_delimited_value(
   }
   if (scan.outcome == ScanOutcome::io_error) {
     return fail("I/O error while reading JSON stream.", ErrorKind::io_error);
-  }
-
-  if (scan.outcome == ScanOutcome::syntax_break && !first_nl_err.empty()) {
-    const std::string err_msg = "Could not parse document: " + first_nl_err;
-    if (_is_seq) {
-      resync_to_rs();
-    } else {
-      advance_past_newline();
-    }
-    if (io_error_) {
-      return fail("I/O error while reading JSON stream.", ErrorKind::io_error);
-    }
-    return error(err_msg, ErrorKind::syntax_error);
   }
 
   if (scan.slice_len == 0) {
@@ -841,7 +811,7 @@ std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::parse_array_value() {
     return eof_or_io_error("Could not parse document: unexpected end of data");
   }
 
-  const ScanResult scan = scan_value(false, false, false, nullptr);
+  const ScanResult scan = scan_value(false, false);
 
   if (scan.outcome == ScanOutcome::too_large) {
     return fail("JSON record exceeds maximum allowed size.",
@@ -989,4 +959,4 @@ std::optional<Result<YYJsonDocPtr>> StreamReaderEngine::next_array_element() {
   return std::nullopt;
 }
 
-}  // namespace rfl::json::detail
+}  // namespace rfl::internal::json

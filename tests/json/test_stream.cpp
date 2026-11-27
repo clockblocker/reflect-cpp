@@ -269,26 +269,16 @@ TEST(json, test_stream_multiline_and_pretty_records) {
     EXPECT_EQ(collect_ok(reader), expected);
   }
 
-  // StreamReader still supports reading multi-line / pretty-printed ndjson and
-  // json_seq records (both istream and string_view)
+  // StreamReader supports multi-line / pretty-printed json_seq records (both
+  // istream and string_view); ndjson enforces strict single-line framing so
+  // unclosed records on one line cannot swallow subsequent lines.
   {
-    std::string ndjson_pretty;
     std::string seq_pretty;
     for (const auto& row : expected) {
       const auto pretty_rec = rfl::json::write(row, rfl::json::pretty);
-      ndjson_pretty += pretty_rec + "\n";
       seq_pretty += '\x1e';
       seq_pretty += pretty_rec + "\n";
     }
-
-    std::istringstream in_nd(ndjson_pretty);
-    rfl::json::StreamReader<Row> r_nd_in(in_nd, rfl::json::StreamFormat::ndjson,
-                                         0, 13);
-    EXPECT_EQ(collect_ok(r_nd_in), expected);
-
-    rfl::json::StreamReader<Row> r_nd_sv(std::string_view{ndjson_pretty},
-                                         rfl::json::StreamFormat::ndjson);
-    EXPECT_EQ(collect_ok(r_nd_sv), expected);
 
     std::istringstream in_seq(seq_pretty);
     rfl::json::StreamReader<Row> r_seq_in(
@@ -1053,17 +1043,19 @@ TEST(json, test_stream_4kib_chunks_and_unbuffered_linear) {
     EXPECT_LT(ms, kBudgetMs) << "4KiB chunked 512KiB record took " << ms << "ms";
   }
 
-  // Multi-line pretty-printed 256 KiB record in 4 KiB chunks (ndjson)
+  // Multi-line pretty-printed 256 KiB record in 4 KiB chunks (json_seq)
   {
     const Row pretty_big{7, std::string(256 * 1024, 'p'), 1.5};
     const std::string payload =
-        rfl::json::write(pretty_big, rfl::json::pretty) + "\n";
+        std::string("\x1e") + rfl::json::write(pretty_big, rfl::json::pretty) +
+        "\n";
     ChunkedPipeBuf pipe;
     feed_in_chunks(pipe, payload, 4096);
     std::istream in(&pipe);
 
     const auto ms = measure_ms([&] {
-      rfl::json::StreamReader<Row> reader(in, rfl::json::StreamFormat::ndjson);
+      rfl::json::StreamReader<Row> reader(in,
+                                          rfl::json::StreamFormat::json_seq);
       const auto res = reader.next();
       ASSERT_TRUE(res.has_value() && res->has_value());
       EXPECT_EQ(**res, pretty_big);
@@ -1110,16 +1102,17 @@ TEST(json, test_stream_4kib_chunks_and_unbuffered_linear) {
     EXPECT_EQ(pipe.underflow_count(), 2u);
   }
 
-  // Comments containing braces/quotes inside containers + unclosed brace recovery
+  // Comments containing braces/quotes inside containers (json_seq) + strict
+  // single-line NDJSON recovery & linear-time DoS resistance
   {
     const std::string with_inner_comments =
-        "{\n"
+        "\x1e{\n"
         "  /* } ] \"tricky\" */ \"id\": 1,\n"
         "  // another } brace and \" quote\n"
         "  \"name\": \"ok\", \"score\": 1.5\n"
         "}\n";
     std::istringstream in(with_inner_comments);
-    rfl::json::StreamReader<Row> reader(in, rfl::json::StreamFormat::ndjson,
+    rfl::json::StreamReader<Row> reader(in, rfl::json::StreamFormat::json_seq,
                                         YYJSON_READ_ALLOW_COMMENTS, 7);
     EXPECT_EQ(collect_ok(reader), (std::vector<Row>{{1, "ok", 1.5}}));
   }
@@ -1136,6 +1129,58 @@ TEST(json, test_stream_4kib_chunks_and_unbuffered_linear) {
     ASSERT_TRUE(r2.has_value() && r2->has_value());
     EXPECT_EQ(**r2, (Row{2, "recovered", 2.5}));
     EXPECT_FALSE(reader.next().has_value());
+  }
+  // Regression: unclosed NDJSON line followed by > max_record_bytes valid lines
+  // recovers all valid records without hitting fatal max_record_bytes.
+  {
+    std::string payload = "{\"id\":0,\n";
+    for (int i = 1; i <= 1000; ++i) {
+      payload += "{\"id\":" + std::to_string(i) +
+                 ",\"name\":\"ok\",\"score\":1.0}\n";
+    }
+    std::istringstream in(payload);
+    rfl::json::StreamReader<Row> reader(in, rfl::json::StreamFormat::ndjson, 0,
+                                        65536, 4096);
+    int errs = 0;
+    int ok = 0;
+    while (const auto res = reader.next()) {
+      if (res->has_value()) {
+        ++ok;
+      } else {
+        ++errs;
+      }
+    }
+    EXPECT_EQ(errs, 1);
+    EXPECT_EQ(ok, 1000);
+  }
+  // Regression: 4,000 unclosed "{\n" lines + 4,000 valid records finishes in
+  // linear time (no O(N^2) rescanning DoS).
+  {
+    std::string payload;
+    payload.reserve(160000);
+    for (int i = 0; i < 4000; ++i) {
+      payload += "{\n";
+    }
+    for (int i = 0; i < 4000; ++i) {
+      payload += "{\"id\":" + std::to_string(i) +
+                 ",\"name\":\"r\",\"score\":1.0}\n";
+    }
+    int errs = 0;
+    int ok = 0;
+    const auto ms = measure_ms([&] {
+      std::istringstream in(payload);
+      rfl::json::StreamReader<Row> reader(in, rfl::json::StreamFormat::ndjson);
+      while (const auto res = reader.next()) {
+        if (res->has_value()) {
+          ++ok;
+        } else {
+          ++errs;
+        }
+      }
+    });
+    EXPECT_EQ(errs, 4000);
+    EXPECT_EQ(ok, 4000);
+    EXPECT_LT(ms, kBudgetMs) << "4000 unclosed NDJSON lines took " << ms << "ms";
   }
 }
 
