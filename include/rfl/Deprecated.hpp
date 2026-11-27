@@ -36,6 +36,8 @@ struct Deprecated {
   using ReflectionType = Type;
 
   /// Default constructor.
+  template <class U = Type>
+    requires std::is_default_constructible_v<U>
   Deprecated() : value_(Type()) {}
 
   /// Constructs from a const reference to the value.

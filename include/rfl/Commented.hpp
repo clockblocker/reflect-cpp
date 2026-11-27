@@ -24,6 +24,8 @@ struct Commented {
 
   /// Default constructor - initializes with default-constructed value and no
   /// comment.
+  template <class U = Type>
+    requires std::is_default_constructible_v<U>
   Commented() : value_(Type()) {}
 
   /// Constructs from a value without a comment.
