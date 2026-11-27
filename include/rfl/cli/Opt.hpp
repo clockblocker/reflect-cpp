@@ -39,6 +39,11 @@ struct Implicit {
 
 struct MultiToken {};
 
+/// Marks an option's value as sensitive so mutable `char* argv[]` overloads
+/// overwrite the value in place with `'*'` after parsing (hiding secrets from
+/// process listings).
+struct Sensitive {};
+
 template <rfl::internal::StringLiteral _desc>
 struct Desc {
   static constexpr auto value = _desc;
@@ -71,6 +76,7 @@ struct opt_attrs<> {
   static constexpr bool has_group = false;
   static constexpr bool has_value_name = false;
   static constexpr bool is_multi_token = false;
+  static constexpr bool is_sensitive = false;
   static constexpr size_t num_implicit_value = 0;
   static constexpr int count = 0;
   static constexpr rfl::internal::StringLiteral<1> short_name = "";
@@ -136,6 +142,11 @@ struct opt_attrs<attr::Implicit<_val>, Rest...> : opt_attrs<Rest...> {
 template <class... Rest>
 struct opt_attrs<attr::MultiToken, Rest...> : opt_attrs<Rest...> {
   static constexpr bool is_multi_token = true;
+};
+
+template <class... Rest>
+struct opt_attrs<attr::Sensitive, Rest...> : opt_attrs<Rest...> {
+  static constexpr bool is_sensitive = true;
 };
 
 template <rfl::internal::StringLiteral _desc, class... Rest>

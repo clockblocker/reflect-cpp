@@ -1,6 +1,7 @@
 #ifndef RFL_CLI_PARSE_ARGV_HPP_
 #define RFL_CLI_PARSE_ARGV_HPP_
 
+#include <algorithm>
 #include <cctype>
 #include <concepts>
 #include <initializer_list>
@@ -85,7 +86,8 @@ namespace internal {
 /// bare arguments → positional
 /// -- → everything after goes to positional
 inline rfl::Result<ParsedArgs> parse_string_views(
-    std::span<const std::string_view> _args, const Options& _options) {
+    std::span<const std::string_view> _args, const Options& _options,
+    std::vector<std::string_view>* _sensitive_spans = nullptr) {
   ParsedArgs result;
   const bool negative_numbers_are_options =
       _options.negative_numbers_are_options;
@@ -106,16 +108,20 @@ inline rfl::Result<ParsedArgs> parse_string_views(
   };
 
   // Every occurrence of a list option adds to it. Any other option can be
-  // given only once.
+  // given only once unless LastValueWins is set.
   const auto add_long = [&](std::string _key, std::string _val,
                             const Option& _option,
                             std::string_view _raw) -> rfl::Result<bool> {
+    result.occurrences.emplace_back(_key, _val);
     const auto it = result.named.find(_key);
     if (it == result.named.end()) {
       result.named.emplace(std::move(_key), std::move(_val));
     }
     else if (_option.is_list) {
       result.later_occurrences[it->first].emplace_back(std::move(_val));
+    }
+    else if (_options.last_value_wins) {
+      it->second = std::move(_val);
     }
     else {
       return error("Duplicate argument: " + std::string(_raw));
@@ -126,17 +132,28 @@ inline rfl::Result<ParsedArgs> parse_string_views(
   const auto add_short = [&](std::string _key, std::string _val,
                              const Option& _option,
                              std::string_view _raw) -> rfl::Result<bool> {
-    if (_option.is_list) {
-      // Under its long name, so that `-r a --report b` keeps argv order. A
-      // short option is only a list if it is in `_options`.
+    if (_option.is_list
+        || (_options.last_value_wins && _option.kind != OptionKind::unknown)) {
+      // Under its long name, so that `-r a --report b` keeps argv order and
+      // LastValueWins resolves short/long overrides cleanly.
       return add_long(*_options.find_short_target(_key),
                       std::move(_val), _option, _raw);
+    }
+    if (const auto* target = _options.find_short_target(_key)) {
+      result.occurrences.emplace_back(*target, _val);
     }
     result.short_order.emplace_back(_key);
     if (!result.short_args.emplace(std::move(_key), std::move(_val)).second) {
       return error("Duplicate short argument: " + std::string(_raw));
     }
     return true;
+  };
+
+  const auto record_sensitive = [&](const Option& _option,
+                                    const std::string_view _span) {
+    if (_sensitive_spans && _option.sensitive && !_span.empty()) {
+      _sensitive_spans->push_back(_span);
+    }
   };
 
   // The value of the option _args[*_i], given without '=', taking the next
@@ -151,6 +168,7 @@ inline rfl::Result<ParsedArgs> parse_string_views(
           return error(
               "Missing value for option '" + std::string(_raw) + "'.");
         }
+        record_sensitive(_option, _args[*_i + 1]);
         return std::string(_args[++*_i]);
 
       case OptionKind::flag:
@@ -172,6 +190,7 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         // A variant, rfl::Generic or nested struct: `-m fast` takes the next
         // token unless it looks like an option.
         if (has_next && !looks_like_option(_args[*_i + 1])) {
+          record_sensitive(_option, _args[*_i + 1]);
           return std::string(_args[++*_i]);
         }
         return std::string();
@@ -202,8 +221,9 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       const auto eq = arg.find('=');
       auto key = std::string(
           eq == std::string_view::npos ? arg : arg.substr(0, eq));
-      auto val = std::string(
-          eq == std::string_view::npos ? "" : arg.substr(eq + 1));
+      const std::string_view eq_val =
+          eq == std::string_view::npos ? std::string_view{} : arg.substr(eq + 1);
+      auto val = std::string(eq_val);
       if (key.empty()) {
         return error("Empty key in argument: " + std::string(arg_raw));
       }
@@ -222,6 +242,9 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       if (option.kind == OptionKind::unknown && _options.reject_unknown) {
         return error("Unknown option '--" + key + "'.");
       }
+      if (eq != std::string_view::npos) {
+        record_sensitive(option, eq_val);
+      }
       bool consume_multi = false;
       if (eq == std::string_view::npos && option.kind == OptionKind::value
           && _options.separate_values) {
@@ -233,6 +256,10 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         val = std::move(*v);
         consume_multi = option.multi_token;
       }
+      else if (eq == std::string_view::npos && option.kind == OptionKind::value
+               && _options.require_equals) {
+        return error("Missing value for option '--" + key + "'.");
+      }
       else if (eq == std::string_view::npos
                && option.kind == OptionKind::implicit_value) {
         // --help: no value. An rfl::ImplicitValue option stands for its
@@ -243,6 +270,7 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       if (!r) { return error(r.error().what()); }
       while (consume_multi && i + 1 < _args.size() && _args[i + 1] != "--"
              && !looks_like_option(_args[i + 1])) {
+        record_sensitive(option, _args[i + 1]);
         const auto r2 =
             add_long(key, std::string(_args[++i]), option, arg_raw);
         if (!r2) { return error(r2.error().what()); }
@@ -250,8 +278,8 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       continue;
     }
 
-    // Short options: -x, -x value, -x=value, and groups of them in one
-    // token, as in getopt: -qv, -fvalue, -qfvalue, -qf value.
+    // Short options: -x, -x value, -x=value, multi-character single-dash
+    // options (-CC, -rp=paths), and single-char clusters (-qv, -fvalue).
     if (arg_raw.size() >= 2 && arg_raw[0] == '-') {
       const auto group = arg_raw.substr(1);
 
@@ -265,17 +293,29 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         continue;
       }
 
+      // Check for an exact multi-character single-dash short option (e.g. -CC,
+      // -rp, -rp=paths) before splitting character-by-character into clusters.
+      const auto full_eq = group.find('=');
+      const auto full_key =
+          full_eq == std::string_view::npos ? group : group.substr(0, full_eq);
+      const bool exact_multi_short =
+          _options.group_short_options && full_key.size() > 1
+          && _options.find_short(full_key).kind != OptionKind::unknown;
+
       // Without a table, the short options are not known, so -abc is the one
       // short option "abc": -abc value, -abc=value or -abc.
       for (size_t j = 0; j < group.size(); ++j) {
-        // Short names are single ASCII characters. An unknown character may
-        // take several bytes in UTF-8, so take them all for the message.
+        // Short names are single ASCII characters (or exact multi-char short
+        // names matched above). An unknown character may take several bytes in
+        // UTF-8, so take them all for the message.
         const auto c = static_cast<unsigned char>(group[j]);
         auto key = std::string(
-            _options.group_short_options
-                ? group.substr(
-                      j, c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 1)
-                : group.substr(0, group.find('=')));
+            exact_multi_short
+                ? full_key
+                : (_options.group_short_options
+                       ? group.substr(
+                             j, c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 1)
+                       : full_key));
         const auto option = _options.find_short(key);
         const auto rest = group.substr(j + key.size());
         const auto name = "-" + key;
@@ -286,7 +326,9 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         if (j == 0 && rest.starts_with('=')) {
           // -x=value, whatever -x is. Unlike getopt, where -f=csv gives
           // "=csv", the '=' is not part of the value.
-          val = std::string(rest.substr(1));
+          const auto v_span = rest.substr(1);
+          record_sensitive(option, v_span);
+          val = std::string(v_span);
         }
         else if (option.kind == OptionKind::unknown) {
           if (!alone) {
@@ -315,7 +357,9 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         else if (!rest.empty()) {
           // -fvalue, -qfvalue, -hvalue: the rest of the token is the value.
           // -qf=value is the same as -qfvalue, as -f=value is.
-          val = std::string(rest.starts_with('=') ? rest.substr(1) : rest);
+          const auto v_span = rest.starts_with('=') ? rest.substr(1) : rest;
+          record_sensitive(option, v_span);
+          val = std::string(v_span);
         }
         else {
           // The last option of the token handles the next one as it would
@@ -330,6 +374,7 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         if (!r) { return error(r.error().what()); }
         while (consume_multi && i + 1 < _args.size() && _args[i + 1] != "--"
                && !looks_like_option(_args[i + 1])) {
+          record_sensitive(option, _args[i + 1]);
           const auto r2 =
               add_short(key, std::string(_args[++i]), option, arg_raw);
           if (!r2) { return error(r2.error().what()); }
@@ -387,8 +432,9 @@ bool is_null(const S& _str) noexcept {
 /// Parses every element of `_args`, rejecting null pointers.
 /// `_first_index` is the index of the first element in error messages.
 template <StringRange R>
-rfl::Result<ParsedArgs> parse_strings(R&& _args, size_t _first_index,
-                                      const Options& _options) {
+rfl::Result<ParsedArgs> parse_strings(
+    R&& _args, size_t _first_index, const Options& _options,
+    std::vector<std::string_view>* _sensitive_spans = nullptr) {
   std::vector<std::string_view> views;
   auto i = _first_index;
   for (auto&& arg : _args) {
@@ -399,7 +445,7 @@ rfl::Result<ParsedArgs> parse_strings(R&& _args, size_t _first_index,
     views.push_back(view);
     ++i;
   }
-  return parse_string_views(views, _options);
+  return parse_string_views(views, _options, _sensitive_spans);
 }
 
 /// Converts every element of `_args` to UTF-8 and parses it.
@@ -463,6 +509,23 @@ inline rfl::Result<ParsedArgs> parse_argv(int argc, const char* const argv[],
                                           const Options& _options) {
   return skip_program_name(argc, argv).and_then(
       [&](auto _args) { return parse_strings(_args, 1, _options); });
+}
+
+/// Parses mutable argc/argv with the options of the target struct, skipping
+/// argv[0] and overwriting any `Option::sensitive` value spans in place with
+/// `'*'`.
+inline rfl::Result<ParsedArgs> parse_argv(int argc, char* argv[],
+                                          const Options& _options) {
+  return skip_program_name(argc, static_cast<const char* const*>(argv))
+      .and_then([&](auto _args) {
+        std::vector<std::string_view> sensitive_spans;
+        auto res = parse_strings(_args, 1, _options, &sensitive_spans);
+        for (const auto& span : sensitive_spans) {
+          auto* p = const_cast<char*>(span.data());
+          std::fill(p, p + span.size(), '*');
+        }
+        return res;
+      });
 }
 
 /// Parses wide argc/argv with the options of the target struct, skipping

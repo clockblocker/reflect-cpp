@@ -27,6 +27,9 @@ struct ParsedArgs {
   /// The occurrences after the first of each list option given more than
   /// once, by long name, in argv order.
   internal::CliLaterOccurrencesType later_occurrences;
+  /// Every recognized option occurrence `(canonical_long_name, raw_value)` in
+  /// exact argv order.
+  std::vector<std::pair<std::string, std::string>> occurrences;
 };
 
 namespace internal {
@@ -42,6 +45,8 @@ struct ResolvedArgs {
   /// dropped, or empty: with rfl::cli::OptionsFirst, the list as the last
   /// positional field when it gets the rest of the command line.
   std::string verbatim_list;
+  /// Every option occurrence `(canonical_long_name, raw_value)` in argv order.
+  std::vector<std::pair<std::string, std::string>> occurrences;
 };
 
 /// Applies what parse_argv could not know without the option table.
@@ -160,7 +165,8 @@ inline rfl::Result<ResolvedArgs> resolve_args(
 
   return ResolvedArgs{std::move(result),
                       std::move(_parsed.later_occurrences),
-                      std::move(verbatim_list)};
+                      std::move(verbatim_list),
+                      std::move(_parsed.occurrences)};
 }
 
 /// The error for a long option that abbreviates several options, worded
