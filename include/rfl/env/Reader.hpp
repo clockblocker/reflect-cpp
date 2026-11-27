@@ -8,7 +8,6 @@
 #include <concepts>
 #include <cstdlib>
 #include <optional>
-#include <set>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -250,10 +249,20 @@ struct Reader {
               using Aliases =
                   rfl::internal::field_aliases_t<typename FieldType::Type>;
               if constexpr (Aliases::size > 0) {
-                std::set<std::string_view> seen_aliases;
-                seen_aliases.insert(FieldType::name());
-                for (const auto alias : Aliases::to_array()) {
-                  if (!seen_aliases.insert(alias).second) {
+                constexpr auto aliases = Aliases::to_array();
+                for (size_t idx = 0; idx < aliases.size(); ++idx) {
+                  const auto alias = aliases[idx];
+                  if (alias == FieldType::name()) {
+                    continue;
+                  }
+                  bool duplicate = false;
+                  for (size_t prev = 0; prev < idx; ++prev) {
+                    if (aliases[prev] == alias) {
+                      duplicate = true;
+                      break;
+                    }
+                  }
+                  if (duplicate) {
                     continue;
                   }
                   const std::string alias_str(alias);

@@ -9,22 +9,11 @@
 #include "../Alias.hpp"
 #include "../Result.hpp"
 #include "../internal/StringLiteral.hpp"
+#include "../internal/is_alias.hpp"
 #include "Parser_base.hpp"
 #include "schema/Type.hpp"
 
 namespace rfl::parsing {
-
-template <class T>
-struct is_alias : std::false_type {};
-
-template <internal::StringLiteral _name, class T>
-struct is_alias<Alias<_name, T>> : std::true_type {
-  using element_type = T;
-  static constexpr auto name = _name;
-};
-
-template <class T>
-constexpr bool is_alias_v = is_alias<std::remove_cvref_t<T>>::value;
 
 template <class R, class W, class T, class ProcessorsType>
 struct ParserAlias;

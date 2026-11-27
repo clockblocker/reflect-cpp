@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <type_traits>
@@ -10,15 +11,18 @@
 
 #include "../Alias.hpp"
 #include "../Attribute.hpp"
+#include "../Box.hpp"
 #include "../Commented.hpp"
 #include "../DefaultVal.hpp"
 #include "../Deprecated.hpp"
 #include "../Description.hpp"
 #include "../Positional.hpp"
+#include "../Ref.hpp"
 #include "../Rename.hpp"
 #include "../Short.hpp"
 #include "../Skip.hpp"
 #include "../Tuple.hpp"
+#include "../Validator.hpp"
 #include "StringLiteral.hpp"
 
 namespace rfl::internal {
@@ -110,6 +114,31 @@ struct field_aliases_impl<Attribute<T>> {
 
 template <class T>
 struct field_aliases_impl<Commented<T>> {
+  using type = field_aliases_t<T>;
+};
+
+template <class T, class V, class... Vs>
+struct field_aliases_impl<Validator<T, V, Vs...>> {
+  using type = field_aliases_t<T>;
+};
+
+template <class T, Copyability C>
+struct field_aliases_impl<Box<T, C>> {
+  using type = field_aliases_t<T>;
+};
+
+template <class T>
+struct field_aliases_impl<Ref<T>> {
+  using type = field_aliases_t<T>;
+};
+
+template <class T, class D>
+struct field_aliases_impl<std::unique_ptr<T, D>> {
+  using type = field_aliases_t<T>;
+};
+
+template <class T>
+struct field_aliases_impl<std::shared_ptr<T>> {
   using type = field_aliases_t<T>;
 };
 

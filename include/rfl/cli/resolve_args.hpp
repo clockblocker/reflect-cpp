@@ -88,15 +88,17 @@ inline rfl::Result<std::map<std::string, std::string>> resolve_args(
     ParsedArgs _parsed, const Options& _options
 ) {
   std::map<std::string, std::string> result;
+  std::map<std::string, std::string> seen_flag;
   for (auto& [key, val] : _parsed.named) {
     const auto it = _options.long_aliases.find(key);
     const auto& target =
         it == _options.long_aliases.end() ? key : it->second;
     if (!result.emplace(target, std::move(val)).second) {
       return rfl::error(
-          "Conflict: '--" + key + "' and '--" + target
+          "Conflict: '--" + key + "' and '--" + seen_flag[target]
           + "' refer to the same field.");
     }
+    seen_flag.emplace(target, key);
   }
 
   // Merge positional args.
@@ -108,8 +110,11 @@ inline rfl::Result<std::map<std::string, std::string>> resolve_args(
   for (size_t i = 0; i < _parsed.positional.size(); ++i) {
     const auto& long_name = positional_names[i];
     if (result.count(long_name)) {
+      const auto flag_it = seen_flag.find(long_name);
+      const auto& flag_name =
+          flag_it != seen_flag.end() ? flag_it->second : long_name;
       return rfl::error(
-          "Conflict: positional argument and '--" + long_name
+          "Conflict: positional argument and '--" + flag_name
           + "' both provided.");
     }
     result.emplace(long_name, std::move(_parsed.positional[i]));
@@ -123,8 +128,11 @@ inline rfl::Result<std::map<std::string, std::string>> resolve_args(
     }
     const auto& long_name = it->second;
     if (result.count(long_name)) {
+      const auto flag_it = seen_flag.find(long_name);
+      const auto& flag_name =
+          flag_it != seen_flag.end() ? flag_it->second : long_name;
       return rfl::error(
-          "Conflict: '-" + short_name + "' and '--" + long_name
+          "Conflict: '-" + short_name + "' and '--" + flag_name
           + "' both provided.");
     }
     result.emplace(long_name, std::move(value));
