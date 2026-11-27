@@ -384,6 +384,19 @@ if (argc > 1 && std::string_view(argv[1]) == "--help") {
 }
 ```
 
+Or let `rfl::cli::read_app` handle `-h`, `--help` and `--version`, turned on by the setting `rfl::cli::App`:
+
+```cpp
+using MyApp = rfl::cli::App<"app", "1.0", "Processes data files.">;
+
+const auto result = rfl::cli::read_app<Config, MyApp>(argc, argv).value();
+if (const auto* info = std::get_if<rfl::cli::HelpOrVersion>(&result)) {
+  std::cout << info->text;  // the help or "app 1.0"
+  return 0;
+}
+const auto& config = std::get<Config>(result);
+```
+
 Nested structs, `std::optional`, `std::vector`, enums, `rfl::Flatten` and `rfl::Rename` are all supported. Refer to the [documentation](https://munich-data-engineering.github.io/reflect-cpp/cli) for details.
 
 ### Error messages
