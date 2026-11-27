@@ -50,6 +50,10 @@ if (REFLECTCPP_MSGPACK)
     add_subdirectory(msgpack)
 endif()
 
+if (REFLECTCPP_NLOHMANN)
+    add_subdirectory(nlohmann)
+endif()
+
 if (REFLECTCPP_PARQUET)
     add_subdirectory(parquet)
 endif()
