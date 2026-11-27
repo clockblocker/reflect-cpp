@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 
+#include "../NoExtraFields.hpp"
 #include "../Processors.hpp"
 #include "../internal/no_extra_fields_v.hpp"
 #include "AllowAbbreviations.hpp"
@@ -143,6 +144,44 @@ inline rfl::Result<bool> validate_settings(const Settings& _settings) {
   }
   return true;
 }
+
+// Strips `rfl::NoExtraFields` from a flat `Processors<...>` pack so runtime
+// `Settings{.reject_unknown = false}` cleanly overrides compile-time bundles
+// like `rfl::cli::GnuStyle`.
+template <class Acc, class Rest>
+struct strip_no_extra_fields;
+
+template <class... Acc>
+struct strip_no_extra_fields<Processors<Acc...>, Processors<>> {
+  using type = Processors<Acc...>;
+};
+
+template <class... Acc, class... Tail>
+struct strip_no_extra_fields<Processors<Acc...>,
+                             Processors<NoExtraFields, Tail...>>
+    : strip_no_extra_fields<Processors<Acc...>, Processors<Tail...>> {};
+
+template <class... Acc, class Head, class... Tail>
+struct strip_no_extra_fields<Processors<Acc...>, Processors<Head, Tail...>>
+    : strip_no_extra_fields<Processors<Acc..., Head>, Processors<Tail...>> {};
+
+template <class ProcessorsType>
+using strip_no_extra_fields_t =
+    typename strip_no_extra_fields<Processors<>, ProcessorsType>::type;
+
+template <class ProcessorsType>
+struct add_no_extra_fields;
+
+template <class... Ps>
+struct add_no_extra_fields<Processors<Ps...>> {
+  using type = std::conditional_t<
+      rfl::internal::no_extra_fields_v<Processors<Ps...>>, Processors<Ps...>,
+      Processors<Ps..., NoExtraFields>>;
+};
+
+template <class ProcessorsType>
+using add_no_extra_fields_t =
+    typename add_no_extra_fields<ProcessorsType>::type;
 
 }  // namespace internal
 

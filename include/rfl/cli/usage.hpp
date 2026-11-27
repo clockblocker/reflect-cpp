@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <exception>
 #include <locale>
@@ -32,6 +33,7 @@
 #include "../internal/has_reflection_method_v.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/has_reflector.hpp"
+#include "../internal/is_alias.hpp"
 #include "../internal/is_bitset.hpp"
 #include "../internal/is_default_val_v.hpp"
 #include "../internal/is_deprecated.hpp"
@@ -1339,6 +1341,57 @@ inline std::string format_usage(const std::string& _program_name,
   return out;
 }
 
+template <class T, class... Ps>
+rfl::Result<std::string> usage_from_options(
+    const std::string& _program_name, const Options& _options,
+    const BuiltinOptions& _builtin, const std::optional<char> _delimiter,
+    const UsageOptions& _opts) {
+  using ProcessorsType = cli_processors_t<Ps...>;
+  return check_short_names(_options).and_then(
+      [&](auto) -> rfl::Result<std::string> {
+        try {
+          auto walker = UsageWalker<ProcessorsType>(&_options, _delimiter);
+          auto builtin_args = builtin_usage_args(_builtin, _opts.help_group);
+          auto fields = walker.template collect<T>();
+          auto args = std::vector<UsageArg>();
+          args.reserve(builtin_args.size() + fields.size());
+          if (!_opts.help_group.empty() && !builtin_args.empty()) {
+            const auto pos = std::find_if(
+                fields.begin(), fields.end(),
+                [&](const UsageArg& _a) { return _a.group == _opts.help_group; });
+            if (pos != fields.end()) {
+              args.insert(args.end(), fields.begin(), pos);
+              args.insert(args.end(), builtin_args.begin(), builtin_args.end());
+              args.insert(args.end(), pos, fields.end());
+            } else {
+              args = std::move(builtin_args);
+              args.insert(args.end(), fields.begin(), fields.end());
+            }
+          } else {
+            args = std::move(builtin_args);
+            args.insert(args.end(), fields.begin(), fields.end());
+          }
+          if (!_opts.hidden_groups.empty()) {
+            args.erase(
+                std::remove_if(
+                    args.begin(), args.end(),
+                    [&](const UsageArg& _a) {
+                      return !_a.group.empty() &&
+                             std::find(_opts.hidden_groups.begin(),
+                                       _opts.hidden_groups.end(),
+                                       _a.group) != _opts.hidden_groups.end();
+                    }),
+                args.end());
+          }
+          return format_usage(_program_name, args, _opts, _delimiter,
+                              _options.options_first,
+                              app_header<ProcessorsType>(_program_name));
+        } catch (std::exception& e) {
+          return error(e.what());
+        }
+      });
+}
+
 }  // namespace internal
 
 /// Generates the usage line, and optionally a help text with one row per
@@ -1363,61 +1416,6 @@ inline std::string format_usage(const std::string& _program_name,
 /// T can succeed: two fields have the same short name, or T has a bare
 /// rfl::DefaultVal and default-constructing it throws.
 template <class T, class... Ps>
-rfl::Result<std::string> usage_from_options(
-    const std::string& _program_name, const internal::Options& _options,
-    const internal::BuiltinOptions& _builtin,
-    const std::optional<char> _delimiter, const UsageOptions& _opts) {
-  using ProcessorsType = internal::cli_processors_t<Ps...>;
-  return internal::check_short_names(_options).and_then(
-      [&](auto) -> rfl::Result<std::string> {
-        try {
-          auto walker =
-              internal::UsageWalker<ProcessorsType>(&_options, _delimiter);
-          auto builtin_args =
-              internal::builtin_usage_args(_builtin, _opts.help_group);
-          auto fields = walker.template collect<T>();
-          auto args = std::vector<internal::UsageArg>();
-          args.reserve(builtin_args.size() + fields.size());
-          if (!_opts.help_group.empty() && !builtin_args.empty()) {
-            const auto pos = std::find_if(
-                fields.begin(), fields.end(),
-                [&](const internal::UsageArg& _a) {
-                  return _a.group == _opts.help_group;
-                });
-            if (pos != fields.end()) {
-              args.insert(args.end(), fields.begin(), pos);
-              args.insert(args.end(), builtin_args.begin(), builtin_args.end());
-              args.insert(args.end(), pos, fields.end());
-            } else {
-              args = std::move(builtin_args);
-              args.insert(args.end(), fields.begin(), fields.end());
-            }
-          } else {
-            args = std::move(builtin_args);
-            args.insert(args.end(), fields.begin(), fields.end());
-          }
-          if (!_opts.hidden_groups.empty()) {
-            args.erase(
-                std::remove_if(
-                    args.begin(), args.end(),
-                    [&](const internal::UsageArg& _a) {
-                      return !_a.group.empty() &&
-                             std::find(_opts.hidden_groups.begin(),
-                                       _opts.hidden_groups.end(),
-                                       _a.group) != _opts.hidden_groups.end();
-                    }),
-                args.end());
-          }
-          return internal::format_usage(
-              _program_name, args, _opts, _delimiter, _options.options_first,
-              internal::app_header<ProcessorsType>(_program_name));
-        } catch (std::exception& e) {
-          return error(e.what());
-        }
-      });
-}
-
-template <class T, class... Ps>
 rfl::Result<std::string> usage(const std::string& _program_name,
                                const UsageOptions& _opts) {
   using ProcessorsType = internal::cli_processors_t<Ps...>;
@@ -1427,21 +1425,25 @@ rfl::Result<std::string> usage(const std::string& _program_name,
   // built-in options of rfl::cli::App that read_app handles.
   const auto& [options, builtin] =
       internal::cached_app_options<T, ProcessorsType, /*_all_paths=*/true>();
-  return usage_from_options<T, Ps...>(_program_name, options, builtin,
-                                      delimiter, _opts);
+  return internal::usage_from_options<T, Ps...>(_program_name, options, builtin,
+                                                delimiter, _opts);
 }
 
-template <class T, class... Ps>
+template <class T, class... Ps, std::same_as<Settings> SettingsT>
 rfl::Result<std::string> usage(const std::string& _program_name,
-                               const Settings& _settings,
+                               const SettingsT& _settings,
                                const UsageOptions& _opts = UsageOptions{
                                    .detailed = true}) {
   using ProcessorsType = internal::cli_processors_t<Ps...>;
+  const auto valid = internal::validate_settings(_settings);
+  if (!valid) {
+    return error(valid.error().what());
+  }
   const auto& [base_options, builtin] =
       internal::cached_app_options<T, ProcessorsType, /*_all_paths=*/true>();
   const auto options = internal::apply_settings(base_options, _settings);
-  return usage_from_options<T, Ps...>(_program_name, options, builtin,
-                                      _settings.list_delimiter, _opts);
+  return internal::usage_from_options<T, Ps...>(
+      _program_name, options, builtin, _settings.list_delimiter, _opts);
 }
 
 template <class T, class... Ps>

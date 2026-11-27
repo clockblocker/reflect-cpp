@@ -134,7 +134,7 @@ constexpr bool has_custom_field_aliases_v =
     has_custom_field_aliases<std::remove_cvref_t<T>>::value;
 
 template <class T>
-  requires(is_transparent_wrapper_v<T> && !has_custom_field_aliases_v<T>)
+  requires(TransparentWrapperType<T> && !has_custom_field_aliases_v<T>)
 struct field_aliases_impl<T> {
   using type = field_aliases_t<typename T::Type>;
 };

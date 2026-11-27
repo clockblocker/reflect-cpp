@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <memory>
 #include <optional>
 #include <rfl.hpp>
 #include <rfl/cli.hpp>
@@ -232,6 +233,116 @@ TEST(cli, test_issue_98_command_node_hosts_static_reflected_structs) {
   const auto sort_help = sort_node.usage();
   EXPECT_NE(sort_help.find("--output-format=<FORMAT>"), std::string::npos)
       << sort_help;
+}
+
+struct MoveOnlyOptions {
+  rfl::cli::Opt<std::unique_ptr<int>, rfl::cli::attr::Short<"n">> count;
+  rfl::cli::Opt<std::string, rfl::cli::attr::Short<"o">> output = "a.out";
+};
+
+struct HiddenChild {
+  int secret_a = 1;
+  std::string secret_b = "x";
+};
+
+struct WithHiddenNested {
+  rfl::cli::Opt<int, rfl::cli::attr::Group<"Debug">> debug_port = 9999;
+  rfl::Hidden<HiddenChild> hidden_nested;
+};
+
+TEST(cli, test_issue_98_move_only_command_node_and_pre_subcommand_routing) {
+  rfl::cli::CommandNode root("tool", "Tool with move-only & pre-subcommand opts");
+  root.require_subcommand(true);
+
+  // Move-only options struct with generic lambda (must receive const MoveOnlyOptions&).
+  int seen_count = -1;
+  root.add_subcommand<MoveOnlyOptions, rfl::DefaultIfMissing>(
+      "run", "Run with move-only opts",
+      [&](const auto& _opts) {
+        if (_opts.count.value()) {
+          seen_count = *_opts.count.value();
+        }
+      },
+      rfl::cli::Settings::gnu());
+
+  const auto r_move = root.dispatch({"run", "-n", "42", "-o", "res.bin"});
+  ASSERT_TRUE(r_move) << r_move.error().what();
+  EXPECT_EQ(seen_count, 42);
+  const auto* mo = r_move->as<MoveOnlyOptions>();
+  ASSERT_NE(mo, nullptr);
+  ASSERT_TRUE(mo->count.value() != nullptr);
+  EXPECT_EQ(*mo->count.value(), 42);
+  EXPECT_EQ(mo->output.value(), "res.bin");
+
+  // Pre-subcommand routing with short value option (separate_values=false!),
+  // short cluster (-vo merge), and single_dash_long (-output merge).
+  struct RootOpts {
+    rfl::cli::Flag<rfl::cli::attr::Short<"v">> verbose = false;
+    rfl::cli::Opt<std::string, rfl::cli::attr::Short<"o">> output = "out";
+  };
+  rfl::cli::CommandNode routed("routed", "Routed root");
+  routed.require_subcommand(true);
+  // Default settings: separate_values=false, but short -o ALWAYS consumes next token!
+  routed.bind<RootOpts, rfl::DefaultIfMissing>(rfl::cli::Settings::default_settings());
+  routed.add_subcommand<RootOpts, rfl::DefaultIfMissing>(
+      "merge", "Merge subcommand", rfl::cli::Settings::default_settings());
+  routed.add_subcommand<RootOpts, rfl::DefaultIfMissing>(
+      "sort", "Sort subcommand", rfl::cli::Settings::default_settings());
+
+  // "merge" is the value of -o, NOT a subcommand; "sort" is the subcommand!
+  const auto r_short = routed.dispatch({"-o", "merge", "sort"});
+  ASSERT_TRUE(r_short) << r_short.error().what();
+  EXPECT_EQ(r_short->command_path, (std::vector<std::string>{"sort"}));
+  ASSERT_NE(r_short->as<RootOpts>(), nullptr);
+  EXPECT_EQ(r_short->as<RootOpts>()->output.value(), "merge");
+
+  // Short cluster `-vo merge sort` also consumes "merge" as -o's value!
+  const auto r_cluster = routed.dispatch({"-vo", "merge", "sort"});
+  ASSERT_TRUE(r_cluster) << r_cluster.error().what();
+  EXPECT_EQ(r_cluster->command_path, (std::vector<std::string>{"sort"}));
+  EXPECT_TRUE(r_cluster->as<RootOpts>()->verbose.value());
+  EXPECT_EQ(r_cluster->as<RootOpts>()->output.value(), "merge");
+
+  // single_dash_long `-output merge sort` also consumes "merge"!
+  rfl::cli::CommandNode sd_root("sd", "Single dash root");
+  sd_root.require_subcommand(true);
+  sd_root.bind<RootOpts, rfl::DefaultIfMissing>(rfl::cli::Settings::single_dash());
+  sd_root.add_subcommand<RootOpts, rfl::DefaultIfMissing>(
+      "merge", "Merge", rfl::cli::Settings::single_dash());
+  sd_root.add_subcommand<RootOpts, rfl::DefaultIfMissing>(
+      "sort", "Sort", rfl::cli::Settings::single_dash());
+  const auto r_sd = sd_root.dispatch({"-output", "merge", "sort"});
+  ASSERT_TRUE(r_sd) << r_sd.error().what();
+  EXPECT_EQ(r_sd->command_path, (std::vector<std::string>{"sort"}));
+  EXPECT_EQ(r_sd->as<RootOpts>()->output.value(), "merge");
+}
+
+TEST(cli, test_issue_98_describe_hidden_groups_and_nested_hidden_struct) {
+  const auto desc = rfl::cli::describe<WithHiddenNested, rfl::DefaultIfMissing>(
+      "nested-app",
+      rfl::cli::UsageOptions{.detailed = true, .hidden_groups = {"Debug"}});
+  ASSERT_TRUE(desc) << desc.error().what();
+
+  bool found_debug_port = false;
+  bool found_secret_a = false;
+  bool found_secret_b = false;
+  for (const auto& opt : desc->options) {
+    if (opt.name == "debug-port") {
+      found_debug_port = true;
+      EXPECT_TRUE(opt.hidden);
+    }
+    if (opt.name == "hidden-nested.secret-a") {
+      found_secret_a = true;
+      EXPECT_TRUE(opt.hidden);
+    }
+    if (opt.name == "hidden-nested.secret-b") {
+      found_secret_b = true;
+      EXPECT_TRUE(opt.hidden);
+    }
+  }
+  EXPECT_TRUE(found_debug_port);
+  EXPECT_TRUE(found_secret_a);
+  EXPECT_TRUE(found_secret_b);
 }
 
 }  // namespace test_describe_and_command_tree

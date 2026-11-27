@@ -155,7 +155,7 @@ struct Options {
   /// For the open prefixes whose sub-keys hold structs or maps: the options
   /// inside one such value, with paths relative to it, so that
   /// `--servers.eu.port` is looked up as `port`. Sorted by prefix.
-  std::vector<std::pair<std::string, std::shared_ptr<Options>>>
+  std::vector<std::pair<std::string, std::shared_ptr<const Options>>>
       open_prefix_options;
 
   /// Paths of fields wrapped in rfl::Hidden, which are parsed normally but
@@ -314,7 +314,13 @@ struct Options {
     sort_pairs(long_options);
     sort_pairs(short_options);
     sort_pairs(long_aliases);
+    long_aliases.erase(
+        std::unique(long_aliases.begin(), long_aliases.end()),
+        long_aliases.end());
     sort_pairs(negated_options);
+    negated_options.erase(
+        std::unique(negated_options.begin(), negated_options.end()),
+        negated_options.end());
     std::stable_sort(prefix_options.begin(), prefix_options.end(),
                      [](const auto& _a, const auto& _b) {
                        if (_a.first.size() != _b.first.size()) {
@@ -324,9 +330,6 @@ struct Options {
                      });
     sort_pairs(open_prefixes);
     sort_pairs(open_prefix_options);
-    for (auto& entry : open_prefix_options) {
-      entry.second->finalize();
-    }
     std::sort(hidden_options.begin(), hidden_options.end());
     hidden_options.erase(
         std::unique(hidden_options.begin(), hidden_options.end()),
@@ -946,7 +949,9 @@ void add_open_prefix(const std::string& _prefix, Options* _options) {
                         && !VisitedType::template contains<U>))) {
     auto nested = std::make_shared<Options>();
     collect_value_options<T, ProcessorsType, VisitedType>(nested.get());
-    _options->open_prefix_options.emplace_back(_prefix, std::move(nested));
+    nested->finalize();
+    _options->open_prefix_options.emplace_back(
+        _prefix, std::static_pointer_cast<const Options>(std::move(nested)));
   }
 }
 
@@ -1316,6 +1321,100 @@ template <class T, class ProcessorsType, bool _all_paths>
 const Options& cached_options() {
   static const Options options = make_options<T, ProcessorsType, _all_paths>();
   return options;
+}
+
+/// Returns true if `_tok` (an option token starting with `-`, without `=`)
+/// consumes the following token `_next` as its argument under `_options`.
+/// Mirrors `parse_argv`'s classification across `--long`, `-short`, multi-char
+/// shorts, short clusters (`-vf`), `single_dash_long`, `allow_abbreviations`,
+/// `prefix_options`, `bool_value_tokens`, and `OptionKind::other`.
+inline bool token_consumes_next_arg(const std::string_view _tok,
+                                    const std::string_view _next,
+                                    const Options& _options) {
+  if (_tok.size() < 2 || _tok[0] != '-' ||
+      _tok.find('=') != std::string_view::npos) {
+    return false;
+  }
+  const auto next_looks_like_option = [](const std::string_view _s) noexcept {
+    return _s.size() >= 2 && _s[0] == '-' &&
+           !(_s[1] >= '0' && _s[1] <= '9') && _s[1] != '.';
+  };
+  const auto resolve_long_opt = [&](const std::string_view _raw) -> Option {
+    if (const auto* pfx = _options.find_prefix_option(_raw)) {
+      return pfx->second;
+    }
+    std::string_view key = _raw;
+    if (const auto* canonical = _options.find_long_alias(key)) {
+      key = *canonical;
+    }
+    auto opt = _options.find_long(key);
+    if (opt.kind == OptionKind::unknown && _options.allow_abbreviations) {
+      const auto matches = _options.find_abbreviations(_raw);
+      if (matches.size() == 1) {
+        opt = _options.find_long(matches.front());
+      }
+    }
+    return opt;
+  };
+  const auto long_consumes = [&](const Option& _opt) {
+    if (_opt.kind == OptionKind::value) {
+      return _options.separate_values;
+    }
+    if (_opt.kind == OptionKind::flag && _options.bool_value_tokens &&
+        is_bool_literal(_next)) {
+      return true;
+    }
+    return false;
+  };
+
+  if (_tok.starts_with("--")) {
+    return long_consumes(resolve_long_opt(_tok.substr(2)));
+  }
+
+  const std::string_view body = _tok.substr(1);
+  if (_options.single_dash_long) {
+    return long_consumes(resolve_long_opt(body));
+  }
+
+  // Prefix option on single dash (e.g. `-debugi-V3Options 3`).
+  if (const auto* pfx = _options.find_prefix_option(body)) {
+    return pfx->second.kind == OptionKind::value;
+  }
+
+  // Exact short option (handles both 1-char `-o` and multi-char `-rp`).
+  const auto exact = _options.find_short(body);
+  if (exact.kind != OptionKind::unknown) {
+    if (exact.kind == OptionKind::value) {
+      return true;
+    }
+    if (exact.kind == OptionKind::flag) {
+      return !_options.pure_flags && is_bool_literal(_next);
+    }
+    if (exact.kind == OptionKind::other) {
+      return !next_looks_like_option(_next);
+    }
+    return false;
+  }
+
+  // Grouped short cluster (e.g. `-vf val` consumes `val`; `-qfcsv` does not).
+  if (_options.group_short_options && body.size() > 1) {
+    for (size_t i = 0; i < body.size(); ++i) {
+      const auto ch_opt = _options.find_short(body.substr(i, 1));
+      if (ch_opt.kind == OptionKind::flag) {
+        continue;
+      }
+      if (ch_opt.kind == OptionKind::value) {
+        return i + 1 == body.size();
+      }
+      if (ch_opt.kind == OptionKind::other) {
+        return i + 1 == body.size() && !next_looks_like_option(_next);
+      }
+      return false;
+    }
+    // Cluster of pure flags: check if last flag takes a bool literal when !pure_flags.
+    return !_options.pure_flags && is_bool_literal(_next);
+  }
+  return false;
 }
 
 }  // namespace internal

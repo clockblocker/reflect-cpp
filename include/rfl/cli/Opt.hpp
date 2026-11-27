@@ -12,10 +12,10 @@
 
 namespace rfl::cli {
 
-/// Canonical CLI alias wrapper: directly aliases core `rfl::Alias` so CLI and
-/// data formats (JSON/YAML/XML/env/Generic) share one single alias mechanism.
-template <rfl::internal::StringLiteral _name, class T>
-using Alias = rfl::Alias<_name, T>;
+/// Canonical CLI alias wrapper: directly brings core `rfl::Alias` into
+/// `rfl::cli` so CLI and data formats (JSON/YAML/XML/env/Generic) share one
+/// single alias mechanism without ambiguity under `using namespace`.
+using rfl::Alias;
 
 /// Attribute tags accepted by `rfl::cli::Opt<T, Attrs...>` in any order.
 namespace attr {

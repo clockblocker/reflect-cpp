@@ -1,6 +1,7 @@
 #ifndef RFL_CLI_READ_APP_HPP_
 #define RFL_CLI_READ_APP_HPP_
 
+#include <concepts>
 #include <initializer_list>
 #include <map>
 #include <string>
@@ -261,10 +262,12 @@ rfl::Result<std::variant<T, HelpOrVersion>> read_app(
 }
 
 // --- Consolidated runtime `rfl::cli::Settings` overloads ---
+// Constrained with `std::same_as<Settings>` so positional braced-init-lists
+// `{...}` continue to resolve unambiguously to `UsageOptions`.
 
-template <class T, class... Ps>
+template <class T, class... Ps, std::same_as<Settings> SettingsT>
 rfl::Result<std::variant<T, HelpOrVersion>> read_app(
-    int argc, const char* const argv[], const Settings& _settings,
+    int argc, const char* const argv[], const SettingsT& _settings,
     const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
   return internal::parse_and_read_app_with_settings<T, Ps...>(
       internal::program_name(argc, argv), _settings,
@@ -274,17 +277,9 @@ rfl::Result<std::variant<T, HelpOrVersion>> read_app(
       _usage_opts);
 }
 
-template <class T, class... Ps>
+template <class T, class... Ps, std::same_as<Settings> SettingsT>
 rfl::Result<std::variant<T, HelpOrVersion>> read_app(
-    int argc, char* argv[], const Settings& _settings,
-    const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
-  return read_app<T, Ps...>(argc, static_cast<const char* const*>(argv),
-                            _settings, _usage_opts);
-}
-
-template <class T, class... Ps>
-rfl::Result<std::variant<T, HelpOrVersion>> read_app(
-    int argc, const wchar_t* const argv[], const Settings& _settings,
+    int argc, char* argv[], const SettingsT& _settings,
     const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
   return internal::parse_and_read_app_with_settings<T, Ps...>(
       internal::program_name(argc, argv), _settings,
@@ -294,19 +289,32 @@ rfl::Result<std::variant<T, HelpOrVersion>> read_app(
       _usage_opts);
 }
 
-template <class T, class... Ps>
+template <class T, class... Ps, std::same_as<Settings> SettingsT>
 rfl::Result<std::variant<T, HelpOrVersion>> read_app(
-    int argc, wchar_t* argv[], const Settings& _settings,
+    int argc, const wchar_t* const argv[], const SettingsT& _settings,
+    const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
+  return internal::parse_and_read_app_with_settings<T, Ps...>(
+      internal::program_name(argc, argv), _settings,
+      [&](const auto& _options) {
+        return internal::parse_argv(argc, argv, _options);
+      },
+      _usage_opts);
+}
+
+template <class T, class... Ps, std::same_as<Settings> SettingsT>
+rfl::Result<std::variant<T, HelpOrVersion>> read_app(
+    int argc, wchar_t* argv[], const SettingsT& _settings,
     const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
   return read_app<T, Ps...>(argc, static_cast<const wchar_t* const*>(argv),
                             _settings, _usage_opts);
 }
 
 template <class T, class... Ps,
-          class R = std::initializer_list<std::string_view>>
+          class R = std::initializer_list<std::string_view>,
+          std::same_as<Settings> SettingsT>
   requires(internal::StringRange<R> || internal::WideStringRange<R>)
 rfl::Result<std::variant<T, HelpOrVersion>> read_app(
-    std::string_view _program_name, R&& _args, const Settings& _settings,
+    std::string_view _program_name, R&& _args, const SettingsT& _settings,
     const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
   return internal::parse_and_read_app_with_settings<T, Ps...>(
       std::string(_program_name), _settings,
@@ -317,10 +325,11 @@ rfl::Result<std::variant<T, HelpOrVersion>> read_app(
 }
 
 template <class T, class... Ps,
-          class R = std::initializer_list<std::string_view>>
+          class R = std::initializer_list<std::string_view>,
+          std::same_as<Settings> SettingsT>
   requires(internal::StringRange<R> || internal::WideStringRange<R>)
 rfl::Result<std::variant<T, HelpOrVersion>> read_app(
-    R&& _args, const Settings& _settings,
+    R&& _args, const SettingsT& _settings,
     const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
   using ProcessorsType = internal::cli_processors_t<Ps...>;
   return read_app<T, Ps...>(internal::app_settings_t<ProcessorsType>::name,

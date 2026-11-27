@@ -436,11 +436,15 @@ rfl::Result<ReadResult<T>> read_parsed_detailed_with_reader(
                               std::move(_args.verbatim_list));
         const auto var = CliVarType{&_args.values, "", std::nullopt,
                                     &_args.later_occurrences};
-        return Parser<T, ProcessorsType>::read(r, var).transform(
-            [&](T&& _val) {
-              return ReadResult<T>{std::move(_val), std::move(provided),
-                                   std::move(_args.occurrences)};
-            });
+        auto parsed =
+            _options.reject_unknown
+                ? Parser<T, add_no_extra_fields_t<ProcessorsType>>::read(r, var)
+                : Parser<T, strip_no_extra_fields_t<ProcessorsType>>::read(
+                      r, var);
+        return std::move(parsed).transform([&](T&& _val) {
+          return ReadResult<T>{std::move(_val), std::move(provided),
+                               std::move(_args.occurrences)};
+        });
       });
 }
 
@@ -455,7 +459,10 @@ rfl::Result<T> read_parsed_with_reader(ParsedArgs _parsed,
                               std::move(_args.verbatim_list));
         const auto var = CliVarType{&_args.values, "", std::nullopt,
                                     &_args.later_occurrences};
-        return Parser<T, ProcessorsType>::read(r, var);
+        if (_options.reject_unknown) {
+          return Parser<T, add_no_extra_fields_t<ProcessorsType>>::read(r, var);
+        }
+        return Parser<T, strip_no_extra_fields_t<ProcessorsType>>::read(r, var);
       });
 }
 

@@ -36,21 +36,32 @@ struct CommandDispatchResult {
   /// Sorted canonical names of options explicitly provided on the command line
   /// (populated for static reflected nodes and dynamic nodes).
   std::vector<std::string> provided;
-  /// Typed reflected struct value when the matched command hosts a static
-  /// `<Cmd>Options` struct (empty for dynamic nodes).
-  std::any typed_value;
 
   /// Returns a pointer to the parsed static options struct `T`, or `nullptr`
-  /// if the matched command did not host `T`.
+  /// if the matched command did not host `T`. Supports both copyable and
+  /// move-only `T` (e.g. structs holding `std::unique_ptr` or `rfl::Box`).
   template <class T>
   const T* as() const noexcept {
-    return std::any_cast<T>(&typed_value);
+    if (const auto* ptr =
+            std::any_cast<const std::shared_ptr<T>>(&typed_storage_)) {
+      return ptr->get();
+    }
+    return nullptr;
   }
 
   template <class T>
   T* as() noexcept {
-    return std::any_cast<T>(&typed_value);
+    if (auto* ptr = std::any_cast<std::shared_ptr<T>>(&typed_storage_)) {
+      return ptr->get();
+    }
+    return nullptr;
   }
+
+  bool has_typed_value() const noexcept { return typed_storage_.has_value(); }
+
+ private:
+  friend class CommandNode;
+  std::any typed_storage_;
 };
 
 /// Arbitrarily nested subcommand router that can host BOTH runtime
@@ -114,16 +125,16 @@ class CommandNode {
       if (!res) {
         return error(res.error().what());
       }
-      if constexpr (std::invocable<std::decay_t<Fn>&,
-                                   const ReadResult<CmdOpts>&>) {
-        (*shared_cb)(*res);
-      } else {
+      if constexpr (std::invocable<std::decay_t<Fn>&, const CmdOpts&>) {
         (*shared_cb)(res->value);
+      } else {
+        (*shared_cb)(*res);
       }
       StaticParseOutput out;
       out.provided = std::move(res->provided);
       out.occurrences = std::move(res->occurrences);
-      out.typed_value = std::make_any<CmdOpts>(std::move(res->value));
+      out.typed_storage =
+          std::make_shared<CmdOpts>(std::move(res->value));
       return out;
     };
     init_static_introspection<CmdOpts, Ps...>(binding.get(), _settings);
@@ -150,7 +161,8 @@ class CommandNode {
       StaticParseOutput out;
       out.provided = std::move(res->provided);
       out.occurrences = std::move(res->occurrences);
-      out.typed_value = std::make_any<CmdOpts>(std::move(res->value));
+      out.typed_storage =
+          std::make_shared<CmdOpts>(std::move(res->value));
       return out;
     };
     init_static_introspection<CmdOpts, Ps...>(binding.get(), _settings);
@@ -246,7 +258,8 @@ class CommandNode {
         // If this option takes a separate value on the current node, carry its
         // value token too so it is not mistaken for a subcommand name.
         if (tok.find('=') == std::string::npos && idx < _args.size()) {
-          const bool opt_takes_value = current->option_takes_separate_value(tok);
+          const bool opt_takes_value =
+              current->option_takes_separate_value(tok, _args[idx]);
           if (opt_takes_value) {
             leaf_args.push_back(_args[idx++]);
           }
@@ -291,9 +304,12 @@ class CommandNode {
       if (current->callback_) {
         current->callback_(dyn);
       }
-      return CommandDispatchResult{std::move(path), std::move(dyn),
-                                   std::move(parsed->provided),
-                                   std::move(parsed->typed_value)};
+      CommandDispatchResult result;
+      result.command_path = std::move(path);
+      result.parsed = std::move(dyn);
+      result.provided = std::move(parsed->provided);
+      result.typed_storage_ = std::move(parsed->typed_storage);
+      return result;
     }
 
     auto parsed = current->options_.parse(leaf_args);
@@ -312,8 +328,11 @@ class CommandNode {
     if (current->callback_) {
       current->callback_(*parsed);
     }
-    return CommandDispatchResult{std::move(path), std::move(*parsed),
-                                 std::move(provided), {}};
+    CommandDispatchResult result;
+    result.command_path = std::move(path);
+    result.parsed = std::move(*parsed);
+    result.provided = std::move(provided);
+    return result;
   }
 
   rfl::Result<CommandDispatchResult> dispatch(
@@ -466,14 +485,15 @@ class CommandNode {
   struct StaticParseOutput {
     std::vector<std::string> provided;
     std::vector<std::pair<std::string, std::string>> occurrences;
-    std::any typed_value;
+    std::any typed_storage;
   };
 
   struct StaticBinding {
     std::function<rfl::Result<StaticParseOutput>(
         const std::vector<std::string>&)>
         parse;
-    std::function<bool(std::string_view)> takes_separate_value;
+    std::function<bool(std::string_view, std::string_view)>
+        takes_separate_value;
     std::function<rfl::Result<CommandDescriptor>(const std::string&,
                                                  const std::string&)>
         describe;
@@ -486,26 +506,16 @@ class CommandNode {
   static void init_static_introspection(
       StaticBinding* _binding, const std::optional<Settings>& _settings) {
     using ProcessorsType = internal::cli_processors_t<Ps...>;
-    _binding->takes_separate_value = [_settings](const std::string_view _tok) {
+    _binding->takes_separate_value = [_settings](const std::string_view _tok,
+                                                 const std::string_view _next) {
       const auto& base =
           internal::cached_options<CmdOpts, ProcessorsType,
                                    /*_all_paths=*/true>();
-      const bool sep =
-          _settings ? _settings->separate_values : base.separate_values;
-      if (!sep) {
-        return false;
+      if (_settings) {
+        const auto opts = internal::apply_settings(base, *_settings);
+        return internal::token_consumes_next_arg(_tok, _next, opts);
       }
-      if (_tok.starts_with("--")) {
-        std::string_view key = _tok.substr(2);
-        if (const auto* canonical = base.find_long_alias(key)) {
-          key = *canonical;
-        }
-        return base.find_long(key).kind == OptionKind::value;
-      }
-      if (_tok.size() == 2 && _tok[0] == '-') {
-        return base.find_short(_tok.substr(1)).kind == OptionKind::value;
-      }
-      return false;
+      return internal::token_consumes_next_arg(_tok, _next, base);
     };
     _binding->describe = [_settings](const std::string& _name,
                                      const std::string& _desc) {
@@ -527,20 +537,13 @@ class CommandNode {
     };
   }
 
-  bool option_takes_separate_value(const std::string_view _tok) const {
+  bool option_takes_separate_value(const std::string_view _tok,
+                                   const std::string_view _next) const {
     if (static_binding_) {
-      return static_binding_->takes_separate_value(_tok);
+      return static_binding_->takes_separate_value(_tok, _next);
     }
-    if (!options_.separate_values) {
-      return false;
-    }
-    if (_tok.starts_with("--")) {
-      return options_.is_value_option(_tok.substr(2));
-    }
-    if (_tok.size() == 2 && _tok[0] == '-') {
-      return options_.is_short_value_option(_tok.substr(1));
-    }
-    return false;
+    return internal::token_consumes_next_arg(_tok, _next,
+                                             options_.compiled_options());
   }
 
   std::string name_;

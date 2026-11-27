@@ -165,4 +165,44 @@ TEST(cli, test_issue_99_alias_reconciled_across_cli_json_and_usage) {
   EXPECT_EQ(dyn_res->values.at("optimize"), "2");
 }
 
+TEST(cli, test_issue_99_settings_overrides_no_extra_fields_and_braced_usage_opts) {
+  // Settings{.reject_unknown = false} cleanly overrides compile-time GnuStyle (NoExtraFields).
+  auto relaxed = rfl::cli::Settings::gnu();
+  relaxed.reject_unknown = false;
+  const auto ok = rfl::cli::read<CompilerCli, rfl::cli::GnuStyle>(
+      {"--output-dir", "relaxed-out", "--unknown-flag=ignored"}, relaxed);
+  ASSERT_TRUE(ok) << ok.error().what();
+  EXPECT_EQ(ok->output_dir.value(), "relaxed-out");
+
+  // Positional braced-init UsageOptions must remain completely unambiguous against Settings!
+  const auto u1 = rfl::cli::usage<CompilerCli, rfl::DefaultIfMissing>(
+      "solc-demo", {true, "Custom Header"});
+  ASSERT_TRUE(u1) << u1.error().what();
+  EXPECT_NE(u1->find("Custom Header"), std::string::npos);
+
+  const auto d1 = rfl::cli::describe<CompilerCli, rfl::DefaultIfMissing>(
+      "solc-demo", {});
+  ASSERT_TRUE(d1) << d1.error().what();
+  EXPECT_EQ(d1->name, "solc-demo");
+
+  const auto a1 =
+      rfl::cli::read_app<CompilerCli, CompilerApp, rfl::DefaultIfMissing>(
+          "solc-demo", {"--help"}, {});
+  ASSERT_TRUE(a1) << a1.error().what();
+  EXPECT_NE(std::get_if<rfl::cli::HelpOrVersion>(&*a1), nullptr);
+
+  const char* help_argv[] = {"solc-demo", "--help"};
+  const auto a2 =
+      rfl::cli::read_app<CompilerCli, CompilerApp, rfl::DefaultIfMissing>(
+          2, help_argv, {false});
+  ASSERT_TRUE(a2) << a2.error().what();
+  EXPECT_NE(std::get_if<rfl::cli::HelpOrVersion>(&*a2), nullptr);
+
+  // usage() with invalid Settings fails consistently with read()/describe().
+  auto bad = rfl::cli::Settings::gnu();
+  bad.list_delimiter = std::nullopt;
+  bad.keep_empty_items = true;
+  EXPECT_FALSE((rfl::cli::usage<CompilerCli, rfl::DefaultIfMissing>("solc", bad)));
+}
+
 }  // namespace test_settings_and_alias_unification

@@ -2,6 +2,7 @@
 #define RFL_CLI_DESCRIBE_HPP_
 
 #include <algorithm>
+#include <concepts>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -215,6 +216,15 @@ rfl::Result<AppDescriptor> describe_from_options(
           auto builtin_args =
               builtin_usage_args(_builtin, _usage_opts.help_group);
 
+          const auto is_hidden_group = [&](const std::string_view _grp) {
+            if (_grp.empty() || _usage_opts.hidden_groups.empty()) {
+              return false;
+            }
+            return std::find(_usage_opts.hidden_groups.begin(),
+                             _usage_opts.hidden_groups.end(),
+                             _grp) != _usage_opts.hidden_groups.end();
+          };
+
           const auto to_option_desc = [&](const UsageArg& _arg,
                                           const bool _is_builtin) {
             const auto opt = _options.find_long(_arg.name);
@@ -235,12 +245,15 @@ rfl::Result<AppDescriptor> describe_from_options(
             d.sensitive = !_is_builtin && opt.sensitive;
             d.required = _arg.required;
             d.bare = _arg.bare;
-            d.hidden = _arg.hidden;
+            d.hidden = _arg.hidden || is_hidden_group(_arg.group);
             d.builtin = _is_builtin;
-            d.value_name = _arg.value;
-            d.value_placeholder = format_value_placeholder(
-                _arg.value, _arg.has_custom_value_name, _arg.is_list,
-                _delimiter);
+            d.value_name = _is_builtin ? std::string("<bool>") : _arg.value;
+            d.value_placeholder =
+                d.is_counter
+                    ? std::string{}
+                    : format_value_placeholder(d.value_name,
+                                               _arg.has_custom_value_name,
+                                               _arg.is_list, _delimiter);
             d.has_custom_value_name = _arg.has_custom_value_name;
             d.choices = _arg.choices;
             d.description = _arg.description;
@@ -263,7 +276,7 @@ rfl::Result<AppDescriptor> describe_from_options(
             p.is_list = _arg.is_list;
             p.takes_rest = _arg.takes_rest;
             p.required = _arg.required;
-            p.hidden = _arg.hidden;
+            p.hidden = _arg.hidden || is_hidden_group(_arg.group);
             p.value_name = _arg.value;
             p.value_placeholder = format_value_placeholder(
                 _arg.value, _arg.has_custom_value_name, _arg.is_list,
@@ -342,10 +355,11 @@ rfl::Result<AppDescriptor> describe(
 }
 
 /// Like `rfl::cli::describe<T, Ps...>`, applying a runtime `rfl::cli::Settings`
-/// configuration.
-template <class T, class... Ps>
+/// configuration. Constrained with `std::same_as<Settings>` so positional
+/// braced-init-lists `{...}` resolve unambiguously to `UsageOptions`.
+template <class T, class... Ps, std::same_as<Settings> SettingsT>
 rfl::Result<AppDescriptor> describe(
-    const std::string& _program_name, const Settings& _settings,
+    const std::string& _program_name, const SettingsT& _settings,
     const UsageOptions& _usage_opts = UsageOptions{.detailed = true}) {
   using ProcessorsType = internal::cli_processors_t<Ps...>;
   const auto valid = internal::validate_settings(_settings);
