@@ -1,21 +1,66 @@
 #ifndef RFL_NULLABLE_HPP_
 #define RFL_NULLABLE_HPP_
 
+#include <concepts>
 #include <optional>
 #include <type_traits>
 #include <utility>
 
 namespace rfl {
 
+template <class T>
+class Nullable;
+
+template <class T>
+class TriState;
+
+namespace internal {
+
+template <class T>
+struct is_nullable_wrapper : std::false_type {};
+
+template <class T>
+struct is_nullable_wrapper<Nullable<T>> : std::true_type {};
+
+template <class T>
+constexpr bool is_nullable_wrapper_v =
+    is_nullable_wrapper<std::remove_cvref_t<T>>::value;
+
+template <class T>
+struct is_std_optional_type : std::false_type {};
+
+template <class T>
+struct is_std_optional_type<std::optional<T>> : std::true_type {};
+
+template <class T>
+struct is_tri_state_fwd : std::false_type {};
+
+template <class T>
+struct is_tri_state_fwd<TriState<T>> : std::true_type {};
+
+template <class T, class U>
+constexpr bool is_bool_optional_like_conversion_v =
+    std::is_same_v<std::remove_cv_t<T>, bool> &&
+    (is_std_optional_type<std::remove_cvref_t<U>>::value ||
+     is_nullable_wrapper<std::remove_cvref_t<U>>::value ||
+     is_tri_state_fwd<std::remove_cvref_t<U>>::value);
+
+}  // namespace internal
+
 /// A nullable field wrapper that ALWAYS serializes explicitly (`"field": null`
 /// when empty, `"field": <value>` when present), unlike `std::optional<T>`
 /// which omits empty keys by default.
 ///
-/// On deserialization (`read` and `read_into`), `rfl::Nullable<T>` accepts an
-/// omitted key (becoming null), an explicit `null` (becoming null), or a value
-/// of type `T`. In JSON Schema (Draft 2020-12), it emits a nullable schema
-/// (`anyOf: [<T>, {"type": "null"}]`) and is not marked required unless
+/// On `read`, `rfl::Nullable<T>` accepts an omitted key (becoming null), an
+/// explicit `null` (becoming null), or a value of type `T`. On `read_into`, an
+/// omitted key preserves the existing base value while an explicit `null`
+/// resets it to null. In JSON Schema (Draft 2020-12), it emits a nullable
+/// schema (`anyOf: [<T>, {"type": "null"}]`) and is not marked required unless
 /// `rfl::NoOptionals` is used.
+///
+/// Note: Formats without a native null representation (TOML, XML) serialize
+/// null via their writer's fallback; `rfl::Nullable<T>` is intended for formats
+/// with native null values (JSON, YAML, Generic, nlohmann, CBOR, MsgPack, etc.).
 template <class T>
 class Nullable {
  public:
@@ -24,20 +69,32 @@ class Nullable {
 
   constexpr Nullable() noexcept = default;
   constexpr Nullable(std::nullopt_t) noexcept : value_(std::nullopt) {}
-  constexpr Nullable(const T& _val) : value_(_val) {}
+
+  constexpr Nullable(const T& _val)
+    requires std::is_copy_constructible_v<T>
+      : value_(_val) {}
+
   constexpr Nullable(T&& _val) noexcept(std::is_nothrow_move_constructible_v<T>)
+    requires std::is_move_constructible_v<T>
       : value_(std::move(_val)) {}
-  constexpr Nullable(const std::optional<T>& _opt) : value_(_opt) {}
+
+  constexpr Nullable(const std::optional<T>& _opt)
+    requires std::is_copy_constructible_v<T>
+      : value_(_opt) {}
+
   constexpr Nullable(std::optional<T>&& _opt) noexcept(
       std::is_nothrow_move_constructible_v<T>)
+    requires std::is_move_constructible_v<T>
       : value_(std::move(_opt)) {}
 
   template <class U>
     requires(!std::is_same_v<std::remove_cvref_t<U>, Nullable> &&
              !std::is_same_v<std::remove_cvref_t<U>, std::optional<T>> &&
              !std::is_same_v<std::remove_cvref_t<U>, std::nullopt_t> &&
+             !internal::is_bool_optional_like_conversion_v<T, U> &&
              std::is_constructible_v<T, U&&>)
-  constexpr Nullable(U&& _val) : value_(std::in_place, std::forward<U>(_val)) {}
+  explicit(!std::is_convertible_v<U&&, T>) constexpr Nullable(U&& _val)
+      : value_(std::in_place, std::forward<U>(_val)) {}
 
   constexpr Nullable(const Nullable&) = default;
   constexpr Nullable(Nullable&&) noexcept(
@@ -52,22 +109,22 @@ class Nullable {
     return *this;
   }
 
-  constexpr Nullable& operator=(const std::optional<T>& _opt) {
-    value_ = _opt;
+  template <class Opt>
+    requires(std::is_same_v<std::remove_cvref_t<Opt>, std::optional<T>> &&
+             ((std::is_lvalue_reference_v<Opt> &&
+               std::is_copy_constructible_v<T> && std::is_copy_assignable_v<T>) ||
+              (!std::is_lvalue_reference_v<Opt> &&
+               std::is_move_constructible_v<T> && std::is_move_assignable_v<T>)))
+  constexpr Nullable& operator=(Opt&& _opt) {
+    value_ = std::forward<Opt>(_opt);
     return *this;
   }
 
-  constexpr Nullable& operator=(std::optional<T>&& _opt) noexcept(
-      std::is_nothrow_move_assignable_v<T> &&
-      std::is_nothrow_move_constructible_v<T>) {
-    value_ = std::move(_opt);
-    return *this;
-  }
-
-  template <class U = T>
+  template <class U>
     requires(!std::is_same_v<std::remove_cvref_t<U>, Nullable> &&
              !std::is_same_v<std::remove_cvref_t<U>, std::optional<T>> &&
              !std::is_same_v<std::remove_cvref_t<U>, std::nullopt_t> &&
+             !internal::is_bool_optional_like_conversion_v<T, U> &&
              std::is_constructible_v<T, U&&> && std::is_assignable_v<T&, U&&>)
   constexpr Nullable& operator=(U&& _val) {
     value_ = std::forward<U>(_val);
@@ -128,8 +185,15 @@ class Nullable {
     return value_ == _other;
   }
 
-  constexpr bool operator==(const T& _other) const {
-    return value_.has_value() && *value_ == _other;
+  template <class U>
+    requires(!std::is_same_v<std::remove_cvref_t<U>, Nullable> &&
+             !std::is_same_v<std::remove_cvref_t<U>, std::nullopt_t> &&
+             !std::is_same_v<std::remove_cvref_t<U>, std::optional<T>> &&
+             requires(const T& _a, const U& _b) {
+               { _a == _b } -> std::convertible_to<bool>;
+             })
+  constexpr bool operator==(const U& _other) const {
+    return value_.has_value() && (*value_ == _other);
   }
 
  private:

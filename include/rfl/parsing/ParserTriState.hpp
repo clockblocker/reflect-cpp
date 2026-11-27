@@ -18,13 +18,7 @@
 namespace rfl::parsing {
 
 template <class T>
-struct is_tri_state : std::false_type {};
-
-template <class T>
-struct is_tri_state<TriState<T>> : std::true_type {};
-
-template <class T>
-constexpr bool is_tri_state_v = is_tri_state<std::remove_cvref_t<T>>::value;
+constexpr bool is_tri_state_v = internal::is_tri_state_v<T>;
 
 template <class R, class W, class T, class ProcessorsType>
 struct ParserTriState {

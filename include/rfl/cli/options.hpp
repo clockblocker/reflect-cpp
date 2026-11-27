@@ -561,6 +561,12 @@ struct cli_annotations<DefaultVal<T>> : cli_annotations_t<T> {};
 template <class T>
 struct cli_annotations<std::optional<T>> : cli_annotations_t<T> {};
 
+template <class T>
+struct cli_annotations<Nullable<T>> : cli_annotations_t<T> {};
+
+template <class T>
+struct cli_annotations<TriState<T>> : cli_annotations_t<T> {};
+
 template <rfl::internal::StringLiteral _description, class T>
 struct cli_annotations<Description<_description, T>> : cli_annotations_t<T> {};
 
@@ -756,7 +762,9 @@ auto unwrap_option_type() {
   if constexpr (std::is_pointer_v<U>) {
     return unwrap_option_type<std::remove_pointer_t<U>, ProcessorsType>();
   }
-  else if constexpr (parsing::is_optional_v<U>) {
+  else if constexpr (parsing::is_optional_v<U>
+                     || rfl::internal::is_nullable_wrapper_v<U>
+                     || rfl::internal::is_tri_state_v<U>) {
     return unwrap_option_type<typename U::value_type, ProcessorsType>();
   }
   else if constexpr (parsing::is_unique_ptr_v<U>

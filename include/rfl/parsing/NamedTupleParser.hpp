@@ -458,19 +458,10 @@ template <class T>
 struct is_std_optional_for_default<std::optional<T>> : std::true_type {};
 
 template <class T>
-struct is_nullable_or_tri_state_for_default : std::false_type {};
-
-template <class T>
-struct is_nullable_or_tri_state_for_default<Nullable<T>> : std::true_type {};
-
-template <class T>
-struct is_nullable_or_tri_state_for_default<TriState<T>> : std::true_type {};
-
-template <class T>
 consteval bool contains_tri_state_wrapper() {
-  using U = std::remove_cvref_t<std::remove_pointer_t<T>>;
-  if constexpr (is_nullable_or_tri_state_for_default<U>::value) {
-    return internal_empty::is_tri_state<U>::value;
+  using U = std::remove_cvref_t<T>;
+  if constexpr (internal::is_tri_state_v<U>) {
+    return true;
   } else if constexpr (internal::is_rename_v<U> || internal::is_short_v<U> ||
                        internal::is_positional_v<U> || internal::is_alias_v<U>) {
     return contains_tri_state_wrapper<typename U::Type>();
@@ -518,7 +509,8 @@ inline Generic to_default_generic(const U& _val) {
     }
     return Generic(std::move(arr));
   } else if constexpr (is_std_optional_for_default<T>::value ||
-                       is_nullable_or_tri_state_for_default<T>::value) {
+                       internal::is_nullable_wrapper_v<T> ||
+                       internal::is_tri_state_v<T>) {
     if (_val.has_value()) {
       return to_default_generic<ProcessorsType>(*_val);
     }
@@ -608,9 +600,11 @@ RFL_ALWAYS_INLINE void write_named_tuple_field(const W& _w,
   } else if constexpr (!_all_required && !_no_field_names &&
                        !is_required<ValueType, _ignore_empty_containers>()) {
     const auto new_parent = make_parent(_name, _ptr);
+    using UnwrappedValueT = std::remove_cvref_t<std::remove_pointer_t<ValueType>>;
     constexpr bool force_emit_null =
         internal::add_null_fields_v<ProcessorsType> &&
-        is_nullable_v<ValueType> && !contains_tri_state_wrapper<ValueType>();
+        is_nullable_v<UnwrappedValueT> &&
+        !contains_tri_state_wrapper<UnwrappedValueT>();
     if (force_emit_null || !is_empty(_value)) {
       if constexpr (internal::is_attribute_v<ValueType>) {
         Parser<R, W, ValueType, ProcessorsType>::write(
@@ -668,12 +662,19 @@ void build_named_tuple_field_schema(
       if (_field_val != nullptr) {
         if constexpr (internal::is_default_val_v<U>) {
           if constexpr (internal::CanEmitDefault<U>) {
-            try {
-              set_schema_default_value(
-                  to_default_generic<ProcessorsType>(
-                      internal::get_default_val(*_field_val).value()),
-                  &s);
-            } catch (...) {
+            const auto& dv_inner =
+                internal::get_default_val(*_field_val).value();
+            bool skip_omitted_tristate = false;
+            if constexpr (internal::is_tri_state_v<
+                              std::remove_cvref_t<decltype(dv_inner)>>) {
+              skip_omitted_tristate = dv_inner.is_omitted();
+            }
+            if (!skip_omitted_tristate) {
+              try {
+                set_schema_default_value(
+                    to_default_generic<ProcessorsType>(dv_inner), &s);
+              } catch (...) {
+              }
             }
           }
         } else if constexpr (internal::default_if_missing_v<ProcessorsType> &&

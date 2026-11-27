@@ -18,14 +18,7 @@
 namespace rfl::parsing {
 
 template <class T>
-struct is_nullable_wrapper : std::false_type {};
-
-template <class T>
-struct is_nullable_wrapper<Nullable<T>> : std::true_type {};
-
-template <class T>
-constexpr bool is_nullable_wrapper_v =
-    is_nullable_wrapper<std::remove_cvref_t<T>>::value;
+constexpr bool is_nullable_wrapper_v = internal::is_nullable_wrapper_v<T>;
 
 template <class R, class W, class T, class ProcessorsType>
 struct ParserNullable {

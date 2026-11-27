@@ -184,6 +184,8 @@ std::optional<std::string> format_default_value(
       return s.empty() ? std::string("\"\"") : s;
     }
   } else if constexpr (parsing::is_optional_v<U> ||
+                       rfl::internal::is_nullable_wrapper_v<U> ||
+                       rfl::internal::is_tri_state_v<U> ||
                        parsing::is_unique_ptr_v<U> ||
                        parsing::is_shared_ptr_v<U>) {
     if (!_val) {
@@ -573,6 +575,27 @@ struct usage_peel<std::optional<T>, _outermost> {
   static inline const CoreType* unwrap_ptr(
       const std::optional<T>* _p) noexcept {
     return Next::unwrap_ptr((_p && *_p) ? &(**_p) : nullptr);
+  }
+};
+
+template <class T, bool _outermost>
+  requires(rfl::internal::is_nullable_wrapper_v<T> ||
+           rfl::internal::is_tri_state_v<T>)
+struct usage_peel<T, _outermost> {
+  using Next = usage_peel<std::remove_cvref_t<typename T::value_type>, false>;
+  using CoreType = typename Next::CoreType;
+  static constexpr std::string_view description = Next::description;
+  static constexpr bool is_deprecated = Next::is_deprecated;
+  static constexpr std::string_view deprecation_message =
+      Next::deprecation_message;
+  static constexpr std::string_view default_hint = Next::default_hint;
+  static constexpr bool has_outermost_default_val =
+      Next::has_outermost_default_val;
+  static constexpr bool has_any_default_val = Next::has_any_default_val;
+  static constexpr bool has_nullable = true;
+
+  static inline const CoreType* unwrap_ptr(const T* _p) noexcept {
+    return Next::unwrap_ptr((_p && _p->has_value()) ? &(**_p) : nullptr);
   }
 };
 

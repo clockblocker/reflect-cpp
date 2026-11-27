@@ -6,6 +6,8 @@
 #include <type_traits>
 #include <utility>
 
+#include "Nullable.hpp"
+
 namespace rfl {
 
 /// Tag value representing an omitted (absent) field in `rfl::TriState<T>`.
@@ -14,6 +16,19 @@ struct OmittedTag {
 };
 
 inline constexpr OmittedTag omitted{};
+
+namespace internal {
+
+template <class T>
+struct is_tri_state : std::false_type {};
+
+template <class T>
+struct is_tri_state<TriState<T>> : std::true_type {};
+
+template <class T>
+constexpr bool is_tri_state_v = is_tri_state<std::remove_cvref_t<T>>::value;
+
+}  // namespace internal
 
 /// Tri-state field presence wrapper distinguishing:
 ///   1. `State::omitted` — key was absent from input (default-constructed;
@@ -27,6 +42,9 @@ inline constexpr OmittedTag omitted{};
 /// overriding with `State::null` on explicit `null`, and recursively overlaying
 /// nested structs when both layers hold values), `write`, and Draft 2020-12
 /// JSON Schema generation.
+///
+/// Note: `rfl::TriState<T>` is intended for formats with native null values
+/// (JSON, YAML, Generic, nlohmann, CBOR, MsgPack, etc.).
 template <class T>
 class TriState {
  public:
@@ -44,16 +62,22 @@ class TriState {
       : value_(std::nullopt), state_(State::omitted) {}
   constexpr TriState(std::nullopt_t) noexcept
       : value_(std::nullopt), state_(State::null) {}
-  constexpr TriState(const T& _val) : value_(_val), state_(State::value) {}
+
+  constexpr TriState(const T& _val)
+    requires std::is_copy_constructible_v<T>
+      : value_(_val), state_(State::value) {}
+
   constexpr TriState(T&& _val) noexcept(std::is_nothrow_move_constructible_v<T>)
+    requires std::is_move_constructible_v<T>
       : value_(std::move(_val)), state_(State::value) {}
 
   template <class U>
     requires(!std::is_same_v<std::remove_cvref_t<U>, TriState> &&
              !std::is_same_v<std::remove_cvref_t<U>, OmittedTag> &&
              !std::is_same_v<std::remove_cvref_t<U>, std::nullopt_t> &&
+             !internal::is_bool_optional_like_conversion_v<T, U> &&
              std::is_constructible_v<T, U&&>)
-  constexpr TriState(U&& _val)
+  explicit(!std::is_convertible_v<U&&, T>) constexpr TriState(U&& _val)
       : value_(std::in_place, std::forward<U>(_val)), state_(State::value) {}
 
   constexpr TriState(const TriState&) = default;
@@ -76,12 +100,16 @@ class TriState {
     return *this;
   }
 
-  template <class U = T>
+  template <class U>
     requires(!std::is_same_v<std::remove_cvref_t<U>, TriState> &&
              !std::is_same_v<std::remove_cvref_t<U>, OmittedTag> &&
              !std::is_same_v<std::remove_cvref_t<U>, std::nullopt_t> &&
+             !internal::is_bool_optional_like_conversion_v<T, U> &&
              std::is_constructible_v<T, U&&> && std::is_assignable_v<T&, U&&>)
   constexpr TriState& operator=(U&& _val) {
+    if (!value_.has_value()) {
+      state_ = State::omitted;
+    }
     value_ = std::forward<U>(_val);
     state_ = State::value;
     return *this;
@@ -132,9 +160,15 @@ class TriState {
   constexpr T* operator->() noexcept { return value_.operator->(); }
   constexpr const T* operator->() const noexcept { return value_.operator->(); }
 
-  constexpr std::optional<T> to_optional() const& { return value_; }
+  constexpr std::optional<T> to_optional() const&
+    requires std::is_copy_constructible_v<T>
+  {
+    return value_;
+  }
   constexpr std::optional<T> to_optional() && noexcept(
-      std::is_nothrow_move_constructible_v<T>) {
+      std::is_nothrow_move_constructible_v<T>)
+    requires std::is_move_constructible_v<T>
+  {
     return std::move(value_);
   }
 
@@ -152,6 +186,9 @@ class TriState {
 
   template <class... Args>
   constexpr T& emplace(Args&&... _args) {
+    // Preserve invariant (state_ == State::value) == value_.has_value() if
+    // T's constructor throws after std::optional::emplace destroys the old T.
+    state_ = State::omitted;
     T& ref = value_.emplace(std::forward<Args>(_args)...);
     state_ = State::value;
     return ref;

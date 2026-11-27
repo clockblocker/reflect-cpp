@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "Result.hpp"
+#include "internal/validator_code.hpp"
 #include "parsing/schema/ValidationType.hpp"
 
 namespace rfl {
@@ -50,25 +51,36 @@ struct AnyOf {
   static rfl::Result<T> validate_impl(const T& _value,
                                       std::vector<Error> _errors) {
     const auto handle_err = [&](Error&& _err) -> rfl::Result<T> {
-      _errors.push_back(std::forward<Error>(_err));
+      internal::set_error_kind_if_other(_err, ErrorKind::constraint_violation);
+      internal::set_error_code_if_empty(_err, internal::validator_code<Head>());
+      _errors.push_back(std::move(_err));
       if constexpr (sizeof...(Tail) == 0) {
         auto msg = make_error_message(_errors);
         std::vector<ErrorDetail> causes;
         causes.reserve(_errors.size());
         for (auto& e : _errors) {
-          for (auto& d : std::move(e).details()) {
-            causes.emplace_back(std::move(d));
+          auto branch_what = e.what();
+          auto branch_details = std::move(e).details();
+          if (branch_details.size() == 1) {
+            causes.emplace_back(std::move(branch_details[0]));
+          } else if (!branch_details.empty()) {
+            const auto kind = branch_details.front().kind;
+            causes.emplace_back(ErrorDetail{
+                .path = {},
+                .message = std::move(branch_what),
+                .kind = kind,
+                .causes = std::move(branch_details)});
           }
         }
-        return error(Error(
-            msg,
-            std::vector<ErrorDetail>{ErrorDetail{
-                .path = {},
-                .message = msg,
-                .kind = ErrorKind::constraint_violation,
-                .code = std::string(internal::builtin_error_code_str(
-                    internal::BuiltinErrorCode::any_of)),
-                .causes = std::move(causes)}}));
+        std::vector<ErrorDetail> details;
+        details.emplace_back(ErrorDetail{
+            .path = {},
+            .message = msg,
+            .kind = ErrorKind::constraint_violation,
+            .code = std::string(internal::builtin_error_code_str(
+                internal::BuiltinErrorCode::any_of)),
+            .causes = std::move(causes)});
+        return error(Error(std::move(msg), std::move(details)));
       } else {
         return validate_impl<T, Tail...>(
             _value, std::forward<std::vector<Error>>(_errors));

@@ -35,18 +35,6 @@ template <class T>
 struct is_optional<std::optional<T>> : std::true_type {};
 
 template <class T>
-struct is_nullable_wrapper : std::false_type {};
-
-template <class T>
-struct is_nullable_wrapper<Nullable<T>> : std::true_type {};
-
-template <class T>
-struct is_tri_state : std::false_type {};
-
-template <class T>
-struct is_tri_state<TriState<T>> : std::true_type {};
-
-template <class T>
 struct is_unique_ptr : std::false_type {};
 
 template <class T>
@@ -125,8 +113,8 @@ consteval bool is_nullable() {
   if constexpr ((std::is_same_v<U, Seen> || ...)) {
     return false;
   } else if constexpr (internal_nullable::is_optional<U>::value ||
-                       internal_nullable::is_nullable_wrapper<U>::value ||
-                       internal_nullable::is_tri_state<U>::value ||
+                       internal::is_nullable_wrapper_v<U> ||
+                       internal::is_tri_state_v<U> ||
                        internal_nullable::is_unique_ptr<U>::value ||
                        internal_nullable::is_shared_ptr<U>::value ||
                        std::is_pointer_v<U>) {

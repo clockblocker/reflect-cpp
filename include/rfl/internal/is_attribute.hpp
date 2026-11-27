@@ -11,10 +11,12 @@
 #include "../DefaultVal.hpp"
 #include "../Deprecated.hpp"
 #include "../Description.hpp"
+#include "../Nullable.hpp"
 #include "../Positional.hpp"
 #include "../Ref.hpp"
 #include "../Rename.hpp"
 #include "../Short.hpp"
+#include "../TriState.hpp"
 #include "Skip.hpp"
 #include "StringLiteral.hpp"
 #include "TransparentWrapper.hpp"
@@ -46,6 +48,14 @@ class is_attribute<Rename<_new_name, Type>>
 
 template <class Type>
 class is_attribute<std::optional<Type>>
+    : public is_attribute<std::remove_cvref_t<Type>> {};
+
+template <class Type>
+class is_attribute<Nullable<Type>>
+    : public is_attribute<std::remove_cvref_t<Type>> {};
+
+template <class Type>
+class is_attribute<TriState<Type>>
     : public is_attribute<std::remove_cvref_t<Type>> {};
 
 template <class Type>

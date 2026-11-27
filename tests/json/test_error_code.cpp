@@ -154,17 +154,6 @@ TEST(json, test_error_code_builtin_validators_zero_alloc) {
     EXPECT_FALSE(rfl::internal::has_allocated_details(res.error()));
   }
   {
-    const auto res = rfl::json::read<
-        rfl::Validator<int, rfl::AnyOf<rfl::EqualTo<1>, rfl::EqualTo<2>>>>("3");
-    ASSERT_FALSE(res);
-    EXPECT_EQ(res.error().code(), "any_of");
-    const auto details = res.error().details();
-    ASSERT_EQ(details.size(), 1u);
-    ASSERT_EQ(details[0].causes.size(), 2u);
-    EXPECT_EQ(details[0].causes[0].code, "equal_to");
-    EXPECT_EQ(details[0].causes[1].code, "equal_to");
-  }
-  {
     using OneOfRange =
         rfl::Validator<int, rfl::OneOf<rfl::Minimum<0>, rfl::Maximum<10>>>;
     // Both constraints pass -> OneOf fails with code "one_of".

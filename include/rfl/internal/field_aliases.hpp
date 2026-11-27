@@ -14,10 +14,12 @@
 #include "../DefaultVal.hpp"
 #include "../Deprecated.hpp"
 #include "../Description.hpp"
+#include "../Nullable.hpp"
 #include "../Positional.hpp"
 #include "../Rename.hpp"
 #include "../Short.hpp"
 #include "../Skip.hpp"
+#include "../TriState.hpp"
 #include "../Tuple.hpp"
 #include "StringLiteral.hpp"
 
@@ -95,6 +97,16 @@ struct field_aliases_impl<Positional<T>> {
 
 template <class T>
 struct field_aliases_impl<std::optional<T>> {
+  using type = field_aliases_t<T>;
+};
+
+template <class T>
+struct field_aliases_impl<Nullable<T>> {
+  using type = field_aliases_t<T>;
+};
+
+template <class T>
+struct field_aliases_impl<TriState<T>> {
   using type = field_aliases_t<T>;
 };
 

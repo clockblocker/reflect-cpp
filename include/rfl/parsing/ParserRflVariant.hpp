@@ -107,26 +107,45 @@ class ParserRflVariant<R, W, rfl::Variant<AlternativeTypes...>,
 
     } else {
       std::optional<rfl::Variant<AlternativeTypes...>> result;
-      std::vector<std::string> errors;
-      std::vector<ErrorDetail> causes;
+      std::vector<Error> errors;
       read_variant(
-          _r, _var, &result, &errors, &causes,
+          _r, _var, &result, &errors,
           std::make_integer_sequence<int, sizeof...(AlternativeTypes)>());
       if (result) {
         return std::move(*result);
       } else {
+        std::vector<std::string> messages;
+        std::vector<ErrorDetail> causes;
+        messages.reserve(errors.size());
+        causes.reserve(errors.size());
+        for (auto& alt_err : errors) {
+          auto alt_what = alt_err.what();
+          messages.emplace_back(alt_what);
+          auto alt_details = std::move(alt_err).details();
+          if (alt_details.size() == 1) {
+            causes.emplace_back(std::move(alt_details[0]));
+          } else if (!alt_details.empty()) {
+            const auto kind = alt_details.front().kind;
+            causes.emplace_back(ErrorDetail{
+                .path = {},
+                .message = std::move(alt_what),
+                .kind = kind,
+                .causes = std::move(alt_details)});
+          }
+        }
         auto msg = to_single_error_message(
-            errors,
+            messages,
             "Could not parse the variant. Each of the "
             "possible alternatives failed "
             "for the following reasons: ",
             100000);
-        return error(Error(
-            msg, std::vector<ErrorDetail>{ErrorDetail{
-                     .path = {},
-                     .message = msg,
-                     .kind = ErrorKind::invalid_value,
-                     .causes = std::move(causes)}}));
+        std::vector<ErrorDetail> details;
+        details.emplace_back(ErrorDetail{
+            .path = {},
+            .message = msg,
+            .kind = ErrorKind::invalid_value,
+            .causes = std::move(causes)});
+        return error(Error(std::move(msg), std::move(details)));
       }
     }
   }
@@ -240,8 +259,7 @@ class ParserRflVariant<R, W, rfl::Variant<AlternativeTypes...>,
   static void read_one_alternative(
       const R& _r, const InputVarType& _var,
       std::optional<rfl::Variant<AlternativeTypes...>>* _result,
-      std::vector<std::string>* _errors,
-      std::vector<ErrorDetail>* _causes) noexcept {
+      std::vector<Error>* _errors) noexcept {
     if (!*_result) {
       using AltType =
           std::remove_cvref_t<internal::nth_element_t<_i, AlternativeTypes...>>;
@@ -258,14 +276,8 @@ class ParserRflVariant<R, W, rfl::Variant<AlternativeTypes...>,
       } else {
         // Reserve lazily, so that reading an alternative that matches
         // does not allocate.
-        auto alt_err = std::move(res).error();
         _errors->reserve(sizeof...(AlternativeTypes));
-        _errors->emplace_back(alt_err.what());
-        auto alt_details = std::move(alt_err).details();
-        _causes->reserve(_causes->size() + alt_details.size());
-        for (auto& d : alt_details) {
-          _causes->emplace_back(std::move(d));
-        }
+        _errors->emplace_back(std::move(res).error());
       }
     }
   }
@@ -274,9 +286,9 @@ class ParserRflVariant<R, W, rfl::Variant<AlternativeTypes...>,
   static void read_variant(
       const R& _r, const InputVarType& _var,
       std::optional<rfl::Variant<AlternativeTypes...>>* _result,
-      std::vector<std::string>* _errors, std::vector<ErrorDetail>* _causes,
+      std::vector<Error>* _errors,
       std::integer_sequence<int, _is...>) noexcept {
-    (read_one_alternative<_is>(_r, _var, _result, _errors, _causes), ...);
+    (read_one_alternative<_is>(_r, _var, _result, _errors), ...);
   }
 };
 

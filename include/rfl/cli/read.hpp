@@ -83,7 +83,9 @@ rfl::Result<bool> overlay_field_nested(FT& _field, const Reader& _r,
                 || parsing::is_default_val_v<RawFT>) {
     return overlay_field_nested<typename RawFT::Type, ProcessorsType>(
         _field.value_, _r, _args, _path);
-  } else if constexpr (parsing::is_optional_v<RawFT>) {
+  } else if constexpr (parsing::is_optional_v<RawFT>
+                       || rfl::internal::is_nullable_wrapper_v<RawFT>
+                       || rfl::internal::is_tri_state_v<RawFT>) {
     using Inner = typename RawFT::value_type;
     if (_field.has_value()) {
       return overlay_field_nested<Inner, ProcessorsType>(*_field, _r, _args,
