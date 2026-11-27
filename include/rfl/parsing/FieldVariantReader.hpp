@@ -68,7 +68,8 @@ class FieldVariantReader {
       *field_variant_ = error(make_error_with_location(
           "Could not parse rfl::Variant: Expected the object to have "
           "exactly one field, but found more than one.",
-          _key_loc ? _key_loc : get_source_location(*r_, _var)));
+          _key_loc ? _key_loc : get_source_location(*r_, _var),
+          ErrorKind::invalid_value));
       return;
     }
     try_matching_fields(
@@ -80,7 +81,8 @@ class FieldVariantReader {
                 "'"
              << _disc_value << "'.";
       *field_variant_ = error(make_error_with_location(
-          stream.str(), _key_loc ? _key_loc : get_source_location(*r_, _var)));
+          stream.str(), _key_loc ? _key_loc : get_source_location(*r_, _var),
+          ErrorKind::invalid_value));
     }
   }
 

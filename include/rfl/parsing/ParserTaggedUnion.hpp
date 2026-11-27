@@ -175,7 +175,11 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
              << _discriminator.str() << " '" << _disc.value
              << "'. The following tags are allowed: "
              << internal::strings::join(", ", names);
-      return error(make_error_with_location(stream.str(), _disc.location));
+      const ErrorDetail::PathSegment seg =
+          no_field_names_ ? ErrorDetail::PathSegment(size_t{0})
+                          : ErrorDetail::PathSegment(_discriminator.str());
+      return error(make_nested_error(seg, stream.str(),
+                                     ErrorKind::invalid_value, _disc.location));
     }
   }
 
@@ -227,26 +231,29 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
   static Result<Discriminator> get_discriminator(
       const R& _r, const InputObjectOrArrayType& _obj_or_arr) noexcept {
     const auto make_disc_error =
-        [](const std::optional<SourceLocation>& _loc) {
+        [](const std::optional<SourceLocation>& _loc, const ErrorKind _kind) {
           std::stringstream stream;
           stream << "Could not parse tagged union: Could not find field '"
                  << _discriminator.str()
                  << "' or type of field was not a string.";
-          return make_error_with_location(stream.str(), _loc);
+          const ErrorDetail::PathSegment seg =
+              no_field_names_ ? ErrorDetail::PathSegment(size_t{0})
+                              : ErrorDetail::PathSegment(_discriminator.str());
+          return make_nested_error(seg, stream.str(), _kind, _loc);
         };
 
     const auto to_type = [&](auto _var) -> Result<Discriminator> {
       const auto loc = get_source_location(_r, _var, /*_exact=*/true);
       auto res = _r.template to_basic_type<std::string>(_var);
       if (!res) {
-        return error(make_disc_error(loc));
+        return error(make_disc_error(loc, res.error().kind()));
       }
       return Discriminator{.value = std::move(*res), .location = loc};
     };
 
-    const auto missing_error = [&](const auto&) {
+    const auto missing_error = [&](const Error& _e) {
       return make_disc_error(
-          get_source_location(_r, _obj_or_arr, /*_exact=*/false));
+          get_source_location(_r, _obj_or_arr, /*_exact=*/false), _e.kind());
     };
 
     if constexpr (no_field_names_) {

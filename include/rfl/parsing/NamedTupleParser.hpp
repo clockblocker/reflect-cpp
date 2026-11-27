@@ -425,6 +425,7 @@ struct NamedTupleParser {
                         "' not found, and its default value could not be "
                         "constructed: " +
                         e.what(),
+                    ErrorKind::missing_field,
                     get_source_location(_r, _obj_or_arr, /*_exact=*/false)));
                 return;
               }
@@ -442,7 +443,7 @@ struct NamedTupleParser {
           stream << "Field named '" << std::string(current_name)
                  << "' not found.";
           _errors->emplace_back(make_nested_error(
-              std::string(current_name), stream.str(),
+              std::string(current_name), stream.str(), ErrorKind::missing_field,
               get_source_location(_r, _obj_or_arr, /*_exact=*/false)));
           return;
         }
@@ -467,6 +468,7 @@ struct NamedTupleParser {
                       "' not found, and its default value could not be "
                       "constructed: " +
                       e.what(),
+                  ErrorKind::missing_field,
                   get_source_location(_r, _obj_or_arr, /*_exact=*/false)));
               return;
             }

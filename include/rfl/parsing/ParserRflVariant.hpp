@@ -107,7 +107,8 @@ class ParserRflVariant<R, W, rfl::Variant<AlternativeTypes...>,
                                     "Could not parse the variant. Each of the "
                                     "possible alternatives failed "
                                     "for the following reasons: ",
-                                    100000));
+                                    100000),
+            ErrorKind::invalid_value);
       }
     }
   }

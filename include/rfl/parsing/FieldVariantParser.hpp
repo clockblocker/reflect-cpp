@@ -58,7 +58,7 @@ struct FieldVariantParser {
         return error(make_error_with_location(
             "Could not parse: Expected the object to have "
             "exactly one field, but found none.",
-            get_source_location(_r, _obj)));
+            get_source_location(_r, _obj), ErrorKind::invalid_value));
       }
       return std::move(*field_variant);
     };

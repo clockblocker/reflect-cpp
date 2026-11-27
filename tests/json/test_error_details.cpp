@@ -36,9 +36,11 @@ TEST(json, test_error_details_of_top_level_fields) {
   const auto expected = std::vector<rfl::ErrorDetail>(
       {{.path = {"input_file"},
         .message = "Size validation failed: Value expected to be greater "
-                   "than or equal to 5, but got 4."},
+                   "than or equal to 5, but got 4.",
+        .kind = rfl::ErrorKind::constraint_violation},
        {.path = {"output_file"},
-        .message = "Field named 'output_file' not found."}});
+        .message = "Field named 'output_file' not found.",
+        .kind = rfl::ErrorKind::missing_field}});
   EXPECT_EQ(result.error().details(), expected);
 }
 

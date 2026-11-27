@@ -159,7 +159,8 @@ class RFL_API Generic {
     if (auto* ptr = std::get_if<Array>(&value_)) return *ptr;
     return error(
         "rfl::Generic: Could not cast the underlying value to an "
-        "rfl::Generic::Array.");
+        "rfl::Generic::Array.",
+        ErrorKind::invalid_type);
   }
 
   /// Casts the underlying value to a boolean or returns an rfl::Error, if the
@@ -167,7 +168,8 @@ class RFL_API Generic {
   Result<bool> to_bool() const noexcept {
     if (auto* ptr = std::get_if<bool>(&value_)) return *ptr;
     return error(
-        "rfl::Generic: Could not cast the underlying value to a boolean.");
+        "rfl::Generic: Could not cast the underlying value to a boolean.",
+        ErrorKind::invalid_type);
   }
 
   /// Casts the underlying value to a double or returns an rfl::Error, if the

@@ -2,6 +2,7 @@
 #define RFL_INTERNAL_ERROR_HPP_
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -30,6 +31,59 @@ struct SourceLocation {
   bool operator==(const SourceLocation&) const = default;
 };
 
+/// Coarse, format-agnostic classification of an ErrorDetail failure.
+/// Classifies the input (or I/O environment), never caller/programmer bugs.
+/// Open enum: new enumerators may be added in minor releases; switch
+/// statements over ErrorKind should include a `default:` branch.
+enum class ErrorKind : std::uint8_t {
+  /// Unclassified: custom parsers/reflectors, caller/programmer bugs,
+  /// and formats not yet tagged.
+  other = 0,
+
+  /// Input could not be obtained or output could not be emitted
+  /// (file open/read/write/close, stream badbit/failbit, directory/size I/O).
+  io_error,
+
+  /// Bytes or tokens cannot form the format's data model regardless of target
+  /// type (malformed/truncated JSON/YAML/TOML, invalid UTF-8/UTF-16, depth
+  /// limit, recursive YAML alias, malformed CLI token such as `--=val`).
+  syntax_error,
+
+  /// A declared, individually-required slot has no entry
+  /// (required struct field, tuple element, required positional, or
+  /// tagged-union discriminator key).
+  missing_field,
+
+  /// A key, option, or argv token resolves to no declared slot—or ambiguously
+  /// to more than one (under NoExtraFields, extra CLI positionals, or
+  /// ambiguous CLI option abbreviations).
+  unknown_field,
+
+  /// A key or non-repeatable option appeared more than once where repeats
+  /// are forbidden (e.g. duplicate mapping key or scalar option).
+  duplicate_field,
+
+  /// Element or value count violates a count fixed by the C++ type or option
+  /// arity (std::array<T, N> size mismatch, tuple overflow, inplace_vector
+  /// capacity, CLI option arity mismatch).
+  invalid_length,
+
+  /// The node's native wire class is incompatible with the target type
+  /// (null/bool/integer/float/string/bytes/array/object mismatch).
+  invalid_type,
+
+  /// Right wire class (or string-only format token), but domain/lexical
+  /// conversion to the C++ type failed (numeric range/sign overflow including
+  /// negative int for unsigned, unknown enum/tag/FieldVariant key, bad
+  /// timestamp/base64/bitset, no matching variant).
+  invalid_value,
+
+  /// Value successfully converted to the target C++ type, then a declared
+  /// check rejected it (rfl::Validator<...>, AllOf/AnyOf/OneOf, Size, Pattern,
+  /// Minimum, CLI constraints).
+  constraint_violation,
+};
+
 /// Describes a single failure contained in an Error: where it occurred and
 /// what went wrong.
 struct ErrorDetail {
@@ -50,6 +104,9 @@ struct ErrorDetail {
   /// source locations.
   std::optional<SourceLocation> location = std::nullopt;
 
+  /// The coarse category of this failure.
+  ErrorKind kind = ErrorKind::other;
+
   bool operator==(const ErrorDetail&) const = default;
 };
 
@@ -68,6 +125,20 @@ class Error {
   /// @param _what The error message describing what went wrong (will be moved)
   Error(std::string&& _what) : what_(std::move(_what)) {}
 
+  /// Constructs a classified leaf error with a message (copy), without
+  /// allocating an explicit detail vector.
+  /// @param _what The error message describing what went wrong
+  /// @param _kind Coarse classification of the failure
+  Error(const std::string& _what, const ErrorKind _kind)
+      : what_(_what), kind_(_kind) {}
+
+  /// Constructs a classified leaf error with a message (move), without
+  /// allocating an explicit detail vector.
+  /// @param _what The error message describing what went wrong (will be moved)
+  /// @param _kind Coarse classification of the failure
+  Error(std::string&& _what, const ErrorKind _kind)
+      : what_(std::move(_what)), kind_(_kind) {}
+
   /// Constructs an error with a message and the individual failures it
   /// summarizes.
   /// @param _what The error message describing what went wrong
@@ -75,7 +146,9 @@ class Error {
   Error(std::string _what, std::vector<ErrorDetail> _details)
       : what_(std::move(_what)),
         details_(_details.empty() ? OptionalDetails()
-                                  : OptionalDetails(std::move(_details))) {}
+                                  : OptionalDetails(std::move(_details))),
+        kind_(details_.has_value() ? (*details_).front().kind
+                                   : ErrorKind::other) {}
 
   /// Destructor.
   ~Error() = default;
@@ -104,12 +177,20 @@ class Error {
   /// from state
   std::string what() && { return std::move(what_); }
 
+  /// Returns the ErrorKind of this error. For multi-error results, returns the
+  /// kind of the first detail.
+  ErrorKind kind() const noexcept {
+    return details_.has_value() && !(*details_).empty()
+               ? (*details_).front().kind
+               : kind_;
+  }
+
   /// Returns the individual failures summarized by what(), each with the
   /// location at which it occurred. An error that was constructed from a
   /// message only is reported as a single failure at the root.
   std::vector<ErrorDetail> details() const& {
     if (!details_.has_value()) {
-      return {ErrorDetail{.path = {}, .message = what_}};
+      return {ErrorDetail{.path = {}, .message = what_, .kind = kind_}};
     }
     return *details_;
   }
@@ -118,7 +199,8 @@ class Error {
   /// moved from state.
   std::vector<ErrorDetail> details() && {
     if (!details_.has_value()) {
-      return {ErrorDetail{.path = {}, .message = std::move(what_)}};
+      return {
+          ErrorDetail{.path = {}, .message = std::move(what_), .kind = kind_}};
     }
     return std::move(*details_);
   }
@@ -138,6 +220,28 @@ class Error {
   }
 
  private:
+  friend bool has_allocated_details(const Error& _err) noexcept {
+    return _err.details_.has_value();
+  }
+
+  friend void set_error_kind_if_other(Error& _err,
+                                      const ErrorKind _kind) noexcept {
+    if (_kind == ErrorKind::other) {
+      return;
+    }
+    if (!_err.details_.has_value()) {
+      if (_err.kind_ == ErrorKind::other) {
+        _err.kind_ = _kind;
+      }
+      return;
+    }
+    for (auto& detail : *_err.details_) {
+      if (detail.kind == ErrorKind::other) {
+        detail.kind = _kind;
+      }
+    }
+  }
+
   /// Either nothing or a heap-allocated vector of details, deep-copied along
   /// with the Error. Holding nothing is the common case: it means that the
   /// Error is just its message, and it does not allocate.
@@ -198,7 +302,17 @@ class Error {
   /// The individual failures summarized by what_. Holds nothing, unless what_
   /// was assembled from failures at nested locations.
   OptionalDetails details_;
+
+  /// Coarse category for a leaf error when details_ holds nothing.
+  ErrorKind kind_ = ErrorKind::other;
 };
+
+/// Returns whether _err has a heap-allocated detail vector.
+bool has_allocated_details(const Error& _err) noexcept;
+
+/// Replaces ErrorKind::other with _kind in place without copying what_ or
+/// allocating details on leaf errors.
+void set_error_kind_if_other(Error& _err, ErrorKind _kind) noexcept;
 
 }  // namespace rfl::internal
 

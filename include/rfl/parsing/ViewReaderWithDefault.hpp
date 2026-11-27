@@ -222,7 +222,7 @@ class ViewReaderWithDefault {
                << "' not used. Remove the rfl::NoExtraFields processor or add "
                   "rfl::ExtraFields to avoid this error message.";
         _errors->emplace_back(make_nested_error(
-            std::string(_current_name), stream.str(),
+            std::string(_current_name), stream.str(), ErrorKind::unknown_field,
             _key_loc ? _key_loc : get_source_location(_r, _var)));
       }
     }

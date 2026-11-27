@@ -100,7 +100,8 @@ class VectorReader {
         return attach_source_location(
             *r_, _var,
             Error("Too many elements, capacity is " +
-                  std::to_string(vec_->capacity()) + "."));
+                      std::to_string(vec_->capacity()) + ".",
+                  ErrorKind::invalid_length));
       }
     } else {
       vec_->emplace_back(std::move(*res));

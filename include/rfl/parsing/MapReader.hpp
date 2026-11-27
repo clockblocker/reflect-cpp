@@ -11,6 +11,7 @@
 #include "../Result.hpp"
 #include "../always_false.hpp"
 #include "../internal/has_reflection_type_v.hpp"
+#include "../internal/is_validator.hpp"
 #include "../internal/no_duplicate_keys_v.hpp"
 #include "Parser_base.hpp"
 #include "wrap_error.hpp"
@@ -95,7 +96,7 @@ class MapReader {
         static_assert(always_false_v<T>, "Unsupported type");
       }
     } catch (std::exception& e) {
-      return error(e.what());
+      return error(e.what(), ErrorKind::invalid_value);
     }
   }
 
@@ -109,7 +110,11 @@ class MapReader {
         return std::make_pair(KeyType(std::forward<K>(_key)),
                               std::move(_pair.second));
       } catch (std::exception& e) {
-        return error(e.what());
+        if constexpr (internal::is_validator_v<KeyType>) {
+          return error(e.what(), ErrorKind::constraint_violation);
+        } else {
+          return error(e.what(), ErrorKind::invalid_value);
+        }
       }
     };
 

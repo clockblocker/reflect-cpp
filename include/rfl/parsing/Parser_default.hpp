@@ -279,7 +279,12 @@ struct Parser {
           try {
             using NT = decltype(_named_tuple);
             if constexpr (internal::HasFromReflectionMethod<T>) {
-              return T::from_reflection(std::forward<NT>(_named_tuple));
+              auto res = T::from_reflection(std::forward<NT>(_named_tuple));
+              if constexpr (std::convertible_to<decltype(res), Result<T>>) {
+                return res;
+              } else {
+                return Result<T>(T(std::move(res)));
+              }
             } else if constexpr (internal::is_literal_v<T>) {
               // Unlike the constructor, from_string does not throw when the
               // string is not one of the literal's values.

@@ -16,15 +16,17 @@ Result<Nothing> save_string(const std::string& _fname, const T& _obj,
     std::ofstream outfile;
     outfile.open(_fname);
     if (!outfile.is_open()) {
-      return error("Unable to open file '" + _fname + "' for writing.");
+      return error("Unable to open file '" + _fname + "' for writing.",
+                   ErrorKind::io_error);
     }
     _write(_obj, outfile);
     outfile.close();
     if (!outfile) {
-      return error("Unable to write or close file '" + _fname + "'.");
+      return error("Unable to write or close file '" + _fname + "'.",
+                   ErrorKind::io_error);
     }
   } catch (const std::exception& e) {
-    return error(e.what());
+    return error(e.what(), ErrorKind::io_error);
   }
   return Nothing{};
 }

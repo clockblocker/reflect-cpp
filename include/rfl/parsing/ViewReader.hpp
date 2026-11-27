@@ -222,6 +222,7 @@ class ViewReader {
         stream << "Value named '" << _current_name_or_index << "' not used.";
         _errors->emplace_back(make_nested_error(
             to_path_segment(_current_name_or_index), stream.str(),
+            ErrorKind::unknown_field,
             _key_loc ? _key_loc : get_source_location(_r, _var)));
       }
     }
