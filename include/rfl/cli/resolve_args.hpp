@@ -24,6 +24,10 @@ struct OptionOccurrence {
   bool negated = false;
   /// Raw argv token that introduced this option.
   std::string raw;
+  /// For prefix-matched options (e.g. `-Wno-fatal` matching prefix `Wno-`, or
+  /// `-debugi-V3Options 3` matching `debugi-`), the matched suffix after the
+  /// prefix. Empty for exact options.
+  std::string prefix_suffix;
 };
 
 /// Holds the parsed command-line arguments categorized by type.

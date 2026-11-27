@@ -114,7 +114,8 @@ inline rfl::Result<ParsedArgs> parse_string_views(
                             const Option& _option, std::string_view _raw,
                             const bool _has_value = false,
                             const bool _negated = false,
-                            std::string_view _raw_val = {}) -> rfl::Result<bool> {
+                            std::string_view _raw_val = {},
+                            std::string _prefix_suffix = {}) -> rfl::Result<bool> {
     if (_option.is_counter) {
       if (!_val.empty()) {
         return error("Counter option '" + std::string(_raw)
@@ -130,7 +131,7 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       }
       auto count_str = std::to_string(count);
       result.detailed_occurrences.push_back(
-          OptionOccurrence{_key, count_str, false, false, std::string(_raw)});
+          OptionOccurrence{_key, count_str, false, false, std::string(_raw), {}});
       result.occurrences.emplace_back(std::move(_key), std::move(count_str));
       return true;
     }
@@ -140,6 +141,7 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         _has_value,
         _negated,
         std::string(_raw),
+        std::move(_prefix_suffix),
     });
     result.occurrences.emplace_back(_key, _val);
     const auto it = result.named.find(_key);
@@ -169,8 +171,8 @@ inline rfl::Result<ParsedArgs> parse_string_views(
                       std::move(_val), _option, _raw, _has_value, false);
     }
     if (const auto* target = _options.find_short_target(_key)) {
-      result.detailed_occurrences.push_back(
-          OptionOccurrence{*target, _val, _has_value, false, std::string(_raw)});
+      result.detailed_occurrences.push_back(OptionOccurrence{
+          *target, _val, _has_value, false, std::string(_raw), {}});
       result.occurrences.emplace_back(*target, _val);
     }
     result.short_order.emplace_back(_key);
@@ -265,6 +267,8 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         return error("Empty key in argument: " + std::string(arg_raw));
       }
       bool negated = false;
+      bool matched_prefix = false;
+      std::string prefix_suffix;
       if (const auto* canonical = _options.find_long_alias(key)) {
         key = *canonical;
       }
@@ -289,6 +293,24 @@ inline rfl::Result<ParsedArgs> parse_string_views(
           }
         }
       }
+      if (option.kind == OptionKind::unknown) {
+        if (const auto* pfx = _options.find_prefix_option(arg)) {
+          matched_prefix = true;
+          option = pfx->second;
+          if (option.kind == OptionKind::flag) {
+            // Single-token prefix match (e.g. -DFOO=1, -Wno-fatal, -O3):
+            // full remainder after prefix is both prefix_suffix and value.
+            prefix_suffix = std::string(arg.substr(pfx->first.size()));
+            val = prefix_suffix;
+          } else {
+            // Prefix match taking a separate (or =value) argument
+            // (e.g. -debugi-V3Options 3).
+            prefix_suffix = std::string(
+                std::string_view(key).substr(pfx->first.size()));
+          }
+          key = pfx->first;
+        }
+      }
       if (option.kind == OptionKind::unknown && _options.allow_abbreviations) {
         // --rep for --report: a prefix of exactly one long option.
         const auto names = _options.find_abbreviations(key);
@@ -304,17 +326,22 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         return error("Unknown option '"
                      + std::string(is_double_dash ? "--" : "-") + key + "'.");
       }
-      if (eq != std::string_view::npos) {
+      if (eq != std::string_view::npos && !matched_prefix) {
         record_sensitive(option, eq_val);
       }
       bool consume_multi = false;
-      bool has_value = eq != std::string_view::npos;
+      bool has_value =
+          (eq != std::string_view::npos)
+          || (matched_prefix && option.kind == OptionKind::flag);
       if (negated) {
         if (!has_value) {
           val = "false";
         } else {
           val = (eq_val == "0" || eq_val == "false") ? "true" : "false";
         }
+      }
+      else if (matched_prefix && option.kind == OptionKind::flag) {
+        // Value already captured as the suffix after the prefix.
       }
       else if (eq == std::string_view::npos && option.kind == OptionKind::flag
                && !option.is_counter && _options.bool_value_tokens
@@ -346,7 +373,7 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         val = std::string(option.implicit_value);
       }
       const auto r = add_long(key, std::move(val), option, arg_raw, has_value,
-                              negated, eq_val);
+                              negated, eq_val, std::move(prefix_suffix));
       if (!r) { return error(r.error().what()); }
       while (consume_multi && i + 1 < _args.size() && _args[i + 1] != "--"
              && !looks_like_option(_args[i + 1])) {

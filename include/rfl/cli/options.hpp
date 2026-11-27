@@ -121,6 +121,10 @@ struct Options {
   /// their canonical long path. Sorted by negated name.
   std::vector<std::pair<std::string, std::string>> negated_options;
 
+  /// Prefix/partial-match options (`-D<def>`, `-I<dir>`, `-Wno-<msg>`,
+  /// `-debugi-<src> <lvl>`), sorted longest-prefix-first after `finalize()`.
+  std::vector<std::pair<std::string, Option>> prefix_options;
+
   /// Mutual exclusions `(option, excluded_option)` in canonical long names.
   std::vector<std::pair<std::string, std::string>> exclusions;
 
@@ -284,6 +288,13 @@ struct Options {
     }
   }
 
+  /// Records a prefix/partial-match option (e.g. `D`, `Wno-`, `debugi-`).
+  void add_prefix_option(std::string _prefix, const Option& _opt) {
+    if (!_prefix.empty()) {
+      prefix_options.emplace_back(std::move(_prefix), _opt);
+    }
+  }
+
   /// Sorts all lookup tables so binary search lookups work. Must be called
   /// after populating or mutating any keyed table.
   void finalize() {
@@ -291,6 +302,13 @@ struct Options {
     sort_pairs(short_options);
     sort_pairs(long_aliases);
     sort_pairs(negated_options);
+    std::stable_sort(prefix_options.begin(), prefix_options.end(),
+                     [](const auto& _a, const auto& _b) {
+                       if (_a.first.size() != _b.first.size()) {
+                         return _a.first.size() > _b.first.size();
+                       }
+                       return _a.first < _b.first;
+                     });
     sort_pairs(open_prefixes);
     sort_pairs(open_prefix_options);
     for (auto& entry : open_prefix_options) {
@@ -346,6 +364,17 @@ struct Options {
   /// option name, or nullptr.
   const std::string* find_negated_option(const std::string_view _name) const {
     return find_pair(negated_options, _name);
+  }
+
+  /// Finds the longest registered prefix option matching `_name`, or nullptr.
+  const std::pair<std::string, Option>* find_prefix_option(
+      const std::string_view _name) const {
+    for (const auto& entry : prefix_options) {
+      if (_name.starts_with(entry.first)) {
+        return &entry;
+      }
+    }
+    return nullptr;
   }
 
   /// Returns the long option `--_name`.

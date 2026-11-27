@@ -5,6 +5,8 @@
 #include "cli/AllowAbbreviations.hpp"
 #include "cli/App.hpp"
 #include "cli/BoolValueTokens.hpp"
+#include "cli/CaseInsensitiveEnums.hpp"
+#include "cli/CommandTree.hpp"
 #include "cli/DynamicOptions.hpp"
 #include "cli/KeepEmptyItems.hpp"
 #include "cli/LastValueWins.hpp"
@@ -23,6 +25,8 @@
 #include "cli/read.hpp"
 #include "cli/read_app.hpp"
 #include "cli/resolve_args.hpp"
+#include "cli/response_file.hpp"
+#include "cli/suggest.hpp"
 #include "cli/usage.hpp"
 
 #endif

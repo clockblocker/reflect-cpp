@@ -16,6 +16,7 @@
 #include "options.hpp"
 #include "parse_argv.hpp"
 #include "resolve_args.hpp"
+#include "suggest.hpp"
 
 namespace rfl::cli {
 
@@ -29,6 +30,8 @@ struct DynamicOptionFlags {
   bool multi_token = false;
   /// Option must be provided (via CLI or merged config file).
   bool required = false;
+  /// Option is hidden from `usage()` and typo `suggest()` candidates.
+  bool hidden = false;
   /// Help description shown by `DynamicOptions::usage()`.
   std::string description = {};
   /// Display-only default value hint shown by `DynamicOptions::usage()`.
@@ -162,6 +165,90 @@ class DynamicOptions {
   DynamicOptions& add_requirement(std::string _option, std::string _needed) {
     opts_.add_requirement(_option, _needed);
     return *this;
+  }
+
+  /// Registers a single-token prefix-matched option (e.g. `D` matching `-DFOO=1`,
+  /// `Wno-` matching `-Wno-fatal`, `O` matching `-O3`). The matched suffix is
+  /// captured in `OptionOccurrence::prefix_suffix` and `OptionOccurrence::value`.
+  DynamicOptions& add_prefix_flag(std::string _prefix,
+                                  const DynamicOptionFlags& _flags = {}) {
+    finalized_ = false;
+    internal::Option opt;
+    opt.kind = internal::OptionKind::flag;
+    opt.is_list = true;
+    opt.sensitive = _flags.sensitive;
+    meta_.push_back(Meta{_prefix, {}, opt.kind, _flags.required, _flags.hidden,
+                         _flags.description, _flags.default_hint, _flags.group});
+    opts_.add_prefix_option(std::move(_prefix), opt);
+    return *this;
+  }
+
+  /// Registers a prefix-matched option that also consumes a value argument
+  /// (e.g. `debugi-` matching `-debugi-V3Options 3`). The suffix is captured in
+  /// `OptionOccurrence::prefix_suffix` and the argument in `OptionOccurrence::value`.
+  DynamicOptions& add_prefix_value(std::string _prefix,
+                                   const DynamicOptionFlags& _flags = {}) {
+    finalized_ = false;
+    internal::Option opt;
+    opt.kind = internal::OptionKind::value;
+    opt.is_list = true;
+    opt.sensitive = _flags.sensitive;
+    meta_.push_back(Meta{_prefix, {}, opt.kind, _flags.required, _flags.hidden,
+                         _flags.description, _flags.default_hint, _flags.group});
+    opts_.add_prefix_option(std::move(_prefix), opt);
+    return *this;
+  }
+
+  /// Adds an extra suggestion candidate string (e.g. `-fno-inline` or custom
+  /// non-dash arguments) considered by `suggest()`.
+  DynamicOptions& add_suggestion_candidate(std::string _candidate) {
+    extra_candidates_.push_back(std::move(_candidate));
+    return *this;
+  }
+
+  /// Suggests the closest registered (non-hidden) option for `_unknown`, or
+  /// `std::nullopt` if no candidate meets `_min_similarity`.
+  std::optional<std::string> suggest(const std::string_view _unknown,
+                                     const double _min_similarity = 0.6) const {
+    const std::string prefix = single_dash_long ? "-" : "--";
+    std::vector<std::string> candidates;
+    candidates.reserve(meta_.size() + opts_.long_aliases.size()
+                       + opts_.negated_options.size() + extra_candidates_.size());
+    for (const auto& m : meta_) {
+      if (!m.hidden) {
+        candidates.push_back(prefix + m.long_name);
+      }
+    }
+    for (const auto& [alias, _] : opts_.long_aliases) {
+      candidates.push_back(prefix + alias);
+    }
+    for (const auto& [neg, _] : opts_.negated_options) {
+      candidates.push_back(prefix + neg);
+    }
+    for (const auto& extra : extra_candidates_) {
+      candidates.push_back(extra);
+    }
+    const auto matches = suggest_closest(_unknown, candidates, _min_similarity, 1);
+    if (matches.empty()) {
+      return std::nullopt;
+    }
+    return matches.front();
+  }
+
+  /// Returns true if `_long_name` (or alias) is registered as a value option.
+  bool is_value_option(const std::string_view _long_name) const {
+    sync_flags();
+    std::string_view target = _long_name;
+    if (const auto* canonical = opts_.find_long_alias(target)) {
+      target = *canonical;
+    }
+    return opts_.find_long(target).kind == internal::OptionKind::value;
+  }
+
+  /// Returns true if `_short_name` is registered as a value option.
+  bool is_short_value_option(const std::string_view _short_name) const {
+    sync_flags();
+    return opts_.find_short(_short_name).kind == internal::OptionKind::value;
   }
 
   /// Finalizes internal sorted lookup tables so repeated `parse()` calls do
@@ -299,6 +386,9 @@ class DynamicOptions {
       oss << _header << "\n";
     }
     for (const auto& m : meta_) {
+      if (m.hidden) {
+        continue;
+      }
       oss << "  ";
       if (!m.short_name.empty()) {
         oss << "-" << m.short_name << ", ";
@@ -326,6 +416,7 @@ class DynamicOptions {
     std::string short_name;
     internal::OptionKind kind = internal::OptionKind::unknown;
     bool required = false;
+    bool hidden = false;
     std::string description;
     std::string default_hint;
     std::string group;
@@ -343,7 +434,7 @@ class DynamicOptions {
       opts_.add_short_alias(_short_name, _long_name);
     }
     meta_.push_back(Meta{_long_name, _short_name, _opt.kind, _flags.required,
-                         _flags.description, _flags.default_hint,
+                         _flags.hidden, _flags.description, _flags.default_hint,
                          _flags.group});
     opts_.long_options.emplace_back(std::move(_long_name), _opt);
   }
@@ -401,6 +492,7 @@ class DynamicOptions {
 
   mutable internal::Options opts_;
   std::vector<Meta> meta_;
+  std::vector<std::string> extra_candidates_;
   mutable bool finalized_ = false;
 };
 

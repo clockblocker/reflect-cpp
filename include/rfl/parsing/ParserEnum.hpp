@@ -7,6 +7,7 @@
 #include "../Result.hpp"
 #include "../config.hpp"
 #include "../enums.hpp"
+#include "../internal/case_insensitive_enums_v.hpp"
 #include "../internal/enum_names_only_v.hpp"
 #include "../internal/enums/is_flag_enum.hpp"
 #include "../internal/enums/is_scoped_enum.hpp"
@@ -59,6 +60,12 @@ struct ParserEnum {
                     "the underlying value.");
       return _r.template to_basic_type<std::underlying_type_t<T>>(_var)
           .transform([](const auto _val) { return static_cast<T>(_val); });
+    } else if constexpr (internal::case_insensitive_enums_v<ProcessorsType>) {
+      return _r.template to_basic_type<std::string>(_var).and_then(
+          [](const std::string& _s) {
+            return rfl::cli::parse_enum_icase<
+                T, internal::enum_names_only_v<ProcessorsType>>(_s);
+          });
     } else {
       return _r.template to_basic_type<std::string>(_var).and_then(
           rfl::string_to_enum<T, internal::enum_names_only_v<
