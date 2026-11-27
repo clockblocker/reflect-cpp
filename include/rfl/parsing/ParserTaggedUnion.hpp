@@ -10,6 +10,7 @@
 #include "../TaggedUnion.hpp"
 #include "../always_false.hpp"
 #include "../internal/default_if_null_v.hpp"
+#include "../internal/is_safe_default_constructible.hpp"
 #include "../internal/no_field_names_v.hpp"
 #include "../internal/nth_element_t.hpp"
 #include "../internal/strings/strings.hpp"
@@ -69,8 +70,8 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
    */
   static ResultType read(const R& _r, const InputVarType& _var) noexcept {
     if constexpr (internal::default_if_null_v<ProcessorsType> &&
-                  std::is_default_constructible_v<
-                      internal::nth_element_t<0, AlternativeTypes...>>) {
+                  internal::is_safe_default_constructible_v<
+                      TaggedUnion<_discriminator, AlternativeTypes...>>) {
       if (_r.is_empty(_var)) {
         return default_construct<
             TaggedUnion<_discriminator, AlternativeTypes...>>();

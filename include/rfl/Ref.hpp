@@ -3,7 +3,6 @@
 
 #include <memory>
 #include <stdexcept>
-#include <type_traits>
 
 #include "Result.hpp"
 
@@ -54,8 +53,6 @@ class Ref {
   }
 
   /// Default constructor - creates a Ref containing a default-constructed T.
-  template <class U = T>
-    requires std::is_default_constructible_v<U>
   Ref() : ptr_(std::make_shared<T>()) {}
 
   /// Copy constructor.

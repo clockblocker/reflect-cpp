@@ -12,6 +12,7 @@
 #include "../internal/add_tags_to_variants_v.hpp"
 #include "../internal/all_fields.hpp"
 #include "../internal/default_if_null_v.hpp"
+#include "../internal/is_safe_default_constructible.hpp"
 #include "../internal/to_ptr_field.hpp"
 #include "../visit.hpp"
 #include "FieldVariantParser.hpp"
@@ -70,7 +71,7 @@ class ParserVariant<R, W, std::variant<AlternativeTypes...>, ProcessorsType> {
       const R& _r, const InputVarType& _var) noexcept {
     if constexpr (internal::default_if_null_v<ProcessorsType> &&
                   !(is_nullable_v<AlternativeTypes> || ...) &&
-                  std::is_default_constructible_v<
+                  internal::is_safe_default_constructible_v<
                       std::variant<AlternativeTypes...>>) {
       if (_r.is_empty(_var)) {
         return default_construct<std::variant<AlternativeTypes...>>();

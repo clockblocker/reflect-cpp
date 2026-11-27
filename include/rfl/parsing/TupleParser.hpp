@@ -10,6 +10,7 @@
 #include "../Tuple.hpp"
 #include "../always_false.hpp"
 #include "../internal/default_if_null_v.hpp"
+#include "../internal/is_safe_default_constructible.hpp"
 #include "../internal/nth_element_t.hpp"
 #include "../internal/ptr_cast.hpp"
 #include "Parent.hpp"
@@ -44,9 +45,7 @@ struct TupleParser {
   static Result<TupleType> read(const R& _r,
                                 const InputVarType& _var) noexcept {
     if constexpr (internal::default_if_null_v<ProcessorsType> &&
-                  all_elements_default_constructible(
-                      std::make_index_sequence<
-                          rfl::tuple_size_v<TupleType>>())) {
+                  internal::is_safe_default_constructible_v<TupleType>) {
       if (_r.is_empty(_var)) {
         return default_construct<TupleType>();
       }
@@ -129,14 +128,6 @@ struct TupleParser {
   }
 
  private:
-  template <size_t... _is>
-  static constexpr bool all_elements_default_constructible(
-      std::index_sequence<_is...>) {
-    return (std::is_default_constructible_v<
-                rfl::tuple_element_t<_is, TupleType>> &&
-            ...);
-  }
-
   /**
    * @brief Adds an element of the tuple to the schema.
    *
