@@ -58,7 +58,7 @@ struct any_empty_base {
         std::is_base_of_v<std::remove_cvref_t<Base>,
                           std::remove_cv_t<Derived>> &&
         !std::is_same_v<std::remove_cvref_t<Base>, std::remove_cv_t<Derived>>)
-  constexpr operator Base&() const noexcept {
+  operator Base&() const noexcept {
     for (;;) {
     }
   }
@@ -72,7 +72,7 @@ struct any_base {
         std::is_base_of_v<std::remove_cvref_t<Base>,
                           std::remove_cv_t<Derived>> &&
         !std::is_same_v<std::remove_cvref_t<Base>, std::remove_cv_t<Derived>>)
-  constexpr operator Base&() const noexcept {
+  operator Base&() const noexcept {
     for (;;) {
     }
   }
@@ -81,7 +81,7 @@ struct any_base {
 struct any {
   constexpr any(std::size_t) noexcept {}
   template <typename T>
-  constexpr operator T() const noexcept {
+  operator T() const noexcept {
     for (;;) {
     }
   }

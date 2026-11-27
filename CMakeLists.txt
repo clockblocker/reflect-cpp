@@ -256,11 +256,17 @@ set(REFLECT_CPP_SOURCES
     src/reflectcpp.cpp
 )
 
+if (PROJECT_IS_TOP_LEVEL)
+    set(_REFLECTCPP_INCLUDE_SYSTEM "")
+else ()
+    set(_REFLECTCPP_INCLUDE_SYSTEM SYSTEM)
+endif ()
+
 target_include_directories(
     reflectcpp PRIVATE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_include_directories(
-    reflectcpp SYSTEM INTERFACE
+    reflectcpp ${_REFLECTCPP_INCLUDE_SYSTEM} INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
 
@@ -457,16 +463,35 @@ if (REFLECTCPP_XML OR REFLECTCPP_CHECK_HEADERS)
     if (NOT TARGET pugixml::pugixml)
         find_package(pugixml CONFIG REQUIRED)
     endif ()
-    set(_rfl_pugixml_target pugixml::pugixml)
-    get_target_property(_rfl_pugixml_aliased ${_rfl_pugixml_target} ALIASED_TARGET)
-    if (_rfl_pugixml_aliased)
-        set(_rfl_pugixml_target ${_rfl_pugixml_aliased})
-    endif ()
-    get_target_property(_rfl_pugixml_inc ${_rfl_pugixml_target} INTERFACE_INCLUDE_DIRECTORIES)
-    if (_rfl_pugixml_inc)
-        set_property(TARGET ${_rfl_pugixml_target} APPEND PROPERTY
-            INTERFACE_SYSTEM_INCLUDE_DIRECTORIES ${_rfl_pugixml_inc})
-    endif ()
+    set(_rfl_pugixml_queue pugixml::pugixml)
+    set(_rfl_pugixml_visited "")
+    while (_rfl_pugixml_queue)
+        list(POP_FRONT _rfl_pugixml_queue _rfl_pugi_t)
+        if (NOT TARGET ${_rfl_pugi_t})
+            continue()
+        endif ()
+        get_target_property(_rfl_pugi_aliased ${_rfl_pugi_t} ALIASED_TARGET)
+        if (_rfl_pugi_aliased)
+            set(_rfl_pugi_t ${_rfl_pugi_aliased})
+        endif ()
+        if (_rfl_pugi_t IN_LIST _rfl_pugixml_visited)
+            continue()
+        endif ()
+        list(APPEND _rfl_pugixml_visited ${_rfl_pugi_t})
+        get_target_property(_rfl_pugi_inc ${_rfl_pugi_t} INTERFACE_INCLUDE_DIRECTORIES)
+        if (_rfl_pugi_inc)
+            set_property(TARGET ${_rfl_pugi_t} APPEND PROPERTY
+                INTERFACE_SYSTEM_INCLUDE_DIRECTORIES ${_rfl_pugi_inc})
+        endif ()
+        get_target_property(_rfl_pugi_links ${_rfl_pugi_t} INTERFACE_LINK_LIBRARIES)
+        if (_rfl_pugi_links)
+            foreach (_rfl_pugi_dep IN LISTS _rfl_pugi_links)
+                if (TARGET ${_rfl_pugi_dep})
+                    list(APPEND _rfl_pugixml_queue ${_rfl_pugi_dep})
+                endif ()
+            endforeach ()
+        endif ()
+    endwhile ()
     target_link_libraries(reflectcpp PUBLIC pugixml::pugixml)
 endif ()
 
@@ -504,8 +529,6 @@ target_precompile_headers(reflectcpp PRIVATE [["rfl.hpp"]] <iostream> <string> <
 
 if (REFLECTCPP_BUILD_TESTS)
     add_library(reflectcpp_tests_crt INTERFACE)
-    target_include_directories(reflectcpp_tests_crt BEFORE INTERFACE
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
     target_link_libraries(reflectcpp_tests_crt INTERFACE reflectcpp GTest::gtest_main)
 
     enable_testing()

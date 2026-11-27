@@ -1,7 +1,6 @@
 #ifndef RFL_XML_READ_HPP_
 #define RFL_XML_READ_HPP_
 
-#include <cctype>
 #include <istream>
 #include <pugixml.hpp>
 #include <string>
@@ -79,7 +78,7 @@ Result<T> read(const std::string_view _xml_str) {
       }
       bool all_ws = true;
       for (const char c : trimmed) {
-        if (!std::isspace(static_cast<unsigned char>(c))) {
+        if (c != ' ' && c != '\t' && c != '\r' && c != '\n') {
           all_ws = false;
           break;
         }

@@ -1,7 +1,6 @@
 #ifndef RFL_XML_READER_HPP_
 #define RFL_XML_READER_HPP_
 
-#include <algorithm>
 #include <array>
 #include <charconv>
 #include <concepts>
