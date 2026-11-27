@@ -21,6 +21,7 @@ namespace rfl::xml {
 /// Uses the pugixml library for XML parsing. XML has a hierarchical structure
 /// with elements (nodes) and attributes, both of which can be mapped to object fields.
 struct Reader {
+  using UnsizedObjectReader = void;
   /// Represents an XML array during deserialization.
   /// In XML, arrays are represented as multiple sibling elements with the same name.
   /// Wraps a pugixml node representing the first element in the array.

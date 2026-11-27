@@ -137,6 +137,7 @@ rfl::Result<T> parse_value(
 /// Parses hierarchical key-value pairs from CLI arguments (e.g., --database.host=localhost).
 /// Supports arrays through comma-delimited values (e.g., --ports=8080,8081).
 struct Reader {
+  using UnsizedObjectReader = void;
   using InputArrayType = CliArrayType;
   using InputObjectType = CliObjectType;
   using InputVarType = CliVarType;

@@ -16,6 +16,7 @@ namespace rfl::generic {
 /// The Generic type can represent any JSON-like structure (objects, arrays, primitives)
 /// without being tied to a specific serialization format.
 struct Reader {
+  using UnsizedObjectReader = void;
   using InputArrayType = Generic::Array;
   using InputObjectType = Generic::Object;
   using InputVarType = Generic;
