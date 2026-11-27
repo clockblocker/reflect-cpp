@@ -1,11 +1,19 @@
 #include <gtest/gtest.h>
 
+#include <array>
+#include <deque>
+#include <map>
 #include <memory>
 #include <optional>
 #include <rfl.hpp>
 #include <rfl/json.hpp>
+#include <set>
 #include <stdexcept>
 #include <string>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace test_json_schema_default_if_missing {
@@ -82,6 +90,9 @@ struct NonWritable {
   using ReflectionType = InnerVal;
   NonWritable() : copied(0), missing(0) {}
   explicit NonWritable(ReflectionType&& _r) : copied(_r.value), missing(0) {}
+  bool operator<(const NonWritable& _other) const {
+    return copied < _other.copied;
+  }
 };
 
 struct WithNonWritableFields {
@@ -300,6 +311,224 @@ TEST(json, test_schema_default_if_missing_no_field_names) {
       R"({"$schema":"https://json-schema.org/draft/2020-12/schema","$ref":"#/$defs/test_json_schema_default_if_missing__Inner","$defs":{"test_json_schema_default_if_missing__Inner":{"type":"array","prefixItems":[{"type":"integer","default":3},{"type":"string","default":"fast"}],"items":false}}})";
 
   EXPECT_EQ(schema, expected) << schema;
+}
+
+static_assert(!std::is_default_constructible_v<rfl::Box<NoDefaultCtor>>);
+static_assert(
+    !std::is_default_constructible_v<rfl::CopyableBox<NoDefaultCtor>>);
+static_assert(!std::is_default_constructible_v<rfl::Ref<NoDefaultCtor>>);
+static_assert(!std::is_default_constructible_v<rfl::Attribute<NoDefaultCtor>>);
+static_assert(!std::is_default_constructible_v<rfl::Short<"a", NoDefaultCtor>>);
+static_assert(
+    !std::is_default_constructible_v<rfl::Positional<NoDefaultCtor>>);
+static_assert(
+    !std::is_default_constructible_v<rfl::Tuple<int, NoDefaultCtor>>);
+
+struct WithBoxNoDefault {
+  rfl::Box<NoDefaultCtor> boxed;
+  int port = 8080;
+};
+
+struct WithRefNoDefault {
+  rfl::Ref<NoDefaultCtor> ref;
+  int port = 8080;
+};
+
+struct WithAttributeNoDefault {
+  rfl::Attribute<NoDefaultCtor> attr;
+  int port = 8080;
+};
+
+TEST(json, test_schema_default_if_missing_wrapped_no_default) {
+  const auto box_schema =
+      rfl::json::to_schema<WithBoxNoDefault, rfl::DefaultIfMissing>();
+  EXPECT_EQ(box_schema.find("\"default\""), std::string::npos) << box_schema;
+  EXPECT_NE(box_schema.find("\"required\":[]"), std::string::npos)
+      << box_schema;
+  EXPECT_NE(box_schema.find(R"("port":{"type":"integer"})"), std::string::npos)
+      << box_schema;
+
+  const auto ref_schema =
+      rfl::json::to_schema<WithRefNoDefault, rfl::DefaultIfMissing>();
+  EXPECT_EQ(ref_schema.find("\"default\""), std::string::npos) << ref_schema;
+  EXPECT_NE(ref_schema.find("\"required\":[]"), std::string::npos)
+      << ref_schema;
+  EXPECT_NE(ref_schema.find(R"("port":{"type":"integer"})"), std::string::npos)
+      << ref_schema;
+
+  const auto attr_schema =
+      rfl::json::to_schema<WithAttributeNoDefault, rfl::DefaultIfMissing>();
+  EXPECT_EQ(attr_schema.find("\"default\""), std::string::npos) << attr_schema;
+  EXPECT_NE(attr_schema.find("\"required\":[]"), std::string::npos)
+      << attr_schema;
+  EXPECT_NE(attr_schema.find(R"("port":{"type":"integer"})"), std::string::npos)
+      << attr_schema;
+}
+
+struct AlwaysValidNonWritable {
+  static rfl::Result<NonWritable> validate(const NonWritable& _v) {
+    return _v;
+  }
+  template <class T>
+  static rfl::parsing::schema::ValidationType to_schema() {
+    return rfl::parsing::schema::ValidationType{
+        rfl::parsing::schema::ValidationType::AllOf{}};
+  }
+};
+
+struct NestedWithNonWritable {
+  int inner_val = 7;
+  NonWritable nw;
+};
+
+struct TaggedGoodAlt {
+  int val = 1;
+};
+
+struct TaggedBadAlt {
+  NonWritable nw;
+};
+
+struct WithWrappedNonWritable {
+  int port = 8080;
+  rfl::Box<NonWritable> boxed;
+  rfl::Ref<NonWritable> ref;
+  rfl::Commented<NonWritable> commented;
+  rfl::Attribute<NonWritable> attr;
+  rfl::Validator<NonWritable, AlwaysValidNonWritable> validated;
+};
+
+struct WithCompositeNonWritable {
+  int port = 8080;
+  std::vector<NonWritable> vec;
+  std::deque<NonWritable> deq;
+  std::set<NonWritable> set_nw;
+  std::map<std::string, NonWritable> str_map;
+  std::array<NonWritable, 2> arr;
+  std::pair<int, NonWritable> pair_nw;
+  std::tuple<int, NonWritable> std_tup;
+  rfl::Tuple<int, NonWritable> rfl_tup;
+  std::variant<int, NonWritable> std_var;
+  rfl::Variant<int, NonWritable> rfl_var;
+  rfl::TaggedUnion<"tag", TaggedGoodAlt, TaggedBadAlt> tagged_union;
+  NestedWithNonWritable nested;
+};
+
+TEST(json, test_schema_default_if_missing_wrapped_and_composite_non_writable) {
+  static_assert(!rfl::internal::CanWriteGeneric<NonWritable>);
+  static_assert(!rfl::internal::CanWriteGeneric<rfl::Box<NonWritable>>);
+  static_assert(!rfl::internal::CanWriteGeneric<rfl::Ref<NonWritable>>);
+  static_assert(!rfl::internal::CanWriteGeneric<rfl::Commented<NonWritable>>);
+  static_assert(!rfl::internal::CanWriteGeneric<rfl::Attribute<NonWritable>>);
+  static_assert(
+      !rfl::internal::CanWriteGeneric<
+          rfl::Validator<NonWritable, AlwaysValidNonWritable>>);
+  static_assert(!rfl::internal::CanWriteGeneric<std::vector<NonWritable>>);
+  static_assert(!rfl::internal::CanWriteGeneric<std::deque<NonWritable>>);
+  static_assert(!rfl::internal::CanWriteGeneric<std::set<NonWritable>>);
+  static_assert(
+      !rfl::internal::CanWriteGeneric<std::map<std::string, NonWritable>>);
+  static_assert(!rfl::internal::CanWriteGeneric<std::array<NonWritable, 2>>);
+  static_assert(!rfl::internal::CanWriteGeneric<std::pair<int, NonWritable>>);
+  static_assert(!rfl::internal::CanWriteGeneric<std::tuple<int, NonWritable>>);
+  static_assert(!rfl::internal::CanWriteGeneric<rfl::Tuple<int, NonWritable>>);
+  static_assert(
+      !rfl::internal::CanWriteGeneric<std::variant<int, NonWritable>>);
+  static_assert(
+      !rfl::internal::CanWriteGeneric<rfl::Variant<int, NonWritable>>);
+  static_assert(
+      !rfl::internal::CanWriteGeneric<
+          rfl::TaggedUnion<"tag", TaggedGoodAlt, TaggedBadAlt>>);
+  static_assert(!rfl::internal::CanWriteGeneric<NestedWithNonWritable>);
+  static_assert(!rfl::internal::CanWriteGeneric<WithWrappedNonWritable>);
+  static_assert(!rfl::internal::CanWriteGeneric<WithCompositeNonWritable>);
+  static_assert(rfl::internal::CanWriteGeneric<rfl::Literal<"a", "b">>);
+  static_assert(rfl::internal::CanWriteGeneric<rfl::Generic>);
+  static_assert(rfl::internal::CanWriteGeneric<rfl::Skip<NonWritable>>);
+  static_assert(
+      !rfl::internal::CanWriteGeneric<rfl::SkipDeserialization<NonWritable>>);
+
+  const auto wrapped_schema =
+      rfl::json::to_schema<WithWrappedNonWritable, rfl::DefaultIfMissing>();
+  EXPECT_NE(
+      wrapped_schema.find(
+          R"("test_json_schema_default_if_missing__WithWrappedNonWritable":{"type":"object","properties":{"port":{"type":"integer","default":8080},"boxed":{"$ref":"#/$defs/test_json_schema_default_if_missing__NonWritable"},"ref":{"$ref":"#/$defs/test_json_schema_default_if_missing__NonWritable"},"commented":{"$ref":"#/$defs/test_json_schema_default_if_missing__NonWritable"},"attr":{"$ref":"#/$defs/rfl__Attribute_test_json_schema_default_if_missing__NonWritable_"},"validated":{"allOf":[]}},"required":[]})"),
+      std::string::npos)
+      << wrapped_schema;
+
+  const auto composite_schema =
+      rfl::json::to_schema<WithCompositeNonWritable, rfl::DefaultIfMissing>();
+  EXPECT_NE(
+      composite_schema.find(R"("port":{"type":"integer","default":8080})"),
+      std::string::npos)
+      << composite_schema;
+  // Writable fields inside nested/tagged definitions still get their own
+  // defaults, while none of the non-writable composite fields on
+  // WithCompositeNonWritable get a default.
+  EXPECT_NE(
+      composite_schema.find(R"("inner_val":{"type":"integer","default":7})"),
+      std::string::npos)
+      << composite_schema;
+  const auto composite_def_pos = composite_schema.find(
+      R"("test_json_schema_default_if_missing__WithCompositeNonWritable":)");
+  ASSERT_NE(composite_def_pos, std::string::npos) << composite_schema;
+  const auto first_composite_default =
+      composite_schema.find("\"default\"", composite_def_pos);
+  ASSERT_NE(first_composite_default, std::string::npos) << composite_schema;
+  // Only `port` inside WithCompositeNonWritable gets a default.
+  EXPECT_EQ(composite_schema.find("\"default\"", first_composite_default + 1),
+            std::string::npos)
+      << composite_schema;
+}
+
+struct Node {
+  int v = 1;
+  std::unique_ptr<Node> next;
+};
+
+struct BoxNode {
+  int v = 2;
+  std::optional<rfl::Box<BoxNode>> next;
+};
+
+struct NonWritableNode {
+  int v = 3;
+  NonWritable nw;
+  std::unique_ptr<NonWritableNode> next;
+};
+
+TEST(json, test_schema_default_if_missing_recursive_structs) {
+  static_assert(rfl::internal::CanWriteGeneric<Node>);
+  static_assert(rfl::internal::CanWriteGeneric<BoxNode>);
+  static_assert(!rfl::internal::CanWriteGeneric<NonWritableNode>);
+
+  const auto node_schema =
+      rfl::json::to_schema<Node, rfl::DefaultIfMissing>();
+  EXPECT_NE(node_schema.find(R"("v":{"type":"integer","default":1})"),
+            std::string::npos)
+      << node_schema;
+  EXPECT_NE(
+      node_schema.find(
+          R"("next":{"anyOf":[{"$ref":"#/$defs/test_json_schema_default_if_missing__Node"},{"type":"null"}]})"),
+      std::string::npos)
+      << node_schema;
+
+  const auto box_node_schema =
+      rfl::json::to_schema<BoxNode, rfl::DefaultIfMissing>();
+  EXPECT_NE(box_node_schema.find(R"("v":{"type":"integer","default":2})"),
+            std::string::npos)
+      << box_node_schema;
+
+  const auto nw_node_schema =
+      rfl::json::to_schema<NonWritableNode, rfl::DefaultIfMissing>();
+  EXPECT_NE(nw_node_schema.find(R"("v":{"type":"integer","default":3})"),
+            std::string::npos)
+      << nw_node_schema;
+  EXPECT_NE(
+      nw_node_schema.find(
+          R"("nw":{"$ref":"#/$defs/test_json_schema_default_if_missing__NonWritable"})"),
+      std::string::npos)
+      << nw_node_schema;
 }
 
 }  // namespace test_json_schema_default_if_missing
