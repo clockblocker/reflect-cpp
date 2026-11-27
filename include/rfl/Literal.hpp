@@ -99,7 +99,8 @@ class Literal {
   /// range
   static Result<Literal<fields_...>> from_value(ValueType _value) {
     if (_value >= num_fields_) {
-      return error("Value cannot exceed number of fields.");
+      return error("Value cannot exceed number of fields.",
+                   ErrorKind::invalid_value);
     }
     return Literal<fields_...>(_value);
   }
@@ -375,7 +376,9 @@ class Literal {
     if (!found) {
       return error(
           "Literal does not support string '" + _str +
-          "'. The following strings are supported: " + allowed_strings() + ".");
+              "'. The following strings are supported: " + allowed_strings() +
+              ".",
+          ErrorKind::invalid_value);
     }
     return idx;
   }

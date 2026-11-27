@@ -75,8 +75,9 @@ rfl::Result<T> parse_value(const std::string& _str,
   if (_str == "false" || _str == "0") {
     return false;
   }
-  return error("Could not cast '" + _str + "' to boolean for key '" + _path +
-               "'.");
+  return error(
+      "Could not cast '" + _str + "' to boolean for key '" + _path + "'.",
+      ErrorKind::invalid_value);
 }
 
 /// Parses a string value to a floating-point number.
@@ -106,7 +107,8 @@ rfl::Result<T> parse_value(const std::string& _str,
 #endif
   if (end != _str.c_str() + _str.size()) {
     return error("Could not cast '" + _str + "' to floating point for key '" +
-                 _path + "'.");
+                     _path + "'.",
+                 ErrorKind::invalid_value);
   }
   return static_cast<T>(value);
 }
@@ -126,7 +128,8 @@ rfl::Result<T> parse_value(const std::string& _str,
       std::from_chars(_str.data(), _str.data() + _str.size(), value);
   if (ec != std::errc() || ptr != _str.data() + _str.size()) {
     return error("Could not cast '" + _str + "' to integer for key '" + _path +
-                 "'.");
+                     "'.",
+                 ErrorKind::invalid_value);
   }
   return value;
 }
@@ -270,7 +273,8 @@ struct Reader {
   rfl::Result<T> to_basic_type(const InputVarType& _var) const noexcept {
     const auto str = get_value(_var);
     if (!str) {
-      return error("No value for key '" + _var.path + "'.");
+      return error("No value for key '" + _var.path + "'.",
+                   ErrorKind::missing_field);
     }
     return parse_value<T>(*str, _var.path);
   }

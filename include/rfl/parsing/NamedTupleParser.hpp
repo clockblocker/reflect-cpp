@@ -378,7 +378,8 @@ struct NamedTupleParser {
                   "Field named '" + std::string(current_name) +
                       "' not found, and its default value could not be "
                       "constructed: " +
-                      e.what()));
+                      e.what(),
+                  ErrorKind::missing_field));
               return;
             }
             std::get<_i>(*_set) = true;
@@ -394,8 +395,8 @@ struct NamedTupleParser {
         std::stringstream stream;
         stream << "Field named '" << std::string(current_name)
                << "' not found.";
-        _errors->emplace_back(
-            make_nested_error(std::string(current_name), stream.str()));
+        _errors->emplace_back(make_nested_error(
+            std::string(current_name), stream.str(), ErrorKind::missing_field));
         return;
       }
 
@@ -420,7 +421,8 @@ struct NamedTupleParser {
                 "Field named '" + std::string(current_name) +
                     "' not found, and its default value could not be "
                     "constructed: " +
-                    e.what()));
+                    e.what(),
+                ErrorKind::missing_field));
             return;
           }
         }

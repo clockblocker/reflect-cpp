@@ -79,7 +79,8 @@ class VectorReader {
     } else if constexpr (is_inplace_vector_v<VecType>) {
       if (!vec_->try_emplace_back(std::move(*res))) {
         return Error("Too many elements, capacity is " +
-                     std::to_string(vec_->capacity()) + ".");
+                         std::to_string(vec_->capacity()) + ".",
+                     ErrorKind::invalid_length);
       }
     } else {
       vec_->emplace_back(std::move(*res));

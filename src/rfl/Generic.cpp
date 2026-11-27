@@ -106,42 +106,49 @@ Result<double> Generic::to_double() const noexcept {
     }
     return error(
         "rfl::Generic: Could not cast the underlying value to a double "
-        "without loss of precision.");
+        "without loss of precision.",
+        ErrorKind::invalid_value);
   }
   return error(
-      "rfl::Generic: Could not cast the underlying value to a double.");
+      "rfl::Generic: Could not cast the underlying value to a double.",
+      ErrorKind::invalid_type);
 }
 
 Result<int> Generic::to_int() const noexcept {
   if (auto* ptr = std::get_if<int64_t>(&value_)) {
     if (*ptr < static_cast<int64_t>(std::numeric_limits<int>::min()) ||
         *ptr > static_cast<int64_t>(std::numeric_limits<int>::max())) {
-      return error("rfl::Generic: int64_t value out of range for int.");
+      return error("rfl::Generic: int64_t value out of range for int.",
+                   ErrorKind::invalid_value);
     }
     return static_cast<int>(*ptr);
   }
   return error(
-      "rfl::Generic: Could not cast the underlying value to an integer.");
+      "rfl::Generic: Could not cast the underlying value to an integer.",
+      ErrorKind::invalid_type);
 }
 
 Result<int64_t> Generic::to_int64() const noexcept {
   if (auto* ptr = std::get_if<int64_t>(&value_)) return *ptr;
   return error(
-      "rfl::Generic: Could not cast the underlying value to an int64.");
+      "rfl::Generic: Could not cast the underlying value to an int64.",
+      ErrorKind::invalid_type);
 }
 
 Result<Generic::Object> Generic::to_object() const noexcept {
   if (auto* ptr = std::get_if<Object>(&value_)) return *ptr;
   return error(
       "rfl::Generic: Could not cast the underlying value to an "
-      "rfl::Generic::Object.");
+      "rfl::Generic::Object.",
+      ErrorKind::invalid_type);
 }
 
 Result<std::nullopt_t> Generic::to_null() const noexcept {
   if (auto* ptr = std::get_if<std::nullopt_t>(&value_)) return *ptr;
   return error(
       "rfl::Generic: Could not cast the underlying value to "
-      "rfl::Generic::Null.");
+      "rfl::Generic::Null.",
+      ErrorKind::invalid_type);
 }
 
 /// Casts the underlying value to a string or returns an rfl::Error, if the
@@ -150,7 +157,8 @@ Result<std::string> Generic::to_string() const noexcept {
   if (auto* ptr = std::get_if<std::string>(&value_)) return *ptr;
   return error(
       "rfl::Generic: Could not cast the underlying value to a "
-      "string.");
+      "string.",
+      ErrorKind::invalid_type);
 }
 
 }  // namespace rfl

@@ -45,7 +45,7 @@ inline Result<Bytestring> decode_base64(const std::string_view _encoded) {
   const auto padding = _encoded.size() - size;
   if (size % 4 == 1 || padding > 2 ||
       (padding != 0 && _encoded.size() % 4 != 0)) {
-    return error("Invalid Base64 length or padding.");
+    return error("Invalid Base64 length or padding.", ErrorKind::invalid_value);
   }
 
   Bytestring decoded;
@@ -66,7 +66,8 @@ inline Result<Bytestring> decode_base64(const std::string_view _encoded) {
     } else if (c == '/' || c == '_') {
       value = 63;
     } else {
-      return error("Invalid character in Base64 string.");
+      return error("Invalid character in Base64 string.",
+                   ErrorKind::invalid_value);
     }
     buffer = (buffer << 6) | value;
     bits += 6;
