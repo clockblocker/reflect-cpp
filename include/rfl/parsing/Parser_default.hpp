@@ -11,6 +11,7 @@
 #include "../internal/always_inline.hpp"
 #include "../internal/cold.hpp"
 #include "../internal/default_if_missing_v.hpp"
+#include "../internal/default_if_null_v.hpp"
 #include "../internal/has_default_val_v.hpp"
 #include "../internal/has_reflection_method_v.hpp"
 #include "../internal/has_reflection_type_v.hpp"
@@ -66,6 +67,8 @@
 #include "Parser_base.hpp"
 #include "VectorParser.hpp"
 #include "call_destructors_where_necessary.hpp"
+#include "default_construct.hpp"
+#include "is_nullable.hpp"
 #include "is_string_map.hpp"
 #include "make_type_name.hpp"
 #include "schema/Type.hpp"
@@ -222,6 +225,18 @@ struct Parser {
                           ProcessorsType>::read(_r, _var);
 
     } else if constexpr (internal::has_read_reflector<T>) {
+      if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                    !is_nullable_v<T>) {
+        if (_r.is_empty(_var)) {
+          if constexpr (std::is_default_constructible_v<T>) {
+            return default_construct<T>();
+          } else {
+            return Result<T>(
+                error("Cannot construct non-default-constructible type '" +
+                      type_name_t<T>().str() + "' from a null value."));
+          }
+        }
+      }
       const auto wrap_in_t = [](auto&& _named_tuple) -> Result<T> {
         try {
           using NT = decltype(_named_tuple);
@@ -236,13 +251,38 @@ struct Parser {
 
     } else if constexpr (schemaful::IsSchemafulReader<R> &&
                          internal::is_literal_v<T>) {
+      if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                    std::is_default_constructible_v<T>) {
+        if (_r.is_empty(_var)) {
+          return default_construct<T>();
+        }
+      }
       return _r.template to_basic_type<T>(_var);
 
     } else if constexpr (R::template has_custom_constructor<T>) {
+      if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                    !is_nullable_v<T> &&
+                    std::is_default_constructible_v<T>) {
+        if (_r.is_empty(_var)) {
+          return default_construct<T>();
+        }
+      }
       return _r.template use_custom_constructor<T>(_var);
 
     } else {
       if constexpr (internal::has_reflection_type_v<T>) {
+        if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                      !is_nullable_v<T>) {
+          if (_r.is_empty(_var)) {
+            if constexpr (std::is_default_constructible_v<T>) {
+              return default_construct<T>();
+            } else {
+              return Result<T>(
+                  error("Cannot construct non-default-constructible type '" +
+                        type_name_t<T>().str() + "' from a null value."));
+            }
+          }
+        }
         using ReflectionType = std::remove_cvref_t<typename T::ReflectionType>;
         const auto wrap_in_t = [](auto&& _named_tuple) -> Result<T> {
           try {
@@ -268,7 +308,9 @@ struct Parser {
             .and_then(wrap_in_t);
 
       } else if constexpr (internal::default_if_missing_v<ProcessorsType> ||
-                           internal::has_default_val_v<T>) {
+                           internal::has_default_val_v<T> ||
+                           (internal::default_if_null_v<ProcessorsType> &&
+                            std::is_default_constructible_v<T>)) {
         return read_struct_with_default(_r, _var);
 
       } else {
@@ -740,6 +782,11 @@ struct Parser {
       // This might fail, for instance if the default value of a field does not
       // satisfy its validator. The outer handler is for this line only.
       auto t = T{};
+      if constexpr (internal::default_if_null_v<ProcessorsType>) {
+        if (_r.is_empty(_var)) {
+          return t;
+        }
+      }
       try {
         auto view = ProcessorsType::template process<T>(to_view(t));
         using ViewType = decltype(view);
@@ -762,9 +809,12 @@ struct Parser {
   /// own, the exception reads as if the input was wrong, so we name the struct
   /// and explain why it was default-constructed.
   RFL_COLD static Error default_construction_error(const char* _what) {
-    const std::string reason = internal::has_default_val_v<T>
-                                   ? "it contains rfl::DefaultVal"
-                                   : "it is read with rfl::DefaultIfMissing";
+    const std::string reason =
+        internal::has_default_val_v<T>
+            ? "it contains rfl::DefaultVal"
+            : (internal::default_if_missing_v<ProcessorsType>
+                   ? "it is read with rfl::DefaultIfMissing"
+                   : "it is read with rfl::DefaultIfNull");
     return Error(
         "Could not default-construct " + type_name_t<T>().str() +
         ", which is required because " + reason +

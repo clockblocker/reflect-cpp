@@ -6,6 +6,7 @@
 
 #include "../Bytestring.hpp"
 #include "../Result.hpp"
+#include "../internal/default_if_null_v.hpp"
 #include "AreReaderAndWriter.hpp"
 #include "Parent.hpp"
 #include "Parser_base.hpp"
@@ -36,6 +37,11 @@ struct ParserBytestring {
    */
   static Result<Bytestring> read(const R& _r,
                                  const InputVarType& _var) noexcept {
+    if constexpr (internal::default_if_null_v<ProcessorsType>) {
+      if (_r.is_empty(_var)) {
+        return Bytestring{};
+      }
+    }
     return _r.template to_basic_type<Bytestring>(_var);
   }
 

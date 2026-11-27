@@ -9,6 +9,7 @@
 #include "../enums.hpp"
 #include "../from_named_tuple.hpp"
 #include "../internal/always_inline.hpp"
+#include "../internal/default_if_null_v.hpp"
 #include "../internal/has_default_val_v.hpp"
 #include "../internal/has_reflection_method_v.hpp"
 #include "../internal/has_reflection_type_v.hpp"
@@ -50,6 +51,11 @@ struct ParserBasicType {
    */
   static RFL_ALWAYS_INLINE Result<T> read(const R& _r,
                                           const InputVarType& _var) noexcept {
+    if constexpr (internal::default_if_null_v<ProcessorsType>) {
+      if (_r.is_empty(_var)) {
+        return T{};
+      }
+    }
     return _r.template to_basic_type<std::remove_cvref_t<T>>(_var);
   }
 

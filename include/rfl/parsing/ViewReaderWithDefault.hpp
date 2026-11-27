@@ -10,10 +10,12 @@
 
 #include "../Ref.hpp"
 #include "../Tuple.hpp"
+#include "../internal/default_if_null_v.hpp"
 #include "../internal/is_array.hpp"
 #include "../internal/no_extra_fields_v.hpp"
 #include "FieldErrors.hpp"
 #include "Parser_base.hpp"
+#include "is_nullable.hpp"
 #include "wrap_error.hpp"
 
 namespace rfl::parsing {
@@ -83,6 +85,12 @@ class ViewReaderWithDefault {
         _current_name == name) {
       std::get<i>(*_found) = true;
       *_already_assigned = true;
+      if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                    !is_nullable_v<T>) {
+        if (_r.is_empty(_var)) {
+          return;
+        }
+      }
       auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
       if (!res) {
         _errors->emplace_back(wrap_field_error(name, std::move(res).error()));
