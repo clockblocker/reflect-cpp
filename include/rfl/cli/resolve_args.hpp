@@ -12,6 +12,20 @@
 
 namespace rfl::cli {
 
+/// Rich per-occurrence record captured during argv parsing.
+struct OptionOccurrence {
+  /// Canonical long option name (without leading dashes).
+  std::string name;
+  /// Effective string value (or raw value after '=' when `has_value` is true).
+  std::string value;
+  /// True when an explicit value was supplied (`--k=v`, `--k v`, `-k v`).
+  bool has_value = false;
+  /// True when invoked via a negated option name (`--no-foo`, `-nofoo`).
+  bool negated = false;
+  /// Raw argv token that introduced this option.
+  std::string raw;
+};
+
 /// Holds the parsed command-line arguments categorized by type.
 /// Used as an intermediate structure before resolving to a flat key-value map.
 struct ParsedArgs {
@@ -30,6 +44,8 @@ struct ParsedArgs {
   /// Every recognized option occurrence `(canonical_long_name, raw_value)` in
   /// exact argv order.
   std::vector<std::pair<std::string, std::string>> occurrences;
+  /// Rich per-occurrence metadata in exact argv order.
+  std::vector<OptionOccurrence> detailed_occurrences;
 };
 
 namespace internal {
@@ -98,6 +114,25 @@ inline rfl::Unexpected<Error> too_many_positionals(const size_t _expected,
                     + std::to_string(_got) + ".");
 }
 
+/// Validates mutual exclusion (`Excludes`) and co-dependency (`Needs`) rules
+/// against the resolved canonical option names.
+inline rfl::Result<bool> check_option_constraints(
+    const std::map<std::string, std::string>& _values,
+    const Options& _options) {
+  for (const auto& [opt, excluded] : _options.exclusions) {
+    if (_values.count(opt) && _values.count(excluded)) {
+      return rfl::error("Option '--" + opt + "' cannot be used with '--"
+                        + excluded + "'.");
+    }
+  }
+  for (const auto& [opt, needed] : _options.requirements) {
+    if (_values.count(opt) && !_values.count(needed)) {
+      return rfl::error("Option '--" + opt + "' requires '--" + needed + "'.");
+    }
+  }
+  return true;
+}
+
 /// Resolves ParsedArgs into a flat key-value map using the options of the
 /// target struct.
 /// This function:
@@ -161,6 +196,10 @@ inline rfl::Result<ResolvedArgs> resolve_args(
   if (_options.options_first && _options.last_positional_is_list()
       && _parsed.positional.size() >= positional_names.size()) {
     verbatim_list = positional_names.back();
+  }
+
+  if (const auto ok = check_option_constraints(result, _options); !ok) {
+    return rfl::error(ok.error().what());
   }
 
   return ResolvedArgs{std::move(result),

@@ -107,11 +107,40 @@ inline rfl::Result<ParsedArgs> parse_string_views(
     return all_paths->find_long(_key);
   };
 
-  // Every occurrence of a list option adds to it. Any other option can be
-  // given only once unless LastValueWins is set.
+  // Every occurrence of a list option adds to it. Counter options increment on
+  // each occurrence. Any other option can be given only once unless
+  // LastValueWins is set.
   const auto add_long = [&](std::string _key, std::string _val,
-                            const Option& _option,
-                            std::string_view _raw) -> rfl::Result<bool> {
+                            const Option& _option, std::string_view _raw,
+                            const bool _has_value = false,
+                            const bool _negated = false,
+                            std::string_view _raw_val = {}) -> rfl::Result<bool> {
+    if (_option.is_counter) {
+      if (!_val.empty()) {
+        return error("Counter option '" + std::string(_raw)
+                     + "' does not take a value.");
+      }
+      const auto it = result.named.find(_key);
+      unsigned long long count = 1;
+      if (it == result.named.end()) {
+        result.named.emplace(_key, "1");
+      } else {
+        count = std::stoull(it->second) + 1;
+        it->second = std::to_string(count);
+      }
+      auto count_str = std::to_string(count);
+      result.detailed_occurrences.push_back(
+          OptionOccurrence{_key, count_str, false, false, std::string(_raw)});
+      result.occurrences.emplace_back(std::move(_key), std::move(count_str));
+      return true;
+    }
+    result.detailed_occurrences.push_back(OptionOccurrence{
+        _key,
+        _negated ? std::string(_raw_val) : _val,
+        _has_value,
+        _negated,
+        std::string(_raw),
+    });
     result.occurrences.emplace_back(_key, _val);
     const auto it = result.named.find(_key);
     if (it == result.named.end()) {
@@ -130,16 +159,18 @@ inline rfl::Result<ParsedArgs> parse_string_views(
   };
 
   const auto add_short = [&](std::string _key, std::string _val,
-                             const Option& _option,
-                             std::string_view _raw) -> rfl::Result<bool> {
-    if (_option.is_list
+                             const Option& _option, std::string_view _raw,
+                             const bool _has_value = false) -> rfl::Result<bool> {
+    if (_option.is_list || _option.is_counter
         || (_options.last_value_wins && _option.kind != OptionKind::unknown)) {
       // Under its long name, so that `-r a --report b` keeps argv order and
-      // LastValueWins resolves short/long overrides cleanly.
+      // LastValueWins / Counter resolve short/long occurrences cleanly.
       return add_long(*_options.find_short_target(_key),
-                      std::move(_val), _option, _raw);
+                      std::move(_val), _option, _raw, _has_value, false);
     }
     if (const auto* target = _options.find_short_target(_key)) {
+      result.detailed_occurrences.push_back(
+          OptionOccurrence{*target, _val, _has_value, false, std::string(_raw)});
       result.occurrences.emplace_back(*target, _val);
     }
     result.short_order.emplace_back(_key);
@@ -172,10 +203,10 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         return std::string(_args[++*_i]);
 
       case OptionKind::flag:
-        // -f false: a flag takes a bool literal unless PureFlags is set. Any
-        // other token stays where it is, so `-v input.txt` leaves "input.txt"
-        // positional.
-        if (!_options.pure_flags && has_next
+        // -f false: a flag takes a bool literal unless PureFlags or Counter is
+        // set. Any other token stays where it is, so `-v input.txt` leaves
+        // "input.txt" positional.
+        if (!_options.pure_flags && !_option.is_counter && has_next
             && is_bool_literal(_args[*_i + 1])) {
           return std::string(_args[++*_i]);
         }
@@ -215,9 +246,15 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       continue;
     }
 
-    // Long argument: --key=value, --key value or --flag.
-    if (arg_raw.starts_with("--")) {
-      const auto arg = arg_raw.substr(2);
+    // Long argument: --key=value, --key value or --flag (and single-dash long
+    // options -key=value / -key when SingleDashLong is enabled).
+    const bool is_double_dash = arg_raw.starts_with("--");
+    const bool is_single_dash_long =
+        !is_double_dash && _options.single_dash_long && arg_raw.size() >= 2
+        && arg_raw[0] == '-'
+        && (looks_like_option(arg_raw) || negative_numbers_are_options);
+    if (is_double_dash || is_single_dash_long) {
+      const auto arg = arg_raw.substr(is_double_dash ? 2 : 1);
       const auto eq = arg.find('=');
       auto key = std::string(
           eq == std::string_view::npos ? arg : arg.substr(0, eq));
@@ -227,7 +264,31 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       if (key.empty()) {
         return error("Empty key in argument: " + std::string(arg_raw));
       }
+      bool negated = false;
+      if (const auto* canonical = _options.find_long_alias(key)) {
+        key = *canonical;
+      }
       auto option = find_long(key);
+      if (option.kind == OptionKind::unknown) {
+        if (const auto* neg_target = _options.find_negated_option(key)) {
+          key = *neg_target;
+          option = find_long(key);
+          negated = true;
+        } else if (_options.allow_universal_negation
+                   && !_options.negation_prefix.empty()
+                   && key.size() > _options.negation_prefix.size()
+                   && key.starts_with(_options.negation_prefix)) {
+          const auto stripped =
+              std::string_view(key).substr(_options.negation_prefix.size());
+          const auto stripped_opt = find_long(stripped);
+          if (stripped_opt.kind != OptionKind::unknown
+              || !_options.reject_unknown) {
+            key = std::string(stripped);
+            option = stripped_opt;
+            negated = true;
+          }
+        }
+      }
       if (option.kind == OptionKind::unknown && _options.allow_abbreviations) {
         // --rep for --report: a prefix of exactly one long option.
         const auto names = _options.find_abbreviations(key);
@@ -240,25 +301,43 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         }
       }
       if (option.kind == OptionKind::unknown && _options.reject_unknown) {
-        return error("Unknown option '--" + key + "'.");
+        return error("Unknown option '"
+                     + std::string(is_double_dash ? "--" : "-") + key + "'.");
       }
       if (eq != std::string_view::npos) {
         record_sensitive(option, eq_val);
       }
       bool consume_multi = false;
-      if (eq == std::string_view::npos && option.kind == OptionKind::value
-          && _options.separate_values) {
+      bool has_value = eq != std::string_view::npos;
+      if (negated) {
+        if (!has_value) {
+          val = "false";
+        } else {
+          val = (eq_val == "0" || eq_val == "false") ? "true" : "false";
+        }
+      }
+      else if (eq == std::string_view::npos && option.kind == OptionKind::flag
+               && !option.is_counter && _options.bool_value_tokens
+               && i + 1 < _args.size() && is_bool_literal(_args[i + 1])) {
+        val = std::string(_args[++i]);
+        has_value = true;
+      }
+      else if (eq == std::string_view::npos && option.kind == OptionKind::value
+               && _options.separate_values) {
         // --key value (rfl::cli::SeparateOptionValues). A flag never takes
         // the next token: `--verbose 0` leaves "0" positional.
         // The message names the option that `key` abbreviates.
-        auto v = take_value(option, "--" + key, &i);
+        auto v = take_value(
+            option, std::string(is_double_dash ? "--" : "-") + key, &i);
         if (!v) { return error(v.error().what()); }
         val = std::move(*v);
+        has_value = true;
         consume_multi = option.multi_token;
       }
       else if (eq == std::string_view::npos && option.kind == OptionKind::value
                && _options.require_equals) {
-        return error("Missing value for option '--" + key + "'.");
+        return error("Missing value for option '"
+                     + std::string(is_double_dash ? "--" : "-") + key + "'.");
       }
       else if (eq == std::string_view::npos
                && option.kind == OptionKind::implicit_value) {
@@ -266,13 +345,14 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         // implicit value.
         val = std::string(option.implicit_value);
       }
-      const auto r = add_long(key, std::move(val), option, arg_raw);
+      const auto r = add_long(key, std::move(val), option, arg_raw, has_value,
+                              negated, eq_val);
       if (!r) { return error(r.error().what()); }
       while (consume_multi && i + 1 < _args.size() && _args[i + 1] != "--"
              && !looks_like_option(_args[i + 1])) {
         record_sensitive(option, _args[i + 1]);
         const auto r2 =
-            add_long(key, std::string(_args[++i]), option, arg_raw);
+            add_long(key, std::string(_args[++i]), option, arg_raw, true, false);
         if (!r2) { return error(r2.error().what()); }
       }
       continue;

@@ -102,8 +102,7 @@ rfl::Result<T> read_parsed(ParsedArgs _parsed, const Options& _options) {
 /// (see make_options) and returns ParsedArgs, and turns them into ReadResult<T>.
 template <class T, class... Ps, class ParseFn>
 rfl::Result<ReadResult<T>> parse_and_read_detailed(const ParseFn& _parse) {
-  using ProcessorsType =
-      rfl::internal::flatten_processors_t<SnakeCaseToKebabCase, Ps...>;
+  using ProcessorsType = internal::cli_processors_t<Ps...>;
   static_assert(!internal::has_app_v<ProcessorsType>,
                 "rfl::cli::App turns on --help and --version, which "
                 "rfl::cli::read_detailed cannot report. Call rfl::cli::read_app "
@@ -121,8 +120,7 @@ rfl::Result<ReadResult<T>> parse_and_read_detailed(const ParseFn& _parse) {
 /// (see make_options) and returns ParsedArgs, and turns them into a struct.
 template <class T, class... Ps, class ParseFn>
 rfl::Result<T> parse_and_read(const ParseFn& _parse) {
-  using ProcessorsType =
-      rfl::internal::flatten_processors_t<SnakeCaseToKebabCase, Ps...>;
+  using ProcessorsType = internal::cli_processors_t<Ps...>;
   static_assert(!internal::has_app_v<ProcessorsType>,
                 "rfl::cli::App turns on --help and --version, which "
                 "rfl::cli::read cannot report. Call rfl::cli::read_app "
