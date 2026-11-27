@@ -1,6 +1,7 @@
 #ifndef RFL_PARSING_PARSER_SHORT_HPP_
 #define RFL_PARSING_PARSER_SHORT_HPP_
 
+#include <exception>
 #include <map>
 #include <type_traits>
 

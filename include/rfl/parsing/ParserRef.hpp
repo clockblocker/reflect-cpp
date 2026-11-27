@@ -93,9 +93,16 @@ struct ParserRef {
           return error(e.what());
         }
       } else {
-        return Parser<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(_r,
-                                                                          _var)
-            .transform(to_ref);
+        try {
+          auto res = Parser<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(
+              _r, _var);
+          if (!res) {
+            return error(std::move(res).error());
+          }
+          return Ref<T>::make(std::move(*res));
+        } catch (std::exception& e) {
+          return error(e.what());
+        }
       }
     }
   }

@@ -1,6 +1,7 @@
 #ifndef RFL_PARSING_PARSER_OPTIONAL_HPP_
 #define RFL_PARSING_PARSER_OPTIONAL_HPP_
 
+#include <exception>
 #include <map>
 #include <optional>
 #include <type_traits>

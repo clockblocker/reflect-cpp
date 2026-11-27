@@ -227,8 +227,7 @@ class ViewReaderWithDefaultAndStrippedFieldNames {
   static void move_to(Target* _t, Source* _s) {
     if constexpr (!rfl::internal::is_array_v<Source> &&
                   !std::is_array_v<Target>) {
-      if constexpr (std::is_const_v<Target> ||
-                    !std::is_move_assignable_v<Target>) {
+      if constexpr (needs_in_place_reconstruct<Target>()) {
         // The struct was default-constructed (or overlaid), so *_t is a live
         // const / non-move-assignable object (e.g. a nested struct with a
         // const member) and must not be assigned to. Re-create it in place

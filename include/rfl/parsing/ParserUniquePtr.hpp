@@ -1,6 +1,7 @@
 #ifndef RFL_PARSING_PARSER_UNIQUE_PTR_HPP_
 #define RFL_PARSING_PARSER_UNIQUE_PTR_HPP_
 
+#include <exception>
 #include <map>
 #include <memory>
 #include <type_traits>

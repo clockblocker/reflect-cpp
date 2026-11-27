@@ -741,4 +741,54 @@ TEST(json, read_into_nested_and_optional_throwing_const_fields) {
   EXPECT_TRUE(opt_caught_as_error);
 }
 
+struct OuterWithConstWrappedStruct {
+  rfl::Rename<"cfg", const InnerWithConst> cfg;
+  rfl::Description<"desc", InnerWithConst> described;
+};
+
+struct ThrowingConstReflWrapper {
+  using ReflectionType = WithThrowingConstField;
+  const ThrowingCopyPayload payload;
+
+  ThrowingConstReflWrapper(const ThrowingConstReflWrapper&) = default;
+  explicit ThrowingConstReflWrapper(const WithThrowingConstField& _r)
+      : payload(_r.payload) {}
+
+  WithThrowingConstField reflection() const {
+    return WithThrowingConstField{.payload = payload};
+  }
+};
+
+TEST(json, read_into_wrapper_over_const_struct_and_refl_throw_safety) {
+  const OuterWithConstWrappedStruct base{
+      .cfg = InnerWithConst{.id = 10, .port = 8080},
+      .described = InnerWithConst{.id = 20, .port = 7070},
+  };
+  const auto merged = rfl::json::read_into(
+      base, R"({"cfg":{"port":9090},"described":{"port":6060}})");
+  ASSERT_TRUE(merged.has_value()) << merged.error().what();
+  EXPECT_EQ(merged->cfg.value().id, 10);
+  EXPECT_EQ(merged->cfg.value().port, 9090);
+  EXPECT_EQ(merged->described.value().id, 20);
+  EXPECT_EQ(merged->described.value().port, 6060);
+
+  // ReflectionType wrapper whose move ctor is non-noexcept (copies const
+  // ThrowingCopyPayload) must convert exceptions in wrap_in_t into Error
+  // rather than calling std::terminate().
+  bool refl_caught = false;
+  for (int budget = 0; budget <= 12; ++budget) {
+    try {
+      const auto res = rfl::json::read_into(
+          ThrowingConstReflWrapper(WithThrowingConstField{
+              .payload = ThrowingCopyPayload(7, true, budget)}),
+          R"({"payload":{"value":99}})");
+      if (!res.has_value()) {
+        refl_caught = true;
+      }
+    } catch (const std::runtime_error&) {
+    }
+  }
+  EXPECT_TRUE(refl_caught);
+}
+
 }  // namespace test_read_into
