@@ -3,10 +3,24 @@
 
 #include <type_traits>
 
-#include "../Alias.hpp"
 #include "StringLiteral.hpp"
 
-namespace rfl::internal {
+namespace rfl {
+
+template <internal::StringLiteral _name, class T>
+struct Alias;
+
+namespace internal {
+
+template <class T>
+class is_alias : public std::false_type {};
+
+template <StringLiteral _name, class Type>
+class is_alias<Alias<_name, Type>> : public std::true_type {};
+
+template <class T>
+constexpr bool is_alias_v =
+    is_alias<std::remove_cvref_t<std::remove_pointer_t<T>>>::value;
 
 template <class T>
 struct remove_alias {
@@ -22,6 +36,7 @@ template <class T>
 using remove_alias_t =
     typename remove_alias<std::remove_cvref_t<std::remove_pointer_t<T>>>::Type;
 
-}  // namespace rfl::internal
+}  // namespace internal
+}  // namespace rfl
 
 #endif

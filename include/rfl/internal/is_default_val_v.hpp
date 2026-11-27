@@ -6,11 +6,7 @@
 
 #include "../Alias.hpp"
 #include "../DefaultVal.hpp"
-#include "../Deprecated.hpp"
-#include "../Description.hpp"
-#include "../Positional.hpp"
 #include "../Rename.hpp"
-#include "../Short.hpp"
 #include "StringLiteral.hpp"
 
 namespace rfl::internal {
@@ -30,23 +26,6 @@ class is_default_val<Rename<_new_name, T>>
 
 template <class T, internal::StringLiteral _alias_name>
 class is_default_val<Alias<_alias_name, T>>
-    : public is_default_val<std::remove_cvref_t<T>> {};
-
-template <class T, internal::StringLiteral _short_name>
-class is_default_val<Short<_short_name, T>>
-    : public is_default_val<std::remove_cvref_t<T>> {};
-
-template <class T>
-class is_default_val<Positional<T>>
-    : public is_default_val<std::remove_cvref_t<T>> {};
-
-template <class T, internal::StringLiteral _description>
-class is_default_val<Description<_description, T>>
-    : public is_default_val<std::remove_cvref_t<T>> {};
-
-template <class T, internal::StringLiteral _deprecation_message,
-          internal::StringLiteral _description>
-class is_default_val<Deprecated<_deprecation_message, _description, T>>
     : public is_default_val<std::remove_cvref_t<T>> {};
 
 template <class T>

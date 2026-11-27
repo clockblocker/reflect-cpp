@@ -11,7 +11,7 @@ namespace test_cli_alias {
 struct ServerConfig {
   rfl::Alias<"download_dir", rfl::Alias<"downloadDir", std::string>>
       download_dir;
-  rfl::Short<"v", rfl::Alias<"debug", rfl::DefaultVal<bool>>> verbose = false;
+  rfl::Alias<"debug", rfl::DefaultVal<rfl::Short<"v", bool>>> verbose = false;
   rfl::Alias<"listen-port", rfl::DefaultVal<int>> port = 8080;
   rfl::Positional<rfl::Alias<"src", std::optional<std::string>>> input;
 };
@@ -45,29 +45,46 @@ TEST(cli, test_alias_basic_and_no_extra_fields) {
 }
 
 TEST(cli, test_alias_conflicts_rejected) {
-  // Primary + alias conflict.
+  // Primary + alias conflict names both flags actually passed.
   const auto c1 = rfl::cli::read<ServerConfig>(
       {"--download-dir=/a", "--download_dir=/b"});
-  EXPECT_FALSE(c1);
+  ASSERT_FALSE(c1);
+  EXPECT_NE(c1.error().what().find("--download-dir"), std::string::npos)
+      << c1.error().what();
+  EXPECT_NE(c1.error().what().find("--download_dir"), std::string::npos)
+      << c1.error().what();
 
-  // Two aliases of the same field conflict.
+  // Two aliases of the same field conflict and name the two aliases passed
+  // (NOT the canonical flag --download-dir).
   const auto c2 = rfl::cli::read<ServerConfig>(
       {"--download_dir=/a", "--downloadDir=/b"});
-  EXPECT_FALSE(c2);
+  ASSERT_FALSE(c2);
+  EXPECT_NE(c2.error().what().find("--download_dir"), std::string::npos)
+      << c2.error().what();
+  EXPECT_NE(c2.error().what().find("--downloadDir"), std::string::npos)
+      << c2.error().what();
+  EXPECT_EQ(c2.error().what().find("--download-dir"), std::string::npos)
+      << c2.error().what();
 
-  // Short flag + alias conflict.
+  // Short flag + alias conflict names the alias passed.
   const auto c3 = rfl::cli::read<ServerConfig>(
       {"--download-dir=/a", "-v", "--debug"});
-  EXPECT_FALSE(c3);
+  ASSERT_FALSE(c3);
+  EXPECT_NE(c3.error().what().find("-v"), std::string::npos)
+      << c3.error().what();
+  EXPECT_NE(c3.error().what().find("--debug"), std::string::npos)
+      << c3.error().what();
 
-  // Positional + alias conflict.
+  // Positional + alias conflict names the alias passed.
   const auto c4 = rfl::cli::read<ServerConfig>(
       {"--download-dir=/a", "pos.txt", "--src=other.txt"});
-  EXPECT_FALSE(c4);
+  ASSERT_FALSE(c4);
+  EXPECT_NE(c4.error().what().find("--src"), std::string::npos)
+      << c4.error().what();
 }
 
 struct AliasWrappingShortAndPositional {
-  rfl::Alias<"old-flag", rfl::Short<"f", rfl::DefaultVal<bool>>> flag = false;
+  rfl::Alias<"old-flag", rfl::DefaultVal<rfl::Short<"f", bool>>> flag = false;
   rfl::Alias<"old-file", rfl::Positional<std::string>> file;
 };
 
