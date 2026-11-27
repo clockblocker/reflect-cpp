@@ -252,33 +252,40 @@ struct NamedTupleParser {
                                   OutputObjectOrArrayType* _ptr) {
     using FieldType = internal::nth_element_t<_i, FieldTypes...>;
     using ValueType = std::remove_cvref_t<typename FieldType::Type>;
-    const auto value = rfl::get<_i>(_tup);
-    if constexpr (internal::is_extra_fields_v<ValueType>) {
-      for (const auto& [k, v] : *value) {
-        const auto new_parent = make_parent(k, _ptr);
-        Parser<R, W, std::remove_cvref_t<decltype(v)>, ProcessorsType>::write(
-            _w, v, new_parent);
-      }
-    } else if constexpr (!_all_required && !_no_field_names &&
-                         !is_required<ValueType, _ignore_empty_containers>()) {
-      constexpr auto name = FieldType::name_.string_view();
-      const auto new_parent = make_parent(name, _ptr);
-      if (!is_empty(value)) {
+    if constexpr (!_no_field_names &&
+                  internal::skip_serialization_v<ValueType>) {
+      return;
+    } else {
+      const auto value = rfl::get<_i>(_tup);
+      if constexpr (internal::is_extra_fields_v<ValueType>) {
+        for (const auto& [k, v] : *value) {
+          const auto new_parent = make_parent(k, _ptr);
+          Parser<R, W, std::remove_cvref_t<decltype(v)>, ProcessorsType>::write(
+              _w, v, new_parent);
+        }
+      } else if constexpr (!_all_required && !_no_field_names &&
+                           !is_required<ValueType,
+                                        _ignore_empty_containers>()) {
+        constexpr auto name = FieldType::name_.string_view();
+        const auto new_parent = make_parent(name, _ptr);
+        if (!is_empty(value)) {
+          if constexpr (internal::is_attribute_v<ValueType>) {
+            Parser<R, W, ValueType, ProcessorsType>::write(
+                _w, value, new_parent.as_attribute());
+          } else {
+            Parser<R, W, ValueType, ProcessorsType>::write(_w, value,
+                                                           new_parent);
+          }
+        }
+      } else {
+        constexpr auto name = FieldType::name_.string_view();
+        const auto new_parent = make_parent(name, _ptr);
         if constexpr (internal::is_attribute_v<ValueType>) {
           Parser<R, W, ValueType, ProcessorsType>::write(
               _w, value, new_parent.as_attribute());
         } else {
           Parser<R, W, ValueType, ProcessorsType>::write(_w, value, new_parent);
         }
-      }
-    } else {
-      constexpr auto name = FieldType::name_.string_view();
-      const auto new_parent = make_parent(name, _ptr);
-      if constexpr (internal::is_attribute_v<ValueType>) {
-        Parser<R, W, ValueType, ProcessorsType>::write(
-            _w, value, new_parent.as_attribute());
-      } else {
-        Parser<R, W, ValueType, ProcessorsType>::write(_w, value, new_parent);
       }
     }
   }
@@ -290,7 +297,8 @@ struct NamedTupleParser {
       View* _view) noexcept {
     using F = internal::nth_element_t<_i, FieldTypes...>;
     using U = std::remove_cvref_t<typename F::Type>;
-    if constexpr (!internal::is_skip_v<U> && !internal::is_extra_fields_v<U>) {
+    if constexpr (!internal::skip_serialization_v<U> &&
+                  !internal::is_extra_fields_v<U>) {
       // Add default value here
       auto s = Parser<R, W, U, ProcessorsType>::to_schema(_definitions);
       if constexpr (!std::is_same_v<View, void> && internal::CanEmitDefault<U>) {
@@ -353,6 +361,7 @@ struct NamedTupleParser {
           internal::is_default_val_v<ValueType>;
       constexpr bool is_required_field =
           !is_default_val_field && !internal::is_extra_fields_v<ValueType> &&
+          !internal::skip_deserialization_v<ValueType> &&
           (_all_required || is_required<ValueType, _ignore_empty_containers>());
 
       // Without _set, the struct was default-constructed before it was read,

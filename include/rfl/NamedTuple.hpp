@@ -14,6 +14,7 @@
 #include "internal/StringLiteral.hpp"
 #include "internal/find_index.hpp"
 #include "internal/is_extra_fields.hpp"
+#include "internal/no_duplicate_field_names.hpp"
 #include "make_field.hpp"
 #include "make_from_tuple.hpp"
 #include "tuple_cat.hpp"
@@ -45,6 +46,9 @@ class NamedTuple {
   using Fields = rfl::Tuple<std::remove_cvref_t<FieldTypes>...>;
   using Names = Literal<std::remove_cvref_t<FieldTypes>::name_...>;
   using Values = rfl::Tuple<typename std::remove_cvref_t<FieldTypes>::Type...>;
+
+  static_assert(internal::no_duplicate_field_names<Fields>(),
+                "Duplicate field names are not allowed in named tuples.");
 
  public:
   /// @brief Construct NamedTuple from values of each field type.

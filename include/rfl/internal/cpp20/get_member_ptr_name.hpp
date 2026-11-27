@@ -66,7 +66,10 @@ using ptr_type_t = member_type_helper<T>::ptr_type;
 template <auto ptr>
 consteval auto get_member_ptr_name() {
   using Type = ptr_type_t<decltype(ptr)>;
-  if constexpr (is_rename_v<Type> || is_field_v<Type>) {
+  if constexpr (has_rename_v<Type>) {
+    using Name = typename rename_traits<Type>::Name;
+    return lit_name_v<Name>;
+  } else if constexpr (is_field_v<Type>) {
     using Name = typename Type::Name;
     return lit_name_v<Name>;
   } else {
