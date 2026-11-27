@@ -15,7 +15,8 @@ namespace rfl::parsing {
 template <class T>
   requires internal::is_safe_default_constructible_v<T>
 Result<T> default_construct() noexcept {
-  if constexpr (std::is_nothrow_default_constructible_v<T>) {
+  if constexpr (std::is_nothrow_default_constructible_v<T> &&
+                std::is_nothrow_move_constructible_v<T>) {
     return T{};
   } else {
     try {

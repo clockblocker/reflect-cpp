@@ -5,6 +5,8 @@
 #include <exception>
 #include <map>
 #include <memory>
+#include <new>
+#include <optional>
 #include <sstream>
 #include <type_traits>
 #include <utility>
@@ -425,40 +427,48 @@ struct NamedTupleParser {
             using NonConstT = std::remove_const_t<ValueType>;
             if constexpr (internal::is_safe_default_constructible_v<NonConstT>) {
               auto* const ptr = const_cast<NonConstT*>(rfl::get<_i>(_view));
-              const auto reset = [&]() {
-                if constexpr (std::is_const_v<ValueType> ||
-                              !std::is_move_assignable_v<NonConstT>) {
-                  if constexpr (std::is_nothrow_default_constructible_v<
-                                    NonConstT>) {
-                    std::destroy_at(ptr);
-                    ::new (ptr) NonConstT{};
-                  } else if constexpr (std::is_move_constructible_v<
-                                           NonConstT>) {
-                    NonConstT tmp{};
-                    std::destroy_at(ptr);
-                    ::new (ptr) NonConstT(std::move(tmp));
-                  }
-                } else {
-                  *ptr = NonConstT{};
-                }
+              const auto record_reset_error = [&](const std::string& _msg) {
+                constexpr auto current_name =
+                    internal::nth_element_t<_i, FieldTypes...>::name();
+                _errors->emplace_back(make_nested_error(
+                    std::string(current_name),
+                    "Field named '" + std::string(current_name) +
+                        "' not found, and its default value could not be "
+                        "constructed: " +
+                        _msg));
               };
-              if constexpr (std::is_nothrow_default_constructible_v<NonConstT> &&
-                            (std::is_const_v<ValueType> ||
-                             !std::is_move_assignable_v<NonConstT> ||
-                             std::is_nothrow_move_assignable_v<NonConstT>)) {
-                reset();
+              if constexpr (std::is_const_v<ValueType> ||
+                            !std::is_move_assignable_v<NonConstT>) {
+                if constexpr (std::is_nothrow_default_constructible_v<
+                                  NonConstT>) {
+                  std::destroy_at(ptr);
+                  ::new (ptr) NonConstT{};
+                } else if constexpr (std::is_nothrow_move_constructible_v<
+                                         NonConstT>) {
+                  std::optional<NonConstT> tmp;
+                  try {
+                    tmp.emplace();
+                  } catch (std::exception& e) {
+                    record_reset_error(e.what());
+                    return;
+                  }
+                  std::destroy_at(ptr);
+                  ::new (ptr) NonConstT(std::move(*tmp));
+                } else {
+                  record_reset_error(
+                      "cannot safely reset a const or non-move-assignable "
+                      "field whose default and move constructors may throw.");
+                }
+              } else if constexpr (std::is_nothrow_default_constructible_v<
+                                       NonConstT> &&
+                                   std::is_nothrow_move_assignable_v<
+                                       NonConstT>) {
+                *ptr = NonConstT{};
               } else {
                 try {
-                  reset();
+                  *ptr = NonConstT{};
                 } catch (std::exception& e) {
-                  constexpr auto current_name =
-                      internal::nth_element_t<_i, FieldTypes...>::name();
-                  _errors->emplace_back(make_nested_error(
-                      std::string(current_name),
-                      "Field named '" + std::string(current_name) +
-                          "' not found, and its default value could not be "
-                          "constructed: " +
-                          e.what()));
+                  record_reset_error(e.what());
                 }
               }
             }

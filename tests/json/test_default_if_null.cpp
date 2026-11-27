@@ -736,32 +736,67 @@ struct AggregateWithNoDefaultDmi {
   int y = 7;
 };
 
-struct ThrowingDefault {
-  using ReflectionType = int;
+struct ThrowingNullableOpt {
+  using ReflectionType = std::optional<int>;
   static inline int live_count = 0;
   static inline bool should_throw = false;
-  int v = 0;
+  std::optional<int> v = std::nullopt;
 
-  ThrowingDefault() {
+  ThrowingNullableOpt() {
     if (should_throw) {
       throw std::runtime_error("default ctor failed");
     }
     ++live_count;
   }
-  explicit ThrowingDefault(int _v) : v(_v) { ++live_count; }
-  ThrowingDefault(const ThrowingDefault& _o) : v(_o.v) { ++live_count; }
-  ThrowingDefault(ThrowingDefault&& _o) noexcept : v(_o.v) { ++live_count; }
-  ThrowingDefault& operator=(const ThrowingDefault&) = default;
-  ThrowingDefault& operator=(ThrowingDefault&&) noexcept = default;
-  ~ThrowingDefault() { --live_count; }
+  explicit ThrowingNullableOpt(std::optional<int> _v) : v(_v) { ++live_count; }
+  ThrowingNullableOpt(const ThrowingNullableOpt& _o) : v(_o.v) { ++live_count; }
+  ThrowingNullableOpt(ThrowingNullableOpt&& _o) noexcept : v(_o.v) {
+    ++live_count;
+  }
+  ThrowingNullableOpt& operator=(const ThrowingNullableOpt&) = default;
+  ThrowingNullableOpt& operator=(ThrowingNullableOpt&&) noexcept = default;
+  ~ThrowingNullableOpt() { --live_count; }
 
-  int reflection() const { return v; }
+  const std::optional<int>& reflection() const { return v; }
 };
 
-struct WithConstThrowingNullableVariant {
+struct ThrowingMoveNullableOpt {
+  using ReflectionType = std::optional<int>;
+  static inline int live_count = 0;
+  std::optional<int> v = std::nullopt;
+
+  ThrowingMoveNullableOpt() noexcept(false) { ++live_count; }
+  explicit ThrowingMoveNullableOpt(std::optional<int> _v) : v(_v) {
+    ++live_count;
+  }
+  ThrowingMoveNullableOpt(const ThrowingMoveNullableOpt& _o) : v(_o.v) {
+    ++live_count;
+  }
+  ThrowingMoveNullableOpt(ThrowingMoveNullableOpt&& _o) noexcept(false)
+      : v(_o.v) {
+    ++live_count;
+  }
+  ThrowingMoveNullableOpt& operator=(const ThrowingMoveNullableOpt&) = default;
+  ThrowingMoveNullableOpt& operator=(ThrowingMoveNullableOpt&&) = default;
+  ~ThrowingMoveNullableOpt() { --live_count; }
+
+  const std::optional<int>& reflection() const { return v; }
+};
+
+struct WithConstThrowingNullableOpt {
   int keep = 1;
-  const std::variant<ThrowingDefault, std::optional<int>> v =
-      std::optional<int>(5);
+  const ThrowingNullableOpt opt = ThrowingNullableOpt(5);
+};
+
+struct WithConstThrowingMoveNullableOpt {
+  int keep = 1;
+  const ThrowingMoveNullableOpt opt = ThrowingMoveNullableOpt(5);
+};
+
+struct WithRawPtrDefault {
+  static inline int sentinel = 123;
+  int keep = 7;
+  int* ptr = &sentinel;
 };
 
 TEST(json, test_default_if_null_aggregate_dmi_and_const_throw_safety) {
@@ -778,19 +813,61 @@ TEST(json, test_default_if_null_aggregate_dmi_and_const_throw_safety) {
   EXPECT_EQ(agg.value().x.v, 42);
   EXPECT_EQ(agg.value().y, 7);
 
+  // Omitted const nullable field resets cleanly from DMI (5) to default
+  // (std::nullopt) when default construction succeeds.
+  ThrowingNullableOpt::live_count = 0;
+  ThrowingNullableOpt::should_throw = false;
+  {
+    const auto ok =
+        rfl::json::read<WithConstThrowingNullableOpt, rfl::DefaultIfNull>(
+            R"({"keep": 9})");
+    ASSERT_TRUE(ok.has_value()) << ok.error().what();
+    EXPECT_EQ(ok.value().keep, 9);
+    EXPECT_FALSE(ok.value().opt.v.has_value());
+  }
+  EXPECT_EQ(ThrowingNullableOpt::live_count, 0);
+
   // If resetting an omitted const nullable field throws during default
-  // construction, the original live subobject must remain intact (no double
-  // destruction when the struct unwinds).
-  ThrowingDefault::live_count = 0;
-  ThrowingDefault::should_throw = true;
+  // construction, the error is reported and the original live subobject
+  // remains intact (no double destruction when the struct unwinds).
+  ThrowingNullableOpt::live_count = 0;
+  ThrowingNullableOpt::should_throw = true;
   {
     const auto res =
-        rfl::json::read<WithConstThrowingNullableVariant, rfl::DefaultIfNull>(
+        rfl::json::read<WithConstThrowingNullableOpt, rfl::DefaultIfNull>(
             R"({"keep": 9})");
-    EXPECT_FALSE(res.has_value());
+    ASSERT_FALSE(res.has_value());
+    EXPECT_NE(res.error().what().find("default ctor failed"),
+              std::string::npos)
+        << res.error().what();
   }
-  ThrowingDefault::should_throw = false;
-  EXPECT_EQ(ThrowingDefault::live_count, 0);
+  ThrowingNullableOpt::should_throw = false;
+  EXPECT_EQ(ThrowingNullableOpt::live_count, 0);
+
+  // A const nullable field whose default and move constructors may both throw
+  // must not be destroyed before replacement; it returns an error cleanly and
+  // unwinds with balanced live_count.
+  ThrowingMoveNullableOpt::live_count = 0;
+  {
+    const auto res =
+        rfl::json::read<WithConstThrowingMoveNullableOpt, rfl::DefaultIfNull>(
+            R"({"keep": 9})");
+    ASSERT_FALSE(res.has_value());
+    EXPECT_NE(res.error().what().find("cannot safely reset"),
+              std::string::npos)
+        << res.error().what();
+  }
+  EXPECT_EQ(ThrowingMoveNullableOpt::live_count, 0);
+
+  // Raw pointers under AllowRawPtrs + DefaultIfNull decode explicit null as
+  // nullptr (overriding a non-null DMI) while non-nullable fields keep their
+  // in-class default.
+  const auto raw_res =
+      rfl::json::read<WithRawPtrDefault, rfl::AllowRawPtrs, rfl::DefaultIfNull>(
+          R"({"keep": null, "ptr": null})");
+  ASSERT_TRUE(raw_res.has_value()) << raw_res.error().what();
+  EXPECT_EQ(raw_res.value().keep, 7);
+  EXPECT_EQ(raw_res.value().ptr, nullptr);
 }
 
 }  // namespace test_default_if_null
