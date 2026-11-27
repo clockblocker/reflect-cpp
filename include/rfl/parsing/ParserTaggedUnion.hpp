@@ -131,9 +131,9 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
       return Parser<R, W, Variant<AlternativeTypes...>,
                     ProcessorsType>::to_schema(_definitions);
     } else {
-      using VariantType = std::variant<decltype(
-          wrap_if_necessary<AlternativeTypes>(std::declval<AlternativeTypes>()))
-                                           ...>;
+      using VariantType = std::variant<std::remove_cvref_t<decltype(
+          wrap_if_necessary<AlternativeTypes>(
+              std::declval<const AlternativeTypes&>()))>...>;
       auto type =
           Parser<R, W, VariantType, ProcessorsType>::to_schema(_definitions);
       if constexpr (!internal::add_tags_to_variants_v<ProcessorsType> &&
@@ -214,9 +214,9 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
         return wrap_error(stream.str(), std::move(_e));
       };
 
-      using T = tagged_union_wrapper_no_ptr_t<decltype(
-          wrap_if_necessary<AlternativeType>(std::declval<AlternativeType>()
-                                             ))>;
+      using T = tagged_union_wrapper_no_ptr_t<std::remove_cvref_t<decltype(
+          wrap_if_necessary<AlternativeType>(
+              std::declval<const AlternativeType&>()))>>;
 
       *_result = Parser<R, W, T, ProcessorsType>::read(_r, _var)
                      .transform(get_fields)
@@ -293,7 +293,7 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
   /// Generates a wrapped version of the original object, which contains the
   /// tag, if the object doesn't already contain the wrap.
   template <class T>
-  static auto wrap_if_necessary(const T& _val) {
+  static decltype(auto) wrap_if_necessary(const T& _val) {
     if constexpr (named_tuple_t<T>::Names::template contains<
                       _discriminator>()) {
       return _val;

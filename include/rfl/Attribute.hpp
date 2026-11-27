@@ -22,6 +22,7 @@ template <class T>
 struct Attribute {
   using Type = T;
   using ReflectionType = T;
+  static constexpr bool is_transparent_wrapper_ = true;
 
   /// Default constructor.
   Attribute() : value_(Type()) {}

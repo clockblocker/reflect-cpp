@@ -123,7 +123,7 @@ TEST(json, test_json_schema_one_of_processor_leaves_generic) {
       rfl::json::to_schema<rfl::Generic, rfl::VariantsAsOneOf>();
 
   const std::string expected =
-      R"({"$schema":"https://json-schema.org/draft/2020-12/schema","$ref":"#/$defs/rfl__Generic","$defs":{"rfl__Generic":{"anyOf":[{"anyOf":[{"type":"boolean"},{"type":"integer"},{"type":"number"},{"type":"string"},{"type":"object","additionalProperties":{"$ref":"#/$defs/rfl__Generic"}},{"type":"array","items":{"$ref":"#/$defs/rfl__Generic"}}]},{"type":"null"}]}}})";
+      R"({"$schema":"https://json-schema.org/draft/2020-12/schema","$ref":"#/$defs/rfl__Generic","$defs":{"rfl__Generic":{"anyOf":[{"type":"boolean"},{"type":"integer"},{"type":"number"},{"type":"string"},{"type":"object","additionalProperties":{"$ref":"#/$defs/rfl__Generic"}},{"type":"array","items":{"$ref":"#/$defs/rfl__Generic"}},{"type":"null"}]}}})";
 
   EXPECT_EQ(json_schema, expected);
 }

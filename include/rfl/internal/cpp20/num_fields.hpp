@@ -51,31 +51,40 @@ namespace rfl::internal::cpp20 {
 
 template <class Derived>
 struct any_empty_base {
-  any_empty_base(std::size_t);
+  constexpr any_empty_base(std::size_t) noexcept {}
   template <class Base>
     requires(
         std::is_empty_v<std::remove_cvref_t<Base>> &&
         std::is_base_of_v<std::remove_cvref_t<Base>,
                           std::remove_cv_t<Derived>> &&
         !std::is_same_v<std::remove_cvref_t<Base>, std::remove_cv_t<Derived>>)
-  constexpr operator Base&() const noexcept;
+  operator Base&() const noexcept {
+    for (;;) {
+    }
+  }
 };
 
 template <class Derived>
 struct any_base {
-  any_base(std::size_t);
+  constexpr any_base(std::size_t) noexcept {}
   template <class Base>
     requires(
         std::is_base_of_v<std::remove_cvref_t<Base>,
                           std::remove_cv_t<Derived>> &&
         !std::is_same_v<std::remove_cvref_t<Base>, std::remove_cv_t<Derived>>)
-  constexpr operator Base&() const noexcept;
+  operator Base&() const noexcept {
+    for (;;) {
+    }
+  }
 };
 
 struct any {
-  any(std::size_t);
+  constexpr any(std::size_t) noexcept {}
   template <typename T>
-  constexpr operator T() const noexcept;
+  operator T() const noexcept {
+    for (;;) {
+    }
+  }
 };
 
 template <typename T>

@@ -192,16 +192,25 @@ struct Reader {
       return static_cast<T>(value);
 
     } else if constexpr (std::is_integral<std::remove_cvref_t<T>>()) {
-      if (!yyjson_is_int(_var.val_)) {
-        return error("Could not cast to int.", ErrorKind::invalid_type);
+      using U = std::remove_cvref_t<T>;
+      if (yyjson_is_uint(_var.val_)) {
+        const auto value = yyjson_get_uint(_var.val_);
+        if (value > static_cast<uint64_t>(std::numeric_limits<U>::max())) {
+          return error("Integer is out of range for the target type.",
+                       ErrorKind::invalid_value);
+        }
+        return static_cast<T>(value);
       }
-      const auto value = yyjson_get_sint(_var.val_);
-      if (value < std::numeric_limits<std::remove_cvref_t<T>>::min() ||
-          value > std::numeric_limits<std::remove_cvref_t<T>>::max()) {
-        return error("Integer is out of range for the target type.",
-                     ErrorKind::invalid_value);
+      if (yyjson_is_sint(_var.val_)) {
+        const auto value = yyjson_get_sint(_var.val_);
+        if (value < static_cast<int64_t>(std::numeric_limits<U>::min()) ||
+            value > static_cast<int64_t>(std::numeric_limits<U>::max())) {
+          return error("Integer is out of range for the target type.",
+                       ErrorKind::invalid_value);
+        }
+        return static_cast<T>(value);
       }
-      return static_cast<T>(value);
+      return error("Could not cast to int.", ErrorKind::invalid_type);
 
     } else {
       static_assert(rfl::always_false_v<T>, "Unsupported type.");

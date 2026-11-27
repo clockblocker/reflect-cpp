@@ -256,14 +256,23 @@ set(REFLECT_CPP_SOURCES
     src/reflectcpp.cpp
 )
 
+if (PROJECT_IS_TOP_LEVEL)
+    set(_REFLECTCPP_INCLUDE_SYSTEM "")
+else ()
+    set(_REFLECTCPP_INCLUDE_SYSTEM SYSTEM)
+endif ()
+
 target_include_directories(
-    reflectcpp PUBLIC
+    reflectcpp PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_include_directories(
+    reflectcpp ${_REFLECTCPP_INCLUDE_SYSTEM} INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
 
 if (REFLECTCPP_USE_BUNDLED_DEPENDENCIES)
     target_include_directories(
-        reflectcpp PUBLIC
+        reflectcpp SYSTEM PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/rfl/thirdparty>)
 else ()
     if (NOT TARGET ctre::ctre)
@@ -288,10 +297,6 @@ if (_REFLECTCPP_NEEDS_JSON_IMPL)
             src/yyjson.c
         )
         set_source_files_properties(src/yyjson.c PROPERTIES LANGUAGE CXX)
-
-        target_include_directories(
-            reflectcpp PUBLIC
-            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/rfl/thirdparty>)
     else ()
         if (NOT TARGET yyjson::yyjson)
             find_package(yyjson CONFIG REQUIRED)
@@ -458,6 +463,35 @@ if (REFLECTCPP_XML OR REFLECTCPP_CHECK_HEADERS)
     if (NOT TARGET pugixml::pugixml)
         find_package(pugixml CONFIG REQUIRED)
     endif ()
+    set(_rfl_pugixml_queue pugixml::pugixml)
+    set(_rfl_pugixml_visited "")
+    while (_rfl_pugixml_queue)
+        list(POP_FRONT _rfl_pugixml_queue _rfl_pugi_t)
+        if (NOT TARGET ${_rfl_pugi_t})
+            continue()
+        endif ()
+        get_target_property(_rfl_pugi_aliased ${_rfl_pugi_t} ALIASED_TARGET)
+        if (_rfl_pugi_aliased)
+            set(_rfl_pugi_t ${_rfl_pugi_aliased})
+        endif ()
+        if (_rfl_pugi_t IN_LIST _rfl_pugixml_visited)
+            continue()
+        endif ()
+        list(APPEND _rfl_pugixml_visited ${_rfl_pugi_t})
+        get_target_property(_rfl_pugi_inc ${_rfl_pugi_t} INTERFACE_INCLUDE_DIRECTORIES)
+        if (_rfl_pugi_inc)
+            set_property(TARGET ${_rfl_pugi_t} APPEND PROPERTY
+                INTERFACE_SYSTEM_INCLUDE_DIRECTORIES ${_rfl_pugi_inc})
+        endif ()
+        get_target_property(_rfl_pugi_links ${_rfl_pugi_t} INTERFACE_LINK_LIBRARIES)
+        if (_rfl_pugi_links)
+            foreach (_rfl_pugi_dep IN LISTS _rfl_pugi_links)
+                if (TARGET ${_rfl_pugi_dep})
+                    list(APPEND _rfl_pugixml_queue ${_rfl_pugi_dep})
+                endif ()
+            endforeach ()
+        endif ()
+    endwhile ()
     target_link_libraries(reflectcpp PUBLIC pugixml::pugixml)
 endif ()
 
