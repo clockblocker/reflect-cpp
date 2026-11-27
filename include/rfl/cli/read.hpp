@@ -29,6 +29,9 @@ template <class T>
 struct ReadResult {
   T value;
   std::vector<std::string> provided;
+  /// Every recognized option occurrence `(canonical_long_name, raw_value)` in
+  /// exact argv order.
+  std::vector<std::pair<std::string, std::string>> occurrences;
 
   /// Returns true if the canonical option or positional name `_name` was
   /// explicitly supplied on the command line.
@@ -68,7 +71,8 @@ rfl::Result<ReadResult<T>> read_parsed_detailed(ParsedArgs _parsed,
                                     &_args.later_occurrences};
         return Parser<T, ProcessorsType>::read(r, var).transform(
             [&](T&& _val) {
-              return ReadResult<T>{std::move(_val), std::move(provided)};
+              return ReadResult<T>{std::move(_val), std::move(provided),
+                                   std::move(_args.occurrences)};
             });
       });
 }
@@ -185,7 +189,10 @@ rfl::Result<T> read(int argc, const char* const argv[]) {
 
 template <class T, class... Ps>
 rfl::Result<T> read(int argc, char* argv[]) {
-  return read<T, Ps...>(argc, static_cast<const char* const*>(argv));
+  return internal::parse_and_read<T, Ps...>(
+      [&](const auto& _options) {
+        return internal::parse_argv(argc, argv, _options);
+      });
 }
 
 /// Parses wide-character command-line arguments into a struct using reflection.
@@ -231,7 +238,10 @@ rfl::Result<ReadResult<T>> read_detailed(int argc, const char* const argv[]) {
 
 template <class T, class... Ps>
 rfl::Result<ReadResult<T>> read_detailed(int argc, char* argv[]) {
-  return read_detailed<T, Ps...>(argc, static_cast<const char* const*>(argv));
+  return internal::parse_and_read_detailed<T, Ps...>(
+      [&](const auto& _options) {
+        return internal::parse_argv(argc, argv, _options);
+      });
 }
 
 template <class T, class... Ps>

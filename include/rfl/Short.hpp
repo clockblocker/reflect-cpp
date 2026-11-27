@@ -19,7 +19,7 @@ struct Short {
   /// The short name.
   static constexpr auto short_name_ = _name;
 
-  static_assert(_name.length == 1, "Short name must be exactly one character.");
+  static_assert(_name.length >= 1, "Short name cannot be empty.");
 
   /// @brief Default constructor.
   /// @details Constructs the underlying value using its default constructor.

@@ -33,12 +33,14 @@
 #include "../internal/processed_t.hpp"
 #include "../parsing/is_string_map.hpp"
 #include "AllowAbbreviations.hpp"
+#include "LastValueWins.hpp"
 #include "Opt.hpp"
 #include "OptionsFirst.hpp"
 #include "Parser.hpp"
 #include "PureFlags.hpp"
-#include "SeparateOptionValues.hpp"
 #include "Reader.hpp"
+#include "RequireEquals.hpp"
+#include "SeparateOptionValues.hpp"
 
 namespace rfl::cli::internal {
 
@@ -80,6 +82,10 @@ struct Option {
   /// Whether a list option consumes multiple space-separated tokens after one
   /// occurrence (rfl::MultiToken).
   bool multi_token = false;
+
+  /// Whether the option carries a sensitive value (rfl::cli::attr::Sensitive)
+  /// that should be overwritten with `'*'` in mutable `char* argv[]`.
+  bool sensitive = false;
 };
 
 /// The options that a target struct accepts, built once per <T, ProcessorsType>
@@ -166,6 +172,14 @@ struct Options {
   /// Whether short boolean flags never consume a following `true`/`false`/`1`/`0`
   /// token (rfl::cli::PureFlags).
   bool pure_flags = false;
+
+  /// Whether repeated non-list options overwrite their previous value instead
+  /// of failing (rfl::cli::LastValueWins).
+  bool last_value_wins = false;
+
+  /// Whether long value options require `=` when `separate_values` is false
+  /// (rfl::cli::RequireEquals).
+  bool require_equals = false;
 
   /// Records one leaf long option along with its optional hidden/group/value_name
   /// metadata. Non-template to avoid per-field template instantiations.
@@ -388,6 +402,7 @@ struct cli_annotations {
   static constexpr bool has_group = false;
   static constexpr bool has_value_name = false;
   static constexpr bool is_multi_token = false;
+  static constexpr bool is_sensitive = false;
   static constexpr size_t num_implicit_value = 0;
   static constexpr rfl::internal::StringLiteral<1> short_name = "";
   static constexpr int count = 0;
@@ -463,6 +478,8 @@ struct cli_annotations<Opt<T, Attrs...>> {
       Info::has_value_name || Inner::has_value_name;
   static constexpr bool is_multi_token =
       Info::is_multi_token || Inner::is_multi_token;
+  static constexpr bool is_sensitive =
+      Info::is_sensitive || Inner::is_sensitive;
   static constexpr size_t num_implicit_value =
       Info::num_implicit_value + Inner::num_implicit_value;
   static constexpr int count = Info::count + Inner::count;
@@ -664,7 +681,8 @@ Option implicit_value_option() {
                 "bool, a std::string or a list, such as "
                 "rfl::ImplicitValue<int, \"1\">.");
   return Option{OptionKind::implicit_value, is_option_list_v<U>,
-                Annotations::implicit_value.string_view()};
+                Annotations::implicit_value.string_view(), false,
+                Annotations::is_sensitive};
 }
 
 /// The option for a field, or a key of a map or of rfl::ExtraFields, with
@@ -686,7 +704,8 @@ Option option_for() {
   }
   else {
     return Option{OptionKind::value, is_option_list_v<U>, {},
-                  cli_annotations_t<T>::is_multi_token};
+                  cli_annotations_t<T>::is_multi_token,
+                  cli_annotations_t<T>::is_sensitive};
   }
 }
 
@@ -792,7 +811,7 @@ void collect_options(const std::string& _prefix, Options* _options) {
           _options->add_leaf_option(
               std::move(path),
               Option{OptionKind::value, is_option_list_v<U>, {},
-                     Ann::is_multi_token},
+                     Ann::is_multi_token, Ann::is_sensitive},
               is_hidden, group_name, value_name);
         }
       }
@@ -870,6 +889,8 @@ Options make_options() {
   options.allow_abbreviations = allow_abbreviations_v<ProcessorsType>;
   options.options_first = options_first_v<ProcessorsType>;
   options.pure_flags = pure_flags_v<ProcessorsType>;
+  options.last_value_wins = last_value_wins_v<ProcessorsType>;
+  options.require_equals = require_equals_v<ProcessorsType>;
   using U = unwrapped_option_t<T, ProcessorsType>;
   if constexpr (_all_paths) {
     collect_value_options<T, ProcessorsType, type_list<>>(&options);
