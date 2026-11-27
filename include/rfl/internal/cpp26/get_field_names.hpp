@@ -13,6 +13,7 @@
 #include "../../Tuple.hpp"
 #include "../StringLiteral.hpp"
 #include "../concat_literals.hpp"
+#include "../is_alias.hpp"
 #include "../is_flatten_field.hpp"
 #include "../is_rename.hpp"
 #include "../is_tagged_union.hpp"

@@ -11,6 +11,7 @@
 #include "../Short.hpp"
 #include "../internal/StringLiteral.hpp"
 #include "../internal/has_reflection_type_v.hpp"
+#include "../internal/is_alias.hpp"
 #include "../internal/is_positional.hpp"
 #include "../internal/is_rename.hpp"
 #include "../internal/is_short.hpp"
@@ -62,6 +63,8 @@ consteval bool is_required() {
   } else if constexpr (internal::is_positional_v<Type>) {
     return is_required<typename Type::Type, _ignore_empty_containers>();
   } else if constexpr (internal::is_short_v<Type>) {
+    return is_required<typename Type::Type, _ignore_empty_containers>();
+  } else if constexpr (internal::is_alias_v<Type>) {
     return is_required<typename Type::Type, _ignore_empty_containers>();
   } else {
     return !(is_never_required_v<Type> ||

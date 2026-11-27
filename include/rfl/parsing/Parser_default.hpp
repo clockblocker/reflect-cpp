@@ -33,6 +33,7 @@
 #include "FlattenedTaggedUnionParser.hpp"
 #include "MapParser.hpp"
 #include "Parent.hpp"
+#include "ParserAlias.hpp"
 #include "ParserArray.hpp"
 #include "ParserAtomic.hpp"
 #include "ParserAtomicFlag.hpp"
@@ -156,6 +157,9 @@ struct Parser {
 
     } else if constexpr (is_rename_v<T>) {
       return ParserRename<R, W, T, ProcessorsType>::read(_r, _var);
+
+    } else if constexpr (is_alias_v<T>) {
+      return ParserAlias<R, W, T, ProcessorsType>::read(_r, _var);
 
     } else if constexpr (is_result_v<T>) {
       return ParserResult<R, W, T, ProcessorsType>::read(_r, _var);
@@ -401,6 +405,10 @@ struct Parser {
       return ParserRename<R, W, T, ProcessorsType>::read_into(_r, _var,
                                                               std::move(_base));
 
+    } else if constexpr (is_alias_v<T>) {
+      return ParserAlias<R, W, T, ProcessorsType>::read_into(_r, _var,
+                                                             std::move(_base));
+
     } else if constexpr (is_result_v<T> || is_expected_v<T> ||
                          is_duration_v<T> || is_filepath_v<T>) {
       return read(_r, _var);
@@ -506,6 +514,9 @@ struct Parser {
         }
       }
 
+    } else if constexpr (internal::has_flattened_tagged_union_v<T>) {
+      return read(_r, _var);
+
     } else {
       return read_struct_into(_r, _var, std::move(_base));
     }
@@ -577,6 +588,9 @@ struct Parser {
 
     } else if constexpr (is_rename_v<T>) {
       ParserRename<R, W, T, ProcessorsType>::write(_w, _var, _parent);
+
+    } else if constexpr (is_alias_v<T>) {
+      ParserAlias<R, W, T, ProcessorsType>::write(_w, _var, _parent);
 
     } else if constexpr (is_duration_v<T>) {
       using U = std::remove_cvref_t<T>;
@@ -750,6 +764,9 @@ struct Parser {
 
     } else if constexpr (is_rename_v<U>) {
       return ParserRename<R, W, U, ProcessorsType>::to_schema(_definitions);
+
+    } else if constexpr (is_alias_v<U>) {
+      return ParserAlias<R, W, U, ProcessorsType>::to_schema(_definitions);
 
     } else if constexpr (is_result_v<U>) {
       return ParserResult<R, W, U, ProcessorsType>::to_schema(_definitions);

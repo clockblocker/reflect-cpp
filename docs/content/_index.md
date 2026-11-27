@@ -16,6 +16,7 @@
   {{< card link="rfl_ref" title="rfl::Box and rfl::Ref" icon="book-open" subtitle="For defining recursive structures.">}}
   {{< card link="timestamps" title="rfl::Timestamp and std::chrono::duration" icon="book-open" subtitle="For serializing and deserializing timestamps and durations.">}}
   {{< card link="rfl_skip" title="rfl::Skip" icon="book-open" subtitle="For skipping fields during serialization and/or deserialization.">}}
+  {{< card link="alias" title="rfl::Alias" icon="book-open" subtitle="For accepting read-only field aliases during deserialization.">}}
   {{< card link="commented" title="rfl::Commented" icon="book-open" subtitle="For adding comments to your serialized format.">}}
   {{< card link="result" title="rfl::Result" icon="book-open" subtitle="For error handling without exceptions.">}}
   {{< card link="standard_containers" title="Standard containers" icon="book-open" subtitle="How reflect-cpp treats containers in the standard library.">}}

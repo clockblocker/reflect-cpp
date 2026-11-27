@@ -87,7 +87,17 @@ inline rfl::Unexpected<Error> too_many_positionals(const size_t _expected,
 inline rfl::Result<std::map<std::string, std::string>> resolve_args(
     ParsedArgs _parsed, const Options& _options
 ) {
-  auto& result = _parsed.named;
+  std::map<std::string, std::string> result;
+  for (auto& [key, val] : _parsed.named) {
+    const auto it = _options.long_aliases.find(key);
+    const auto& target =
+        it == _options.long_aliases.end() ? key : it->second;
+    if (!result.emplace(target, std::move(val)).second) {
+      return rfl::error(
+          "Conflict: '--" + key + "' and '--" + target
+          + "' refer to the same field.");
+    }
+  }
 
   // Merge positional args.
   const auto& positional_names = _options.positionals;

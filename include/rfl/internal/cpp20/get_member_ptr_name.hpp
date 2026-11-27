@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "../StringLiteral.hpp"
+#include "../is_alias.hpp"
 #include "../is_field.hpp"
 #include "../is_rename.hpp"
 #include "../lit_name.hpp"
@@ -66,11 +67,12 @@ using ptr_type_t = member_type_helper<T>::ptr_type;
 template <auto ptr>
 consteval auto get_member_ptr_name() {
   using Type = ptr_type_t<decltype(ptr)>;
+  using UnwrappedType = remove_alias_t<Type>;
   if constexpr (has_rename_v<Type>) {
     using Name = typename rename_traits<Type>::Name;
     return lit_name_v<Name>;
-  } else if constexpr (is_field_v<Type>) {
-    using Name = typename Type::Name;
+  } else if constexpr (is_field_v<UnwrappedType>) {
+    using Name = typename UnwrappedType::Name;
     return lit_name_v<Name>;
   } else {
     using StructType = struct_type_t<decltype(ptr)>;

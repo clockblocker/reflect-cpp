@@ -8,6 +8,8 @@
 
 namespace rfl {
 
+template <internal::StringLiteral _name, class T>
+struct Alias;
 template <class T>
 struct Attribute;
 template <class T>
@@ -94,6 +96,9 @@ struct rename_traits<Positional<T>> : rename_traits<T> {};
 
 template <class T>
 struct rename_traits<Commented<T>> : rename_traits<T> {};
+
+template <StringLiteral _name, class T>
+struct rename_traits<Alias<_name, T>> : rename_traits<T> {};
 
 template <class T>
 struct rename_traits<Attribute<T>> : rename_traits<T> {};

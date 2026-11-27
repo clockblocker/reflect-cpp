@@ -8,6 +8,7 @@
 #include <concepts>
 #include <cstdlib>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -15,6 +16,7 @@
 
 #include "../Result.hpp"
 #include "../Tuple.hpp"
+#include "../internal/field_aliases.hpp"
 #include "../internal/is_skip.hpp"
 
 #if defined(__APPLE__)
@@ -244,13 +246,31 @@ struct Reader {
               std::remove_cvref_t<rfl::tuple_element_t<_i, FieldsType>>;
           if constexpr (!internal::skip_deserialization_v<
                             typename FieldType::Type>) {
-            const auto name = FieldType::name();
-            const auto child_path = _obj.prefix.empty()
-                                        ? std::string(name)
-                                        : _obj.prefix + std::string(name);
+            const std::string primary(FieldType::name());
+            const auto child_path =
+                _obj.prefix.empty() ? primary : _obj.prefix + primary;
             const auto var = InputVarType{.path = child_path};
             if (!is_empty(var)) {
-              _object_reader.read(name, var);
+              _object_reader.read(std::string_view(primary), var);
+            }
+            using Aliases =
+                rfl::internal::field_aliases_t<typename FieldType::Type>;
+            if constexpr (Aliases::size > 0) {
+              std::set<std::string_view> seen_aliases;
+              seen_aliases.insert(FieldType::name());
+              for (const auto alias : Aliases::to_array()) {
+                if (!seen_aliases.insert(alias).second) {
+                  continue;
+                }
+                const std::string alias_str(alias);
+                const auto alias_path = _obj.prefix.empty()
+                                            ? alias_str
+                                            : _obj.prefix + alias_str;
+                const auto alias_var = InputVarType{.path = alias_path};
+                if (!is_empty(alias_var)) {
+                  _object_reader.read(alias, alias_var);
+                }
+              }
             }
           }
         };

@@ -10,6 +10,7 @@
 #include <utility>
 #include <variant>
 
+#include "../Alias.hpp"
 #include "../Attribute.hpp"
 #include "../Box.hpp"
 #include "../Commented.hpp"
@@ -144,6 +145,11 @@ struct value_wrapper : std::false_type {};
 
 template <StringLiteral _name, class V>
 struct value_wrapper<Rename<_name, V>> : std::true_type {
+  using element_type = V;
+};
+
+template <StringLiteral _name, class V>
+struct value_wrapper<Alias<_name, V>> : std::true_type {
   using element_type = V;
 };
 

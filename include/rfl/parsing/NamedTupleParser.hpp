@@ -21,6 +21,7 @@
 #include <expected>
 #endif
 
+#include "../Alias.hpp"
 #include "../Attribute.hpp"
 #include "../Box.hpp"
 #include "../Commented.hpp"
@@ -48,6 +49,7 @@
 #include "../internal/always_inline.hpp"
 #include "../internal/default_if_missing_v.hpp"
 #include "../internal/default_if_null_v.hpp"
+#include "../internal/field_aliases.hpp"
 #include "../internal/has_default_val_v.hpp"
 #include "../internal/has_reflection_method_v.hpp"
 #include "../internal/has_reflection_type_v.hpp"
@@ -201,6 +203,11 @@ template <StringLiteral _name, class T, class Visited>
 struct can_write_generic_impl<Rename<_name, T>, Visited>
     : std::bool_constant<can_write_generic_v<
           T, typename add_visited<Rename<_name, T>, Visited>::type>> {};
+
+template <StringLiteral _name, class T, class Visited>
+struct can_write_generic_impl<Alias<_name, T>, Visited>
+    : std::bool_constant<can_write_generic_v<
+          T, typename add_visited<Alias<_name, T>, Visited>::type>> {};
 
 template <StringLiteral _desc, class T, class Visited>
 struct can_write_generic_impl<Description<_desc, T>, Visited>
@@ -471,6 +478,10 @@ struct NamedTupleParser {
   static_assert(NamedTupleType::pos_extra_fields() == -1 || !_no_field_names,
                 "You cannot use the rfl::NoFieldNames processor if you are "
                 "including rfl::ExtraFields.");
+
+  static_assert(
+      internal::no_alias_collisions<typename NamedTupleType::Fields>(),
+      "Field alias collides with another field's name or alias.");
 
  public:
   /**

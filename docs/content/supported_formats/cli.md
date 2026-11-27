@@ -183,7 +183,7 @@ option in a token treats the next token as it would alone (`-qv false` sets
 ## Combining wrappers
 
 `Short` and `Positional` can be nested with `DefaultVal`, `std::optional`,
-`Description`, `Rename` and `Deprecated` in any order:
+`Description`, `Rename`, `Alias` and `Deprecated` in any order:
 `rfl::Description<"...", rfl::Short<"o", T>>` is `-o`, and
 `rfl::DefaultVal<rfl::Positional<T>>` is positional. Put `rfl::Rename`
 outermost, as in `rfl::Rename<"out", rfl::Short<"o", T>>`; inside other
@@ -226,6 +226,7 @@ leaving out `-o` gives `"out"`.
 | Nested struct | `--parent.child=val` | Dot-separated path |
 | `rfl::Flatten<T>` | fields inlined | No prefix needed |
 | `rfl::Rename<"x", T>` | `--x=val` | Bypasses kebab conversion |
+| `rfl::Alias<"old", T>` | `--old=val` | Read-only long alias (also works with `NoExtraFields`) |
 | `rfl::Positional<T>` | bare token | Matched in declaration order |
 | `rfl::Short<"x", T>` | `-x value`, `-x=value` or `-xvalue` | Single-character alias, can be grouped (`-qv`) |
 

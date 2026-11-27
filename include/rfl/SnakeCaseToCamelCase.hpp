@@ -2,6 +2,7 @@
 #define RFL_SNAKECASETOCAMELCASE_HPP_
 
 #include "Field.hpp"
+#include "internal/is_alias.hpp"
 #include "internal/is_rename.hpp"
 #include "internal/transform_case.hpp"
 
