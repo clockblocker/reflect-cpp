@@ -11,11 +11,13 @@
 
 #include "../Ref.hpp"
 #include "../Tuple.hpp"
+#include "../internal/always_inline.hpp"
 #include "../internal/is_array.hpp"
 #include "../internal/no_duplicate_keys_v.hpp"
 #include "../internal/no_extra_fields_v.hpp"
 #include "FieldErrors.hpp"
 #include "Parser_base.hpp"
+#include "peel_transparent_wrappers.hpp"
 #include "wrap_error.hpp"
 
 namespace rfl::parsing {
@@ -98,33 +100,43 @@ class ViewReaderWithDefault {
   static constexpr size_t size() { return size_; }
 
  private:
-  template <int i>
-  static void assign_if_field_matches(const R& _r,
-                                      const std::string_view& _current_name,
-                                      const auto& _var, auto* _view,
-                                      auto* _errors, auto* _found,
-                                      bool* _already_assigned) {
-    using FieldType = tuple_element_t<i, typename ViewType::Fields>;
-    using OriginalType = typename FieldType::Type;
-    using T =
-        std::remove_cvref_t<std::remove_pointer_t<typename FieldType::Type>>;
-    constexpr auto name = FieldType::name();
-    if (!(*_already_assigned) && !std::get<i>(*_found) &&
-        _current_name == name) {
-      std::get<i>(*_found) = true;
-      *_already_assigned = true;
-      auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
-      if (!res) {
-        _errors->emplace_back(wrap_field_error(name, std::move(res).error()));
-        return;
+  static constexpr auto make_sorted_name_table() {
+    return []<int... _is>(std::integer_sequence<int, _is...>) {
+      std::array<std::pair<std::string_view, int>, sizeof...(_is)> table{
+          std::pair<std::string_view, int>{
+              tuple_element_t<_is, typename ViewType::Fields>::name(), _is}...};
+      for (size_t i = 1; i < table.size(); ++i) {
+        const auto key = table[i];
+        size_t j = i;
+        while (j > 0 && key.first < table[j - 1].first) {
+          table[j] = table[j - 1];
+          --j;
+        }
+        table[j] = key;
       }
-      // Parser::check_deferred_defaults relies on the field being replaced as
-      // a whole.
-      if constexpr (std::is_pointer_v<OriginalType>) {
-        move_to(rfl::get<i>(*_view), &(*res));
-      } else {
-        rfl::get<i>(*_view) = std::move(*res);
+      return table;
+    }(std::make_integer_sequence<int, size_>());
+  }
+
+  static int find_field_index(const std::string_view _name) noexcept {
+    if constexpr (size_ == 0) {
+      return -1;
+    } else {
+      static constexpr auto table = make_sorted_name_table();
+      size_t lo = 0;
+      size_t hi = table.size();
+      while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2;
+        if (table[mid].first < _name) {
+          lo = mid + 1;
+        } else {
+          hi = mid;
+        }
       }
+      if (lo < table.size() && table[lo].first == _name) {
+        return table[lo].second;
+      }
+      return -1;
     }
   }
 
@@ -147,16 +159,47 @@ class ViewReaderWithDefault {
     extra_fields->emplace(std::string(_current_name), std::move(*res));
   }
 
+  template <int _i>
+  static RFL_ALWAYS_INLINE void assign_one_field(
+      const R& _r, const auto& _var, ViewType* _view,
+      FieldErrors<ProcessorsType>* _errors) {
+    using FieldType = tuple_element_t<_i, typename ViewType::Fields>;
+    using OriginalType = typename FieldType::Type;
+    using T = std::remove_cvref_t<std::remove_pointer_t<OriginalType>>;
+    using Peel = peel_transparent<T, R>;
+    auto res = read_field_core<R, W, typename Peel::CoreType, ProcessorsType>(
+        _r, _var, FieldType::name(), _errors);
+    if (!res) [[unlikely]] {
+      return;
+    }
+    // Parser::check_deferred_defaults relies on the field being replaced as
+    // a whole.
+    if constexpr (std::is_pointer_v<OriginalType>) {
+      if constexpr (Peel::peeled) {
+        auto wrapped = Peel::wrap(std::move(*res));
+        move_to(rfl::get<_i>(*_view), &wrapped);
+      } else {
+        move_to(rfl::get<_i>(*_view), &(*res));
+      }
+    } else {
+      rfl::get<_i>(*_view) = Peel::wrap(std::move(*res));
+    }
+  }
+
   template <int... is>
   static void assign_to_matching_field(
       const R& _r, const std::string_view& _current_name, const auto& _var,
       const std::optional<SourceLocation>& _key_loc, auto* _view, auto* _errors,
       auto* _found, std::integer_sequence<int, is...>) {
     bool already_assigned = false;
-
-    (assign_if_field_matches<is>(_r, _current_name, _var, _view, _errors,
-                                 _found, &already_assigned),
-     ...);
+    const int idx = find_field_index(_current_name);
+    if (idx >= 0 && !(*_found)[static_cast<size_t>(idx)]) {
+      (*_found)[static_cast<size_t>(idx)] = true;
+      already_assigned = true;
+      ((idx == is ? (assign_one_field<is>(_r, _var, _view, _errors), true)
+                  : false) ||
+       ...);
+    }
 
     if constexpr (ViewType::pos_extra_fields() != -1) {
       constexpr int pos = ViewType::pos_extra_fields();

@@ -825,7 +825,11 @@ class UsageWalker {
       }
 
       if (def_obj) {
-        auto view = ProcessorsType::template process<S>(rfl::to_view(*def_obj));
+        // Reuse the non-const to_view<S> instantiation already created by read()
+        // instead of duplicating the entire reflection tree for `const S`.
+        // The view is only read through const pointers below.
+        auto view = ProcessorsType::template process<S>(
+            rfl::to_view(const_cast<S&>(*def_obj)));
         using ViewType = decltype(view);
         if (deferred.num() != 0) {
           auto all_check = parsing::DefaultValueCheck{.stop_early = false};
