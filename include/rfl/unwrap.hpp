@@ -4,12 +4,10 @@
 #include <type_traits>
 #include <utility>
 
+#include "internal/TransparentWrapper.hpp"
 #include "internal/is_default_val_v.hpp"
 #include "internal/is_deprecated.hpp"
 #include "internal/is_description.hpp"
-#include "internal/is_group.hpp"
-#include "internal/is_hidden.hpp"
-#include "internal/is_implicit_value.hpp"
 #include "internal/is_positional.hpp"
 #include "internal/is_rename.hpp"
 #include "internal/is_short.hpp"
@@ -22,14 +20,14 @@ template <class T>
 constexpr bool is_metadata_wrapper_v =
     is_default_val_v<T> || is_description_v<T> || is_deprecated_v<T> ||
     is_rename_v<T> || is_short_v<T> || is_positional_v<T> ||
-    is_implicit_value_v<T> || is_hidden_v<T> || is_group_v<T>;
+    is_transparent_wrapper_v<T>;
 
 }  // namespace internal
 
 /// Recursively unwraps reflect-cpp metadata wrappers (DefaultVal, Description,
-/// Deprecated, Rename, Short, Positional, ImplicitValue, Hidden, Group) and
-/// returns a reference to the underlying value. Does not unwrap std::optional,
-/// pointers, or Validator.
+/// Deprecated, Rename, Short, Positional, and all transparent CLI wrappers)
+/// and returns a reference to the underlying value. Does not unwrap
+/// std::optional, pointers, or Validator.
 template <class T>
 constexpr decltype(auto) unwrap(T&& _val) noexcept {
   using U = std::remove_cvref_t<T>;
