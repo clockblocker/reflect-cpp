@@ -731,4 +731,66 @@ TEST(json, test_default_if_null_recursive_and_cyclic_box_ref) {
                    .has_value());
 }
 
+struct AggregateWithNoDefaultDmi {
+  NoDefault x = NoDefault(42);
+  int y = 7;
+};
+
+struct ThrowingDefault {
+  using ReflectionType = int;
+  static inline int live_count = 0;
+  static inline bool should_throw = false;
+  int v = 0;
+
+  ThrowingDefault() {
+    if (should_throw) {
+      throw std::runtime_error("default ctor failed");
+    }
+    ++live_count;
+  }
+  explicit ThrowingDefault(int _v) : v(_v) { ++live_count; }
+  ThrowingDefault(const ThrowingDefault& _o) : v(_o.v) { ++live_count; }
+  ThrowingDefault(ThrowingDefault&& _o) noexcept : v(_o.v) { ++live_count; }
+  ThrowingDefault& operator=(const ThrowingDefault&) = default;
+  ThrowingDefault& operator=(ThrowingDefault&&) noexcept = default;
+  ~ThrowingDefault() { --live_count; }
+
+  int reflection() const { return v; }
+};
+
+struct WithConstThrowingNullableVariant {
+  int keep = 1;
+  const std::variant<ThrowingDefault, std::optional<int>> v =
+      std::optional<int>(5);
+};
+
+TEST(json, test_default_if_null_aggregate_dmi_and_const_throw_safety) {
+  static_assert(!rfl::internal::is_safe_default_constructible_v<int&>);
+  static_assert(!rfl::internal::is_safe_default_constructible_v<const int&>);
+  static_assert(!rfl::internal::is_safe_default_constructible_v<int&&>);
+  static_assert(
+      rfl::internal::is_safe_default_constructible_v<AggregateWithNoDefaultDmi>);
+
+  const auto agg =
+      rfl::json::read<AggregateWithNoDefaultDmi, rfl::DefaultIfNull>(
+          R"({"x": null, "y": null})");
+  ASSERT_TRUE(agg.has_value()) << agg.error().what();
+  EXPECT_EQ(agg.value().x.v, 42);
+  EXPECT_EQ(agg.value().y, 7);
+
+  // If resetting an omitted const nullable field throws during default
+  // construction, the original live subobject must remain intact (no double
+  // destruction when the struct unwinds).
+  ThrowingDefault::live_count = 0;
+  ThrowingDefault::should_throw = true;
+  {
+    const auto res =
+        rfl::json::read<WithConstThrowingNullableVariant, rfl::DefaultIfNull>(
+            R"({"keep": 9})");
+    EXPECT_FALSE(res.has_value());
+  }
+  ThrowingDefault::should_throw = false;
+  EXPECT_EQ(ThrowingDefault::live_count, 0);
+}
+
 }  // namespace test_default_if_null
