@@ -6,6 +6,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace test_metadata {
 
@@ -77,6 +78,37 @@ struct CustomReflectedId {
 struct ContainerWithReflectedId {
   CustomReflectedId id;
 };
+
+struct PlainDeprecatedOnly {
+  bool old_flag = false;
+};
+
+struct CircleAlt {
+  double radius_m = 1.0;
+};
+
+struct SquareAlt {
+  double side_m = 2.0;
+};
+
+struct FlattenedBase {
+  int base_id = 1;
+};
+
+struct FlattenedOuter {
+  rfl::Flatten<FlattenedBase> base;
+  std::string label = "x";
+};
+
+struct EmptyMetaStruct {};
+
+struct VecRefMetaConfig {
+  int value = 0;
+};
+
+struct DanglingVecMeta {};
+
+struct NonStaticMeta {};
 
 }  // namespace test_metadata
 
@@ -172,6 +204,56 @@ struct rfl::Metadata<test_metadata::InlineDescPlusOobDeprecated> {
 template <>
 struct rfl::Metadata<test_metadata::CustomReflectedId> {
   static constexpr std::string_view description = "Opaque resource identifier";
+};
+
+template <>
+struct rfl::Metadata<test_metadata::PlainDeprecatedOnly> {
+  static constexpr std::array<rfl::FieldMeta, 1> fields = {{
+      {.name = "old_flag", .deprecation_message = "Use new_flag"},
+  }};
+};
+
+template <>
+struct rfl::Metadata<test_metadata::CircleAlt> {
+  static constexpr std::string_view description = "A circle";
+  static constexpr std::array<rfl::FieldMeta, 1> fields = {{
+      {"radius_m", "Radius in meters"},
+  }};
+};
+
+template <>
+struct rfl::Metadata<test_metadata::FlattenedOuter> {
+  static constexpr std::array<rfl::FieldMeta, 2> fields = {{
+      {"base_id", "Flattened identifier"},
+      {"label", "Outer label"},
+  }};
+};
+
+template <>
+struct rfl::Metadata<test_metadata::EmptyMetaStruct> {
+  static constexpr std::string_view description = "Marker struct";
+  static constexpr std::array<rfl::FieldMeta, 0> fields = {};
+};
+
+template <>
+struct rfl::Metadata<test_metadata::VecRefMetaConfig> {
+  static const std::vector<rfl::FieldMeta>& fields() {
+    static const std::vector<rfl::FieldMeta> kFields = {
+        {"value", "Returned via const vector lvalue reference"},
+    };
+    return kFields;
+  }
+};
+
+template <>
+struct rfl::Metadata<test_metadata::DanglingVecMeta> {
+  static std::vector<rfl::FieldMeta> fields() { return {}; }
+};
+
+template <>
+struct rfl::Metadata<test_metadata::NonStaticMeta> {
+  std::array<rfl::FieldMeta, 1> fields = {{{"x", "bad"}}};
+  std::string_view description = "bad";
 };
 
 namespace test_metadata {
@@ -338,6 +420,82 @@ TEST(json, test_metadata_roundtrip_unchanged) {
   EXPECT_EQ(parsed.max_files, 250);
   EXPECT_EQ(parsed.compression, true);
   EXPECT_EQ(parsed.legacy_gzip, false);
+}
+
+TEST(json, test_metadata_plain_deprecated_omits_empty_description) {
+  const auto schema = rfl::json::to_schema<PlainDeprecatedOnly>();
+  const auto props =
+      sole_def_object(schema).get("properties").value().to_object().value();
+  const auto flag = props.get("old_flag").value().to_object().value();
+  EXPECT_EQ(flag.get("deprecated").value().to_bool().value(), true);
+  EXPECT_EQ(flag.get("deprecationMessage").value().to_string().value(),
+            "Use new_flag");
+  EXPECT_FALSE(flag.get("description").has_value());
+}
+
+TEST(json, test_metadata_tagged_union_alternatives) {
+  using Shape = rfl::TaggedUnion<"shape", CircleAlt, SquareAlt>;
+  const auto schema =
+      rfl::json::to_schema<Shape, rfl::SnakeCaseToCamelCase>();
+  const auto root =
+      rfl::json::read<rfl::Generic>(schema).value().to_object().value();
+  const auto defs = root.get("$defs").value().to_object().value();
+  bool found_circle = false;
+  for (const auto& [def_name, def_val] : defs) {
+    if (def_name.find("CircleAlt") != std::string::npos) {
+      found_circle = true;
+      const auto def_obj = def_val.to_object().value();
+      EXPECT_EQ(def_obj.get("description").value().to_string().value(),
+                "A circle");
+      const auto props = def_obj.get("properties").value().to_object().value();
+      EXPECT_EQ(props.get("radiusM").value().to_object().value()
+                    .get("description").value().to_string().value(),
+                "Radius in meters");
+    }
+  }
+  EXPECT_TRUE(found_circle);
+}
+
+TEST(json, test_metadata_flatten_empty_no_field_names_and_concepts) {
+  // Concepts: dangling by-value vector rejected; const vector& accepted;
+  // non-static members rejected.
+  static_assert(rfl::internal::HasAnyFieldMetaFn<DanglingVecMeta>);
+  static_assert(!rfl::internal::HasFieldMetaFn<DanglingVecMeta>);
+  static_assert(rfl::internal::HasFieldMetaFn<VecRefMetaConfig>);
+  static_assert(!rfl::internal::HasFieldMetaVar<NonStaticMeta>);
+  static_assert(!rfl::internal::HasStructDescriptionVar<NonStaticMeta>);
+
+  const auto vec_schema = rfl::json::to_schema<VecRefMetaConfig>();
+  EXPECT_NE(
+      vec_schema.find(
+          "\"description\":\"Returned via const vector lvalue reference\""),
+      std::string::npos);
+
+  // Flatten: fields looked up on enclosing struct's Metadata<Outer>.
+  const auto flat_schema =
+      rfl::json::to_schema<FlattenedOuter, rfl::SnakeCaseToCamelCase>();
+  const auto flat_props =
+      sole_def_object(flat_schema).get("properties").value().to_object().value();
+  EXPECT_EQ(flat_props.get("baseId").value().to_object().value()
+                .get("description").value().to_string().value(),
+            "Flattened identifier");
+  EXPECT_EQ(flat_props.get("label").value().to_object().value()
+                .get("description").value().to_string().value(),
+            "Outer label");
+
+  // Empty struct with Metadata<Empty>::description and empty fields array.
+  const auto empty_schema = rfl::json::to_schema<EmptyMetaStruct>();
+  EXPECT_EQ(
+      sole_def_object(empty_schema).get("description").value().to_string().value(),
+      "Marker struct");
+
+  // NoFieldNames emits tuple schema with per-element descriptions intact.
+  const auto tuple_schema =
+      rfl::json::to_schema<OutOfBandConfig, rfl::NoFieldNames>();
+  EXPECT_NE(tuple_schema.find("\"description\":\"Root cache directory\""),
+            std::string::npos);
+  EXPECT_NE(tuple_schema.find("\"description\":\"Max number of files\""),
+            std::string::npos);
 }
 
 }  // namespace test_metadata

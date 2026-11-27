@@ -39,12 +39,18 @@ struct FieldMeta {
 ///   `const` lvalue reference to a contiguous range; may be defined out-of-line
 ///   in a `.cpp` file for complete compile-time isolation).
 /// - Optional struct-level description:
-///   `static constexpr std::string_view description = "...";` or
-///   `static std::string_view description();`
+///   `static constexpr std::string_view description = "...";` (or a non-null
+///   `const char*`) or `static std::string_view description();`
 ///
-/// Note: `rfl::Metadata<Inner>` attaches to `Inner`'s own schema definition
-/// (`$defs/Inner`); fields flattened via `rfl::Flatten<Inner>` are looked up on
-/// the enclosing struct's `rfl::Metadata<Outer>`.
+/// Notes:
+/// - `rfl::Metadata<Inner>` attaches to `Inner`'s own schema definition
+///   (`$defs/Inner`); fields flattened via `rfl::Flatten<Inner>` are looked up
+///   on the enclosing struct's `rfl::Metadata<Outer>`.
+/// - For `rfl::TaggedUnion` alternatives wrapped in an internal tagged-union
+///   wrapper, `rfl::Metadata<Alternative>` is consulted automatically.
+/// - For custom types with `ReflectionType` or `rfl::Reflector<T>`, struct-level
+///   `Metadata<T>::description` is honored; `Metadata<T>::fields` applies to
+///   reflected aggregate structs.
 template <class T>
 struct Metadata {};
 
@@ -53,6 +59,8 @@ namespace internal {
 template <class T>
 concept HasFieldMetaVar = requires {
   { Metadata<T>::fields } -> std::ranges::contiguous_range;
+  { Metadata<T>::fields } -> std::ranges::sized_range;
+  requires !std::is_member_object_pointer_v<decltype(&Metadata<T>::fields)>;
   requires std::same_as<std::remove_cvref_t<std::ranges::range_value_t<
                             decltype(Metadata<T>::fields)>>,
                         FieldMeta>;
@@ -61,6 +69,7 @@ concept HasFieldMetaVar = requires {
 template <class T>
 concept HasAnyFieldMetaFn = requires {
   { Metadata<T>::fields() } -> std::ranges::contiguous_range;
+  { Metadata<T>::fields() } -> std::ranges::sized_range;
   requires std::same_as<std::remove_cvref_t<std::ranges::range_value_t<
                             decltype(Metadata<T>::fields())>>,
                         FieldMeta>;
@@ -77,7 +86,7 @@ constexpr bool has_field_metadata_v =
     HasAnyFieldMetaFn<std::remove_cvref_t<T>>;
 
 template <class T>
-inline std::span<const FieldMeta> get_field_metadata() {
+std::span<const FieldMeta> get_field_metadata() {
   using U = std::remove_cvref_t<T>;
   static_assert(
       !HasAnyFieldMetaFn<U> || HasFieldMetaFn<U>,
@@ -99,6 +108,7 @@ inline std::span<const FieldMeta> get_field_metadata() {
 template <class T>
 concept HasStructDescriptionVar = requires {
   { Metadata<T>::description } -> std::convertible_to<std::string_view>;
+  requires !std::is_member_object_pointer_v<decltype(&Metadata<T>::description)>;
 };
 
 template <class T>
@@ -112,7 +122,7 @@ constexpr bool has_struct_description_v =
     HasStructDescriptionFn<std::remove_cvref_t<T>>;
 
 template <class T>
-inline std::string get_struct_description() {
+std::string get_struct_description() {
   using U = std::remove_cvref_t<T>;
   if constexpr (HasStructDescriptionFn<U>) {
     return std::string(std::string_view(Metadata<U>::description()));

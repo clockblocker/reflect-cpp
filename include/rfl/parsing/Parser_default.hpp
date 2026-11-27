@@ -661,6 +661,8 @@ struct Parser {
       (*_definitions)[name] =
           Type{Type::Integer{}};  // Placeholder to avoid infinite loop.
 
+      using MetaType = unwrap_tagged_union_wrapper_t<U>;
+
       if constexpr (internal::has_reflection_type_v<U>) {
         (*_definitions)[name] =
             Parser<R, W, typename U::ReflectionType, ProcessorsType>::to_schema(
@@ -673,18 +675,25 @@ struct Parser {
 
       } else {
         using NamedTupleType = internal::processed_t<U, ProcessorsType>;
-        std::span<const FieldMeta> field_meta;
-        std::span<const std::string_view> raw_names_span;
-        if constexpr (internal::has_field_metadata_v<U>) {
-          field_meta = internal::get_field_metadata<U>();
+        // The schema takes the default values of rfl::DefaultVal fields from
+        // a default-constructed instance. A tagged union wrapper holds its
+        // alternative through a pointer that U{} leaves null, so we construct
+        // the wrapper that holds the alternative by value instead.
+        using DefaultsType = tagged_union_wrapper_no_ptr_t<U>;
+
+        if constexpr (internal::has_field_metadata_v<MetaType>) {
+          const auto field_meta = internal::get_field_metadata<MetaType>();
+          std::span<const std::string_view> raw_names_span;
           using RawNT = named_tuple_t<U>;
-          if constexpr (NamedTupleType::size() >= RawNT::size()) {
+          if constexpr (RawNT::size() > 0 &&
+                        NamedTupleType::size() >= RawNT::size()) {
             // Processors such as rfl::AddStructName prepend synthetic fields
             // before U's real members. Shift raw_names by the prefix length so
             // index i aligns with NamedTupleType's field i.
-            constexpr size_t prefix = NamedTupleType::size() - RawNT::size();
             static constexpr auto raw_names =
                 []<size_t... _is>(std::index_sequence<_is...>) {
+                  constexpr size_t prefix =
+                      NamedTupleType::size() - RawNT::size();
                   std::array<std::string_view, NamedTupleType::size()> arr{};
                   ((arr[prefix + _is] =
                         tuple_element_t<_is, typename RawNT::Fields>::name()),
@@ -693,13 +702,24 @@ struct Parser {
                 }(std::make_index_sequence<RawNT::size()>());
             raw_names_span = raw_names;
           }
-        }
-        // The schema takes the default values of rfl::DefaultVal fields from
-        // a default-constructed instance. A tagged union wrapper holds its
-        // alternative through a pointer that U{} leaves null, so we construct
-        // the wrapper that holds the alternative by value instead.
-        using DefaultsType = tagged_union_wrapper_no_ptr_t<U>;
-        if constexpr (internal::has_default_val_v<U>) {
+          if constexpr (internal::has_default_val_v<U>) {
+            static_assert(requires { DefaultsType{}; },
+                          "A struct with rfl::DefaultVal fields must be "
+                          "default-constructible, because the default values "
+                          "come from a default-constructed instance.");
+            auto defaults = DefaultsType{};
+            auto view = ProcessorsType::template process<DefaultsType>(
+                to_view(defaults));
+            (*_definitions)[name] =
+                Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
+                    _definitions, &view, field_meta, raw_names_span);
+          } else {
+            (*_definitions)[name] =
+                Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
+                    _definitions, static_cast<void*>(nullptr), field_meta,
+                    raw_names_span);
+          }
+        } else if constexpr (internal::has_default_val_v<U>) {
           static_assert(requires { DefaultsType{}; },
                         "A struct with rfl::DefaultVal fields must be "
                         "default-constructible, because the default values "
@@ -709,17 +729,16 @@ struct Parser {
               to_view(defaults));
           (*_definitions)[name] =
               Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-                  _definitions, &view, field_meta, raw_names_span);
+                  _definitions, &view);
         } else {
           (*_definitions)[name] =
               Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
-                  _definitions, static_cast<void*>(nullptr), field_meta,
-                  raw_names_span);
+                  _definitions);
         }
       }
 
-      if constexpr (internal::has_struct_description_v<U>) {
-        auto desc = internal::get_struct_description<U>();
+      if constexpr (internal::has_struct_description_v<MetaType>) {
+        auto desc = internal::get_struct_description<MetaType>();
         if (!desc.empty()) {
           (*_definitions)[name] = Type{Type::Description{
               .description_ = std::move(desc),

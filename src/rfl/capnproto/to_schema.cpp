@@ -139,6 +139,18 @@ schema::Type reference_to_capnproto_schema_type(
   }
 }
 
+inline bool is_literal_type(const parsing::schema::Type& _type) {
+  return _type.variant_.visit([](const auto& _v) -> bool {
+    using T = std::remove_cvref_t<decltype(_v)>;
+    if constexpr (std::is_same_v<T, parsing::schema::Type::Description> ||
+                  std::is_same_v<T, parsing::schema::Type::Deprecated>) {
+      return is_literal_type(*_v.type_);
+    } else {
+      return std::is_same_v<T, parsing::schema::Type::Literal>;
+    }
+  });
+}
+
 schema::Type string_map_to_capnproto_schema_type(
     const parsing::schema::Type::StringMap& _map,
     const std::map<std::string, parsing::schema::Type>& _definitions,
@@ -151,12 +163,7 @@ schema::Type string_map_to_capnproto_schema_type(
     if constexpr (std::is_same_v<T, Type::Reference>) {
       const auto it = _definitions.find(_value.type_name);
       return _cnp_types->enums_.contains(_value.type_name) ||
-             (it != _definitions.end() &&
-              it->second.variant_.visit([](const auto& _definition) {
-                return std::is_same_v<
-                    std::remove_cvref_t<decltype(_definition)>,
-                    parsing::schema::Type::Literal>;
-              }));
+             (it != _definitions.end() && is_literal_type(it->second));
     } else {
       return !std::is_same_v<T, Type::Data> && !std::is_same_v<T, Type::Text> &&
              !std::is_same_v<T, Type::List> && !std::is_same_v<T, Type::Map> &&
