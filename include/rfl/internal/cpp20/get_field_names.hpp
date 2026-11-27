@@ -68,6 +68,31 @@ consteval auto get_field_name_str_view() {
 #endif
 }
 
+template <class Lit>
+struct single_literal_name_view;
+
+template <StringLiteral _name>
+struct single_literal_name_view<rfl::Literal<_name>> {
+  static constexpr std::string_view value = _name.string_view();
+};
+
+/// Returns a field's runtime name without wrapping it in rfl::Literal. Unlike
+/// get_field_name(), this is suitable for value-level lookup tables.
+template <class T, auto ptr>
+consteval std::string_view get_direct_field_name() {
+#if defined(__clang__)
+  using FieldType = std::remove_cvref_t<std::remove_pointer_t<
+      typename std::remove_pointer_t<decltype(ptr)>::Type>>;
+#else
+  using FieldType = std::remove_cvref_t<std::remove_pointer_t<decltype(ptr)>>;
+#endif
+  if constexpr (is_rename_v<FieldType>) {
+    return single_literal_name_view<typename FieldType::Name>::value;
+  } else {
+    return get_field_name_str_view<T, ptr>();
+  }
+}
+
 template <class T, auto ptr>
 consteval auto get_field_name_str_lit() {
   constexpr auto name = get_field_name_str_view<T, ptr>();

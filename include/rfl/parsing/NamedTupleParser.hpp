@@ -394,6 +394,10 @@ struct NamedTupleParser {
 
   static constexpr size_t size_ = NamedTupleType::size();
 
+  static constexpr bool ignore_empty_containers_ = _ignore_empty_containers;
+  static constexpr bool all_required_ = _all_required;
+  static constexpr bool no_field_names_ = _no_field_names;
+
   static_assert(NamedTupleType::pos_extra_fields() == -1 || !_no_field_names,
                 "You cannot use the rfl::NoFieldNames processor if you are "
                 "including rfl::ExtraFields.");
