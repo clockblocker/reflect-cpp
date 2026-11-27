@@ -74,4 +74,4 @@ This flattens all fields into a single JSON object:
 
 ## Flattening `rfl::TaggedUnion`
 
-`rfl::Flatten` also supports `rfl::TaggedUnion` (with or without sibling fields, and nested across multiple levels). See [variants and tagged unions](variants_and_tagged_unions.md#nested-and-flattened-rfltaggedunion) for details.
+`rfl::Flatten` also supports `rfl::TaggedUnion` by value (with or without sibling fields, and nested across multiple levels) for schemaless formats. Raw pointers (`rfl::Flatten<MyTU*>`), schemaful formats, `rfl::to_named_tuple`/`rfl::from_named_tuple`, and `rfl::cli::read` are rejected at compile time. See [variants and tagged unions](variants_and_tagged_unions.md#nested-and-flattened-rfltaggedunion) for details.
