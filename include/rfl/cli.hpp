@@ -6,6 +6,7 @@
 #include "cli/App.hpp"
 #include "cli/KeepEmptyItems.hpp"
 #include "cli/ListDelimiter.hpp"
+#include "cli/Opt.hpp"
 #include "cli/OptionsFirst.hpp"
 #include "cli/Parser.hpp"
 #include "cli/PureFlags.hpp"

@@ -222,6 +222,7 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       if (option.kind == OptionKind::unknown && _options.reject_unknown) {
         return error("Unknown option '--" + key + "'.");
       }
+      bool consume_multi = false;
       if (eq == std::string_view::npos && option.kind == OptionKind::value
           && _options.separate_values) {
         // --key value (rfl::cli::SeparateOptionValues). A flag never takes
@@ -230,6 +231,7 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         auto v = take_value(option, "--" + key, &i);
         if (!v) { return error(v.error().what()); }
         val = std::move(*v);
+        consume_multi = option.multi_token;
       }
       else if (eq == std::string_view::npos
                && option.kind == OptionKind::implicit_value) {
@@ -239,6 +241,12 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       }
       const auto r = add_long(key, std::move(val), option, arg_raw);
       if (!r) { return error(r.error().what()); }
+      while (consume_multi && i + 1 < _args.size() && _args[i + 1] != "--"
+             && !looks_like_option(_args[i + 1])) {
+        const auto r2 =
+            add_long(key, std::string(_args[++i]), option, arg_raw);
+        if (!r2) { return error(r2.error().what()); }
+      }
       continue;
     }
 
@@ -274,6 +282,7 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         const bool alone = j == 0 && rest.empty();
         auto val = std::string();
 
+        bool consume_multi = false;
         if (j == 0 && rest.starts_with('=')) {
           // -x=value, whatever -x is. Unlike getopt, where -f=csv gives
           // "=csv", the '=' is not part of the value.
@@ -314,10 +323,17 @@ inline rfl::Result<ParsedArgs> parse_string_views(
           auto v = take_value(option, name, &i);
           if (!v) { return error(v.error().what()); }
           val = std::move(*v);
+          consume_multi = option.multi_token;
         }
 
         const auto r = add_short(key, std::move(val), option, arg_raw);
         if (!r) { return error(r.error().what()); }
+        while (consume_multi && i + 1 < _args.size() && _args[i + 1] != "--"
+               && !looks_like_option(_args[i + 1])) {
+          const auto r2 =
+              add_short(key, std::string(_args[++i]), option, arg_raw);
+          if (!r2) { return error(r2.error().what()); }
+        }
         break;
       }
       continue;

@@ -33,6 +33,7 @@
 #include "../internal/processed_t.hpp"
 #include "../parsing/is_string_map.hpp"
 #include "AllowAbbreviations.hpp"
+#include "Opt.hpp"
 #include "OptionsFirst.hpp"
 #include "Parser.hpp"
 #include "PureFlags.hpp"
@@ -75,6 +76,10 @@ struct Option {
   /// when it is given without one. It views the rfl::ImplicitValue's
   /// template argument, which lives as long as the program.
   std::string_view implicit_value = {};
+
+  /// Whether a list option consumes multiple space-separated tokens after one
+  /// occurrence (rfl::MultiToken).
+  bool multi_token = false;
 };
 
 /// The options that a target struct accepts, built once per <T, ProcessorsType>
@@ -117,6 +122,10 @@ struct Options {
   /// Section header name for fields wrapped in rfl::Group, sorted by path.
   std::vector<std::pair<std::string, std::string>> option_groups;
 
+  /// Custom value placeholder name for fields wrapped in rfl::ValueName,
+  /// sorted by path.
+  std::vector<std::pair<std::string, std::string>> option_value_names;
+
   /// Whether options that match no field are an error (rfl::NoExtraFields).
   bool reject_unknown = false;
 
@@ -158,15 +167,19 @@ struct Options {
   /// token (rfl::cli::PureFlags).
   bool pure_flags = false;
 
-  /// Records one leaf long option along with its optional hidden/group
+  /// Records one leaf long option along with its optional hidden/group/value_name
   /// metadata. Non-template to avoid per-field template instantiations.
   void add_leaf_option(std::string _path, const Option& _opt,
-                       const bool _hidden, const std::string_view _group) {
+                       const bool _hidden, const std::string_view _group,
+                       const std::string_view _value_name) {
     if (_hidden) {
       hidden_options.push_back(_path);
     }
     if (!_group.empty()) {
       option_groups.emplace_back(_path, std::string(_group));
+    }
+    if (!_value_name.empty()) {
+      option_value_names.emplace_back(_path, std::string(_value_name));
     }
     long_options.emplace_back(std::move(_path), _opt);
   }
@@ -202,6 +215,7 @@ struct Options {
         std::unique(hidden_options.begin(), hidden_options.end()),
         hidden_options.end());
     sort_pairs(option_groups);
+    sort_pairs(option_value_names);
   }
 
   /// Returns the long options that `--_prefix` could abbreviate: every
@@ -304,6 +318,12 @@ struct Options {
     return g ? std::string_view(*g) : std::string_view{};
   }
 
+  /// Returns the rfl::ValueName for `_path`, or empty string_view if none.
+  std::string_view find_value_name(const std::string_view _path) const {
+    const auto* vn = find_pair(option_value_names, _path);
+    return vn ? std::string_view(*vn) : std::string_view{};
+  }
+
   /// Whether the last rfl::Positional field is a list. It then takes every
   /// positional argument after those of the other positional fields.
   bool last_positional_is_list() const {
@@ -366,11 +386,14 @@ struct cli_annotations {
   static constexpr bool is_positional = false;
   static constexpr bool is_hidden = false;
   static constexpr bool has_group = false;
+  static constexpr bool has_value_name = false;
+  static constexpr bool is_multi_token = false;
   static constexpr size_t num_implicit_value = 0;
   static constexpr rfl::internal::StringLiteral<1> short_name = "";
   static constexpr int count = 0;
   static constexpr rfl::internal::StringLiteral<1> implicit_value = "";
   static constexpr rfl::internal::StringLiteral<1> group_name = "";
+  static constexpr rfl::internal::StringLiteral<1> value_name = "";
 };
 
 template <class T>
@@ -424,6 +447,54 @@ template <rfl::internal::StringLiteral _group, class T>
 struct cli_annotations<Group<_group, T>> : cli_annotations_t<T> {
   static constexpr bool has_group = true;
   static constexpr auto group_name = _group;
+};
+
+template <class T, class... Attrs>
+struct cli_annotations<Opt<T, Attrs...>> {
+  using Inner = cli_annotations_t<T>;
+  using Info = typename Opt<T, Attrs...>::AttrsInfo;
+
+  static constexpr bool is_short = Info::is_short || Inner::is_short;
+  static constexpr bool is_positional =
+      Info::is_positional || Inner::is_positional;
+  static constexpr bool is_hidden = Info::is_hidden || Inner::is_hidden;
+  static constexpr bool has_group = Info::has_group || Inner::has_group;
+  static constexpr bool has_value_name =
+      Info::has_value_name || Inner::has_value_name;
+  static constexpr bool is_multi_token =
+      Info::is_multi_token || Inner::is_multi_token;
+  static constexpr size_t num_implicit_value =
+      Info::num_implicit_value + Inner::num_implicit_value;
+  static constexpr int count = Info::count + Inner::count;
+
+  static constexpr auto short_name = []() {
+    if constexpr (Info::is_short) {
+      return Info::short_name;
+    } else {
+      return Inner::short_name;
+    }
+  }();
+  static constexpr auto implicit_value = []() {
+    if constexpr (Info::num_implicit_value > 0) {
+      return Info::implicit_value;
+    } else {
+      return Inner::implicit_value;
+    }
+  }();
+  static constexpr auto group_name = []() {
+    if constexpr (Info::has_group) {
+      return Info::group_name;
+    } else {
+      return Inner::group_name;
+    }
+  }();
+  static constexpr auto value_name = []() {
+    if constexpr (Info::has_value_name) {
+      return Info::value_name;
+    } else {
+      return Inner::value_name;
+    }
+  }();
 };
 
 /// The CLI metadata of the _i-th field of a NamedTuple. InnerType is the
@@ -601,6 +672,8 @@ Option implicit_value_option() {
 template <class T, class ProcessorsType>
 Option option_for() {
   using U = unwrapped_option_t<T, ProcessorsType>;
+  static_assert(!cli_annotations_t<T>::is_multi_token || is_option_list_v<U>,
+                "rfl::cli::attr::MultiToken can only wrap a list type (such as std::vector).");
   if constexpr (cli_annotations_t<T>::num_implicit_value > 0) {
     return implicit_value_option<T, ProcessorsType>();
   }
@@ -612,7 +685,8 @@ Option option_for() {
     return Option{OptionKind::other};
   }
   else {
-    return Option{OptionKind::value, is_option_list_v<U>};
+    return Option{OptionKind::value, is_option_list_v<U>, {},
+                  cli_annotations_t<T>::is_multi_token};
   }
 }
 
@@ -674,22 +748,29 @@ void collect_options(const std::string& _prefix, Options* _options) {
         constexpr bool is_hidden = Ann::is_hidden;
         constexpr auto group_name =
             Ann::has_group ? Ann::group_name.string_view() : std::string_view{};
+        constexpr auto value_name =
+            Ann::has_value_name ? Ann::value_name.string_view()
+                                : std::string_view{};
         if constexpr (Ann::num_implicit_value > 0) {
           _options->add_leaf_option(
               std::move(path), implicit_value_option<FT, ProcessorsType>(),
-              is_hidden, group_name);
+              is_hidden, group_name, value_name);
         } else if constexpr (std::is_same_v<U, bool>) {
           _options->add_leaf_option(std::move(path), Option{OptionKind::flag},
-                                    is_hidden, group_name);
+                                    is_hidden, group_name, value_name);
         } else if constexpr (is_open_option_v<U>) {
           _options->add_leaf_option(std::move(path), Option{OptionKind::other},
-                                    is_hidden, group_name);
+                                    is_hidden, group_name, value_name);
         } else if constexpr (parsing::is_string_map_v<U>) {
           if constexpr (is_hidden) {
             _options->hidden_options.push_back(path);
           }
           if constexpr (!group_name.empty()) {
             _options->option_groups.emplace_back(path, std::string(group_name));
+          }
+          if constexpr (!value_name.empty()) {
+            _options->option_value_names.emplace_back(path,
+                                                      std::string(value_name));
           }
           add_open_prefix<typename U::mapped_type, ProcessorsType,
                           NextVisitedType>(path + path_separator, _options);
@@ -705,9 +786,14 @@ void collect_options(const std::string& _prefix, Options* _options) {
                 path + path_separator, _options);
           }
         } else {
+          static_assert(
+              !Ann::is_multi_token || is_option_list_v<U>,
+              "rfl::cli::attr::MultiToken can only wrap a list type (such as std::vector).");
           _options->add_leaf_option(
-              std::move(path), Option{OptionKind::value, is_option_list_v<U>},
-              is_hidden, group_name);
+              std::move(path),
+              Option{OptionKind::value, is_option_list_v<U>, {},
+                     Ann::is_multi_token},
+              is_hidden, group_name, value_name);
         }
       }
     };
