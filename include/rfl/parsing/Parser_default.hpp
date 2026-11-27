@@ -1017,11 +1017,15 @@ struct Parser {
         const auto get_raw_names = [&]() -> std::span<const std::string_view> {
           if constexpr (internal::has_field_metadata_v<U>) {
             using RawNT = rfl::named_tuple_t<U>;
-            if constexpr (RawNT::size() == NamedTupleType::size()) {
+            if constexpr (NamedTupleType::size() >= RawNT::size()) {
+              constexpr size_t prefix = NamedTupleType::size() - RawNT::size();
               static constexpr auto raw_names_arr =
                   []<size_t... _is>(std::index_sequence<_is...>) {
-                    return std::array<std::string_view, sizeof...(_is)>{
-                        tuple_element_t<_is, typename RawNT::Fields>::name()...};
+                    std::array<std::string_view, NamedTupleType::size()> arr{};
+                    ((arr[prefix + _is] =
+                          tuple_element_t<_is, typename RawNT::Fields>::name()),
+                     ...);
+                    return arr;
                   }(std::make_index_sequence<RawNT::size()>());
               return raw_names_arr;
             }

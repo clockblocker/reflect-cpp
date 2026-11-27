@@ -37,11 +37,12 @@ void call_destructor_on_array(const size_t _size, T* _ptr) {
  */
 template <class OriginalType>
 RFL_ALWAYS_INLINE void destroy_field_if_set(const bool _is_set,
-                                            OriginalType _slot) noexcept {
-  using CleanOriginal = std::remove_cv_t<OriginalType>;
+                                            const OriginalType& _slot) noexcept {
+  using CleanOriginal = std::remove_cvref_t<OriginalType>;
   using ValueType =
       std::remove_cvref_t<std::remove_pointer_t<CleanOriginal>>;
-  if constexpr (std::is_array_v<ValueType>) {
+  if constexpr (std::is_pointer_v<CleanOriginal> &&
+                std::is_array_v<ValueType>) {
     if constexpr (!std::is_trivially_destructible_v<
                       std::remove_all_extents_t<ValueType>>) {
       if (_is_set) {

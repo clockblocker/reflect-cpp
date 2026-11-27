@@ -111,8 +111,13 @@ struct CountFieldsHelper {
     static_assert(n <= static_cast<std::size_t>(sizeof(T)));
     if constexpr (constructible<n>()) {
       return n;
-    } else {
+    } else if constexpr (n < static_cast<std::size_t>(sizeof(T))) {
       return find_first_constructible<n + 1>();
+    } else {
+      static_assert(n < static_cast<std::size_t>(sizeof(T)),
+                    "Type is not aggregate-constructible; rfl::num_fields "
+                    "requires an aggregate type.");
+      return 0;
     }
   }
 
@@ -132,10 +137,20 @@ struct CountFieldsHelper {
 
   template <std::size_t lo, std::size_t step = 1>
   static consteval std::size_t expand_and_search() {
-    if constexpr (constructible<lo + step>()) {
-      return expand_and_search<lo + step, step * 2>();
+    static_assert(lo <= static_cast<std::size_t>(sizeof(T)));
+    constexpr std::size_t max_possible = static_cast<std::size_t>(sizeof(T));
+    constexpr std::size_t probe =
+        (step > max_possible - lo) ? (max_possible + 1) : (lo + step);
+    if constexpr (probe <= max_possible && constructible<probe>()) {
+      return expand_and_search<probe, step * 2>();
+    } else if constexpr (probe > max_possible && constructible<probe>()) {
+      static_assert(
+          probe <= max_possible,
+          "Type is constructible with more arguments than sizeof(T); "
+          "rfl::num_fields requires an aggregate type.");
+      return max_possible;
     } else {
-      return binary_search_max<lo, lo + step>();
+      return binary_search_max<lo, probe>();
     }
   }
 

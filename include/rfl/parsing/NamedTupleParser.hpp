@@ -588,47 +588,69 @@ RFL_ALWAYS_INLINE void write_named_tuple_field(const W& _w,
   }
 }
 
-/// Free per-field schema helper parameterized only by field type U (never the
-/// enclosing NamedTuple's FieldTypes... pack).
+/// Extracts a pointer to a view slot for schema default inspection.
+/// Pointer slots (including `T*` and C-array pointers `T (*)[N]`) are returned
+/// directly without dereferencing; non-pointer processor-added slots (such as
+/// `rfl::AddStructName`'s `rfl::Literal<...>`) return `nullptr`.
+template <class SlotT>
+RFL_ALWAYS_INLINE auto extract_schema_field_ptr(const SlotT& _slot) noexcept {
+  if constexpr (std::is_pointer_v<SlotT>) {
+    return _slot;
+  } else {
+    return static_cast<const void*>(nullptr);
+  }
+}
+
+/// Free per-field schema helper parameterized only by field type U and its
+/// view-slot pointer type (never the enclosing NamedTuple's FieldTypes...
+/// pack). Deduces `FieldValPtrT` independently of `U` so both raw C-array
+/// pointers (`T (*)[N]` vs `rfl::internal::Array<T[N]>`) and non-pointer
+/// processor-added slots (`const void*` / `nullptr`) work cleanly.
 template <class R, class W, bool _no_field_names, class ProcessorsType, class U,
-          class SchemaType>
+          class SchemaType, class FieldValPtrT>
 void build_named_tuple_field_schema(
     std::map<std::string, schema::Type>* _definitions, SchemaType* _schema,
     const std::string_view _wire_name, const std::string_view _raw_name,
-    const U* _field_val, const bool _no_default_flag,
+    const FieldValPtrT _field_val, const bool _no_default_flag,
     const std::span<const FieldMeta> _field_meta) noexcept {
+  using PtrT = std::remove_cvref_t<FieldValPtrT>;
   if constexpr (!internal::skip_serialization_v<U> &&
                 !internal::is_extra_fields_v<U>) {
     auto s = Parser<R, W, U, ProcessorsType>::to_schema(_definitions);
     if (_no_default_flag) [[unlikely]] {
       // Its default value is invalid, so reading requires the field.
       remove_schema_default_val(&s);
-    } else if (_field_val != nullptr) {
-      if constexpr (internal::is_default_val_v<U>) {
-        if constexpr (internal::CanEmitDefault<U>) {
-          try {
-            set_schema_default_value(
-                to_default_generic<ProcessorsType>(
-                    internal::get_default_val(*_field_val).value()),
-                &s);
-          } catch (...) {
+    } else if constexpr (!std::is_same_v<PtrT, const void*> &&
+                         !std::is_same_v<PtrT, void*> &&
+                         !std::is_same_v<PtrT, std::nullptr_t>) {
+      if (_field_val != nullptr) {
+        if constexpr (internal::is_default_val_v<U>) {
+          if constexpr (internal::CanEmitDefault<U>) {
+            try {
+              set_schema_default_value(
+                  to_default_generic<ProcessorsType>(
+                      internal::get_default_val(*_field_val).value()),
+                  &s);
+            } catch (...) {
+            }
           }
-        }
-      } else if constexpr (internal::default_if_missing_v<ProcessorsType> &&
-                           internal::CanWriteGeneric<U>) {
-        bool skip_default = false;
-        if constexpr (std::is_pointer_v<U>) {
-          skip_default = (*_field_val == nullptr);
-        } else if constexpr (!is_required<U, false>()) {
-          skip_default = is_empty(*_field_val);
-        }
-        if (!skip_default) {
-          try {
-            auto default_val = to_default_generic<ProcessorsType>(*_field_val);
-            s = schema::Type{schema::Type::DefaultVal{
-                .type_ = Ref<schema::Type>::make(std::move(s)),
-                .default_value_ = std::move(default_val)}};
-          } catch (...) {
+        } else if constexpr (internal::default_if_missing_v<ProcessorsType> &&
+                             internal::CanWriteGeneric<U>) {
+          bool skip_default = false;
+          if constexpr (std::is_pointer_v<U>) {
+            skip_default = (*_field_val == nullptr);
+          } else if constexpr (!is_required<U, false>()) {
+            skip_default = is_empty(*_field_val);
+          }
+          if (!skip_default) {
+            try {
+              auto default_val =
+                  to_default_generic<ProcessorsType>(*_field_val);
+              s = schema::Type{schema::Type::DefaultVal{
+                  .type_ = Ref<schema::Type>::make(std::move(s)),
+                  .default_value_ = std::move(default_val)}};
+            } catch (...) {
+            }
           }
         }
       }
@@ -1050,18 +1072,19 @@ struct NamedTupleParser {
       const std::span<const std::string_view> _raw_names = {}) noexcept {
     using F = internal::nth_element_t<_i, FieldTypes...>;
     using U = std::remove_cvref_t<typename F::Type>;
-    const U* field_val = nullptr;
-    if constexpr (!std::is_same_v<View, void>) {
-      if (_view != nullptr) {
-        field_val = std::addressof(*rfl::get<_i>(*_view));
-      }
-    }
     const bool no_def = _no_default && std::get<_i>(*_no_default);
     const std::string_view raw_name =
         _i < _raw_names.size() ? _raw_names[_i] : std::string_view{};
-    build_named_tuple_field_schema<R, W, _no_field_names, ProcessorsType, U>(
-        _definitions, _schema, F::name(), raw_name, field_val, no_def,
-        _field_meta);
+    if constexpr (!std::is_same_v<View, void>) {
+      build_named_tuple_field_schema<R, W, _no_field_names, ProcessorsType, U>(
+          _definitions, _schema, F::name(), raw_name,
+          _view ? extract_schema_field_ptr(rfl::get<_i>(*_view)) : nullptr,
+          no_def, _field_meta);
+    } else {
+      build_named_tuple_field_schema<R, W, _no_field_names, ProcessorsType, U>(
+          _definitions, _schema, F::name(), raw_name, nullptr, no_def,
+          _field_meta);
+    }
   }
 
   /**
@@ -1131,7 +1154,7 @@ struct NamedTupleParser {
            static_cast<size_t>(_is) < _raw_names.size()
                ? _raw_names[static_cast<size_t>(_is)]
                : std::string_view{},
-           _view ? std::addressof(*rfl::get<_is>(*_view)) : nullptr,
+           _view ? extract_schema_field_ptr(rfl::get<_is>(*_view)) : nullptr,
            _no_default != nullptr && std::get<_is>(*_no_default), _field_meta),
        ...);
     } else {
@@ -1144,10 +1167,8 @@ struct NamedTupleParser {
            static_cast<size_t>(_is) < _raw_names.size()
                ? _raw_names[static_cast<size_t>(_is)]
                : std::string_view{},
-           static_cast<const std::remove_cvref_t<
-               typename internal::nth_element_t<_is, FieldTypes...>::Type>*>(
-               nullptr),
-           _no_default != nullptr && std::get<_is>(*_no_default), _field_meta),
+           nullptr, _no_default != nullptr && std::get<_is>(*_no_default),
+           _field_meta),
        ...);
     }
 
@@ -1181,15 +1202,6 @@ struct NamedTupleParser {
          _set ? &std::get<_is>(*_set) : nullptr, _errors,
          _value_initialize_default_vals),
      ...);
-  }
-
-  static auto make_parent(const std::string_view& _name,
-                          OutputObjectOrArrayType* _ptr) {
-    if constexpr (_no_field_names) {
-      return typename ParentType::Array{_ptr};
-    } else {
-      return typename ParentType::Object{_name, _ptr};
-    }
   }
 
   static RFL_ALWAYS_INLINE
