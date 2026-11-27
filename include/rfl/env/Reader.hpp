@@ -8,11 +8,16 @@
 #include <concepts>
 #include <cstdlib>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 #include "../Result.hpp"
+#include "../Tuple.hpp"
+#include "../internal/field_aliases.hpp"
+#include "../internal/is_skip.hpp"
 
 #if defined(__APPLE__)
 #include <crt_externs.h>
@@ -233,14 +238,45 @@ struct Reader {
 
     if constexpr (has_view_type) {
       using ViewType = typename std::remove_cvref_t<ObjectReader>::ViewType;
-      using NamesType = typename ViewType::Names;
-      const auto names = NamesType::names();
-      for (const auto& name : names) {
-        const auto child_path = _obj.prefix.empty() ? name : _obj.prefix + name;
-        const auto var = InputVarType{.path = child_path};
-        if (!is_empty(var)) {
-          _object_reader.read(std::string_view(name), var);
-        }
+      using FieldsType = typename ViewType::Fields;
+      constexpr size_t num_fields = rfl::tuple_size_v<FieldsType>;
+      if constexpr (num_fields > 0) {
+        const auto read_one = [&]<int _i>(std::integral_constant<int, _i>) {
+          using FieldType =
+              std::remove_cvref_t<rfl::tuple_element_t<_i, FieldsType>>;
+          if constexpr (!internal::skip_deserialization_v<
+                            typename FieldType::Type>) {
+            const std::string primary(FieldType::name());
+            const auto child_path =
+                _obj.prefix.empty() ? primary : _obj.prefix + primary;
+            const auto var = InputVarType{.path = child_path};
+            if (!is_empty(var)) {
+              _object_reader.read(std::string_view(primary), var);
+            }
+            using Aliases =
+                rfl::internal::field_aliases_t<typename FieldType::Type>;
+            if constexpr (Aliases::size > 0) {
+              std::set<std::string_view> seen_aliases;
+              seen_aliases.insert(FieldType::name());
+              for (const auto alias : Aliases::to_array()) {
+                if (!seen_aliases.insert(alias).second) {
+                  continue;
+                }
+                const std::string alias_str(alias);
+                const auto alias_path = _obj.prefix.empty()
+                                            ? alias_str
+                                            : _obj.prefix + alias_str;
+                const auto alias_var = InputVarType{.path = alias_path};
+                if (!is_empty(alias_var)) {
+                  _object_reader.read(alias, alias_var);
+                }
+              }
+            }
+          }
+        };
+        [&]<int... _is>(std::integer_sequence<int, _is...>) {
+          (read_one(std::integral_constant<int, _is>{}), ...);
+        }(std::make_integer_sequence<int, num_fields>());
       }
 
     } else {

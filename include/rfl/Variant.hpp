@@ -47,8 +47,10 @@ class Variant {
   /// alternative type.
   /// @details The first alternative type is default-constructed and stored in
   /// the variant.
+  template <class FirstAlternative =
+                internal::nth_element_t<0, AlternativeTypes...>>
+    requires std::is_default_constructible_v<FirstAlternative>
   Variant() : index_(IndexType()), data_(DataType()) {
-    using FirstAlternative = internal::nth_element_t<0, AlternativeTypes...>;
     move_from_type(FirstAlternative());
   }
 

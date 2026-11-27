@@ -108,6 +108,77 @@ for (auto&& res : reader) {
 
 `StreamReader` also accepts a `std::string_view` directly (zero-copy), supports processors such as `rfl::SnakeCaseToCamelCase` and `rfl::NoExtraFields`, enforces a configurable `max_record_bytes` cap (64 MiB default, `0` for unlimited), and recovers from per-record syntax errors in `ndjson` (advancing to the next line) and `json_seq` (resyncing to the next `\x1e`). `StreamWriter::write()`, `flush()`, and `finish()` return `rfl::Result<rfl::Nothing>`; pretty-printing flags are rejected for `ndjson` and `json_seq`.
 
+## Read and write flags
+
+`rfl::json` provides `inline constexpr` flag constants (combinable with `|`) so you do not need to reference underlying `YYJSON_*` macros directly.
+
+### Read flags (`rfl::json::read` and `rfl::json::load`)
+
+| Flag | Description |
+| --- | --- |
+| `rfl::json::allow_comments` | Allow C-style single-line (`//`) and multi-line (`/* */`) comments |
+| `rfl::json::allow_trailing_commas` | Allow a single trailing comma at the end of an object or array |
+| `rfl::json::jsonc` | Shorthand for `allow_comments \| allow_trailing_commas` (JSONC) |
+| `rfl::json::allow_bom` | Allow and skip a leading UTF-8 BOM |
+| `rfl::json::stop_when_done` | Stop after the first JSON value instead of failing on trailing content (e.g. NDJSON) |
+| `rfl::json::read_allow_inf_and_nan` | Allow `Inf`, `Infinity`, and `NaN` numbers and literals |
+| `rfl::json::read_allow_invalid_unicode` | Allow invalid UTF-8 byte sequences in string values |
+| `rfl::json::allow_ext_number` | Allow hex numbers, leading/trailing decimal points, and leading `+` |
+| `rfl::json::allow_ext_escape` | Allow extended string escape sequences |
+| `rfl::json::allow_ext_whitespace` | Allow extended whitespace characters |
+| `rfl::json::allow_single_quoted_str` | Allow single-quoted strings |
+| `rfl::json::allow_unquoted_key` | Allow unquoted object keys |
+| `rfl::json::json5` | Allow JSON5 syntax |
+
+Example reading JSONC:
+
+```cpp
+const auto result = rfl::json::read<Person>(
+    jsonc_string, rfl::json::allow_comments | rfl::json::allow_trailing_commas);
+
+// Or using the convenience alias:
+const auto result2 = rfl::json::read<Person>(jsonc_string, rfl::json::jsonc);
+```
+
+### Write flags (`rfl::json::write`, `rfl::json::save`, and `rfl::json::to_schema`)
+
+| Flag | Description |
+| --- | --- |
+| `rfl::json::pretty` | Pretty-print with 4-space indentation |
+| `rfl::json::pretty_two_spaces` | Pretty-print with 2-space indentation (overrides `pretty`) |
+| `rfl::json::newline_at_end` | Append a trailing `\n` to the output |
+| `rfl::json::escape_unicode` | Escape non-ASCII characters as `\uXXXX` for ASCII-only output |
+| `rfl::json::escape_slashes` | Escape `/` as `\/` |
+| `rfl::json::write_allow_inf_and_nan` | Write `Inf`/`NaN` as `Infinity`/`NaN` literals (non-standard) |
+| `rfl::json::inf_and_nan_as_null` | Write `Inf`/`NaN` as `null` (overrides `write_allow_inf_and_nan`) |
+| `rfl::json::write_allow_invalid_unicode` | Allow invalid UTF-8 byte sequences when encoding strings |
+
+Example combining write flags:
+
+```cpp
+const std::string json_string = rfl::json::write(
+    person, rfl::json::pretty_two_spaces | rfl::json::newline_at_end);
+```
+
+> Note: `read_allow_inf_and_nan` / `write_allow_inf_and_nan` and `read_allow_invalid_unicode` / `write_allow_invalid_unicode` are prefixed with `read_` / `write_` because the underlying read and write flag bit values differ.
+
+## Overlaying onto an existing struct (`read_into` / `load_into`)
+
+For layered configuration (e.g., workspace -> user -> local files), you can overlay partial JSON onto an existing base struct with `rfl::json::read_into` and `rfl::json::load_into`:
+
+```cpp
+const auto config =
+    rfl::json::load_into(Config{}, "workspace.json")
+        .and_then([](Config c) { return rfl::json::load_into(std::move(c), "user.json"); })
+        .and_then([](Config c) { return rfl::json::load_into(std::move(c), "local.json"); });
+```
+
+- Fields absent from the JSON preserve their values from the base struct.
+- Nested structs (including inside `std::optional<T>` when engaged) are overlaid recursively; an explicit `null` clears `std::optional<T>` to `std::nullopt`.
+- Leaf values and containers (`std::vector`, `std::map`, etc.) replace the base value when present.
+- Processors such as `rfl::NoExtraFields` and `rfl::SnakeCaseToCamelCase` are supported as template arguments (`rfl::json::read_into<rfl::NoExtraFields>(base, json_str)`).
+- Atomic on error: `_base` is taken by value and returned inside `rfl::Result<T>`, so an lvalue base is never mutated if parsing or validation fails.
+
 ## Custom constructors
 
 One of the great things about C++ is that it gives you control over

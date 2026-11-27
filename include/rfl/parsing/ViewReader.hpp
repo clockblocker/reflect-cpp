@@ -10,8 +10,11 @@
 #include <utility>
 
 #include "../Tuple.hpp"
+#include "../internal/StringLiteral.hpp"
 #include "../internal/always_inline.hpp"
+#include "../internal/field_aliases.hpp"
 #include "../internal/is_array.hpp"
+#include "../internal/is_skip.hpp"
 #include "../internal/no_duplicate_keys_v.hpp"
 #include "../internal/no_extra_fields_v.hpp"
 #include "FieldErrors.hpp"
@@ -122,7 +125,14 @@ class ViewReader {
 
   template <int i, class FieldType>
   static bool is_matching(const std::string_view& _current_name) {
-    return _current_name == FieldType::name();
+    if (_current_name == FieldType::name()) {
+      return true;
+    }
+    using Aliases = internal::field_aliases_t<typename FieldType::Type>;
+    if constexpr (Aliases::size > 0) {
+      return Aliases::contains(_current_name);
+    }
+    return false;
   }
 
   static ErrorDetail::PathSegment to_path_segment(const int _current_index) {
@@ -134,6 +144,17 @@ class ViewReader {
     return std::string(_current_name);
   }
 
+  template <internal::StringLiteral _name>
+  static constexpr bool has_deserialized_field_with_name() {
+    using Fields = typename ViewType::Fields;
+    return []<int... _is>(std::integer_sequence<int, _is...>) {
+      return (false || ... ||
+              (tuple_element_t<_is, Fields>::name_ == _name &&
+               !internal::skip_deserialization_v<
+                   typename tuple_element_t<_is, Fields>::Type>));
+    }(std::make_integer_sequence<int, size_>());
+  }
+
   template <int i>
   static RFL_ALWAYS_INLINE void assign_if_field_matches(
       const R& _r, const auto _current_name_or_index, const auto& _var,
@@ -143,28 +164,57 @@ class ViewReader {
     using OriginalType = typename FieldType::Type;
     using T =
         std::remove_cvref_t<std::remove_pointer_t<typename FieldType::Type>>;
-    if (!(*_already_assigned) && !std::get<i>(*_found) &&
-        is_matching<i, FieldType>(_current_name_or_index)) {
-      std::get<i>(*_found) = true;
-      *_already_assigned = true;
-      using Peel = peel_transparent<T, R>;
-      auto res = read_field_core<R, W, typename Peel::CoreType,
-                                 ProcessorsType>(_r, _var, FieldType::name(),
-                                                 _errors, size_);
-      if (!res) [[unlikely]] {
-        return;
-      }
-      if constexpr (std::is_pointer_v<OriginalType>) {
-        if constexpr (Peel::peeled) {
-          auto wrapped = Peel::wrap(std::move(*res));
-          placement_move_field(rfl::get<i>(*_view), &wrapped);
+    if constexpr (!std::is_integral_v<std::remove_cvref_t<
+                      decltype(_current_name_or_index)>> &&
+                  internal::skip_deserialization_v<T> &&
+                  has_deserialized_field_with_name<FieldType::name_>()) {
+      return;
+    } else {
+      using Aliases = internal::field_aliases_t<OriginalType>;
+      auto assign_matched = [&]() {
+        std::get<i>(*_found) = true;
+        *_already_assigned = true;
+        using Peel = peel_transparent<T, R>;
+        auto res =
+            read_field_core<R, W, typename Peel::CoreType, ProcessorsType>(
+                _r, _var, FieldType::name(), _errors, size_);
+        if (!res) [[unlikely]] {
+          return;
+        }
+        if constexpr (std::is_pointer_v<OriginalType>) {
+          if constexpr (Peel::peeled) {
+            auto wrapped = Peel::wrap(std::move(*res));
+            placement_move_field(rfl::get<i>(*_view), &wrapped);
+          } else {
+            placement_move_field(rfl::get<i>(*_view), &(*res));
+          }
         } else {
-          placement_move_field(rfl::get<i>(*_view), &(*res));
+          rfl::get<i>(*_view) = Peel::wrap(std::move(*res));
+        }
+        std::get<i>(*_set) = true;
+      };
+      if constexpr (Aliases::size == 0) {
+        if (!(*_already_assigned) && !std::get<i>(*_found) &&
+            is_matching<i, FieldType>(_current_name_or_index)) {
+          assign_matched();
         }
       } else {
-        rfl::get<i>(*_view) = Peel::wrap(std::move(*res));
+        if (!(*_already_assigned) &&
+            is_matching<i, FieldType>(_current_name_or_index)) {
+          if (std::get<i>(*_found)) [[unlikely]] {
+            *_already_assigned = true;
+            std::stringstream stream;
+            stream << "Field named '" << FieldType::name()
+                   << "' was specified more than once (conflicting key '"
+                   << _current_name_or_index << "').";
+            _errors->reserve(size_);
+            _errors->emplace_back(make_nested_error(
+                to_path_segment(_current_name_or_index), stream.str()));
+            return;
+          }
+          assign_matched();
+        }
       }
-      std::get<i>(*_set) = true;
     }
   }
 

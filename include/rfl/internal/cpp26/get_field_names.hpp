@@ -13,8 +13,10 @@
 #include "../../Tuple.hpp"
 #include "../StringLiteral.hpp"
 #include "../concat_literals.hpp"
+#include "../is_alias.hpp"
 #include "../is_flatten_field.hpp"
 #include "../is_rename.hpp"
+#include "../is_tagged_union.hpp"
 #include "bind_to_tuple.hpp"
 #include "get_members.hpp"
 
@@ -26,11 +28,16 @@ consteval auto get_field_names();
 template <class T, class FieldName>
 consteval auto get_field_names_impl() {
   using Type = std::remove_cvref_t<std::remove_pointer_t<T>>;
-  if constexpr (is_rename_v<Type>) {
-    using Name = typename Type::Name;
+  if constexpr (has_rename_v<Type>) {
+    using Name = typename rename_traits<Type>::Name;
     return Name();
   } else if constexpr (is_flatten_field_v<Type>) {
-    return get_field_names<std::remove_cvref_t<typename Type::Type>>();
+    using Inner = remove_all_ptrs_t<typename Type::Type>;
+    if constexpr (is_tagged_union_based<Inner>) {
+      return rfl::Literal<>();
+    } else {
+      return get_field_names<std::remove_cvref_t<typename Type::Type>>();
+    }
   } else {
     return FieldName();
   }

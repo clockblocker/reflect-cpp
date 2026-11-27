@@ -57,6 +57,8 @@ struct Validator {
   /// @throws std::exception if validation of the default value fails, unless
   /// the parser is default-constructing a struct to read into, see
   /// internal::DeferredDefaults.
+  template <class U = T>
+    requires std::is_default_constructible_v<U>
   Validator() : value_(valid_or_deferred()) {}
 
   /// Move constructor.

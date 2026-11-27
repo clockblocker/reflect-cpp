@@ -8,6 +8,7 @@
 #include "../Literal.hpp"
 #include "../Variant.hpp"
 #include "../always_false.hpp"
+#include "../internal/default_if_null_v.hpp"
 #include "../internal/durations_as_count_v.hpp"
 #include "Parent.hpp"
 #include "Parser_base.hpp"
@@ -56,6 +57,11 @@ struct ParserDuration {
    */
   static Result<DurationType> read(const R& _r,
                                    const InputVarType& _var) noexcept {
+    if constexpr (internal::default_if_null_v<ProcessorsType>) {
+      if (_r.is_empty(_var)) {
+        return DurationType{};
+      }
+    }
     if constexpr (internal::durations_as_count_v<ProcessorsType>) {
       return Parser<R, W, Rep, ProcessorsType>::read(_r, _var).transform(
           [](const Rep _count) { return DurationType(_count); });

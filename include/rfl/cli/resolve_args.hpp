@@ -155,7 +155,16 @@ inline rfl::Result<bool> check_option_constraints(
 inline rfl::Result<ResolvedArgs> resolve_args(
     ParsedArgs _parsed, const Options& _options
 ) {
-  auto& result = _parsed.named;
+  std::map<std::string, std::string> result;
+  for (auto& [key, val] : _parsed.named) {
+    const auto* canonical = _options.find_long_alias(key);
+    const auto& target = canonical ? *canonical : key;
+    if (!result.emplace(target, std::move(val)).second) {
+      return rfl::error(
+          "Conflict: '--" + key + "' and '--" + target
+          + "' refer to the same field.");
+    }
+  }
 
   // Merge positional args.
   const auto& positional_names = _options.positionals;

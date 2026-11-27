@@ -50,7 +50,9 @@ class Tuple {
 
   /// Default constructor. Initializes each element with its default
   /// constructor.
-  Tuple() : Tuple(Types()...) {}
+  Tuple()
+    requires(std::is_default_constructible_v<Types> && ...)
+      : Tuple(Types()...) {}
 
   /// Copy constructor. Copies all elements from another Tuple.
   /// @param _other The Tuple to copy from.

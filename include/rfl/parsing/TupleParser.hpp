@@ -9,11 +9,14 @@
 #include "../Result.hpp"
 #include "../Tuple.hpp"
 #include "../always_false.hpp"
+#include "../internal/default_if_null_v.hpp"
+#include "../internal/is_safe_default_constructible.hpp"
 #include "../internal/nth_element_t.hpp"
 #include "../internal/ptr_cast.hpp"
 #include "Parent.hpp"
 #include "TupleReader.hpp"
 #include "call_destructors_on_tuple_where_necessary.hpp"
+#include "default_construct.hpp"
 #include "schema/Type.hpp"
 #include "schemaful/IsSchemafulReader.hpp"
 #include "schemaful/IsSchemafulWriter.hpp"
@@ -42,6 +45,12 @@ struct TupleParser {
    */
   static Result<TupleType> read(const R& _r,
                                 const InputVarType& _var) noexcept {
+    if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                  internal::is_safe_default_constructible_v<TupleType>) {
+      if (_r.is_empty(_var)) {
+        return default_construct<TupleType>();
+      }
+    }
     if constexpr (schemaful::IsSchemafulReader<R>) {
       using NamedTupleType = schemaful::tuple_to_named_tuple_t<TupleType>;
       const auto to_tuple = [](auto&& _named_tuple) {

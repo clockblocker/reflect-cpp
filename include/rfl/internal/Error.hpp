@@ -219,7 +219,6 @@ class Error {
     }
     return true;
   }
-
   /// Combines multiple errors into a single Error, preserving every error's
   /// details (path, message, and kind).
   RFL_COLD static Error combine(std::vector<Error> _errors) {

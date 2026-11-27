@@ -60,6 +60,33 @@ struct ParserSkip {
   }
 
   /**
+   * @brief Overlays a Skip value, preserving the base when deserialization is
+   *        skipped.
+   *
+   * @param _r The reader to use.
+   * @param _var The input variable to read from.
+   * @param _base The existing Skip value.
+   * @return A Result containing the overlaid or preserved value or an error.
+   */
+  static Result<internal::Skip<T, _skip_serialization, _skip_deserialization>>
+  read_into(
+      const R& _r, const InputVarType& _var,
+      internal::Skip<T, _skip_serialization, _skip_deserialization> _base)
+      noexcept {
+    if constexpr (_skip_deserialization) {
+      return _base;
+    } else {
+      const auto to_skip = [](auto&& _t) {
+        return internal::Skip<T, _skip_serialization, _skip_deserialization>(
+            std::forward<decltype(_t)>(_t));
+      };
+      return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
+                 _r, _var, std::move(_base.value()))
+          .transform(to_skip);
+    }
+  }
+
+  /**
    * @brief Writes a value and skips it if required.
    *
    * @tparam P The type of the parent.

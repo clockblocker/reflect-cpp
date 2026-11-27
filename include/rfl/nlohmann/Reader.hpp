@@ -71,7 +71,7 @@ struct Reader {
     }
     if (_idx >= _arr.val_->size()) {
       return error("Index " + std::to_string(_idx) + " out of bounds.",
-                   ErrorKind::missing_field);
+                   ErrorKind::invalid_length);
     }
     return InputVarType{&(*_arr.val_)[_idx]};
   }

@@ -11,18 +11,24 @@
 
 #include "../Ref.hpp"
 #include "../Tuple.hpp"
+#include "../internal/StringLiteral.hpp"
 #include "../internal/always_inline.hpp"
+#include "../internal/default_if_null_v.hpp"
+#include "../internal/field_aliases.hpp"
 #include "../internal/is_array.hpp"
+#include "../internal/is_skip.hpp"
 #include "../internal/no_duplicate_keys_v.hpp"
 #include "../internal/no_extra_fields_v.hpp"
 #include "FieldErrors.hpp"
 #include "Parser_base.hpp"
+#include "is_nullable.hpp"
 #include "peel_transparent_wrappers.hpp"
 #include "wrap_error.hpp"
 
 namespace rfl::parsing {
 
-template <class R, class W, class _ViewType, class ProcessorsType>
+template <class R, class W, class _ViewType, class ProcessorsType,
+          bool _overlay = false>
 class ViewReaderWithDefault {
  public:
   using InputVarType = typename R::InputVarType;
@@ -100,15 +106,72 @@ class ViewReaderWithDefault {
   static constexpr size_t size() { return size_; }
 
  private:
+  template <internal::StringLiteral _name>
+  static constexpr bool has_deserialized_field_with_name() {
+    using Fields = typename ViewType::Fields;
+    return []<int... _is>(std::integer_sequence<int, _is...>) {
+      return (false || ... ||
+              (tuple_element_t<_is, Fields>::name_ == _name &&
+               !internal::skip_deserialization_v<
+                   typename tuple_element_t<_is, Fields>::Type>));
+    }(std::make_integer_sequence<int, size_>());
+  }
+
+  template <int _i>
+  static constexpr bool is_field_shadowed_by_deserialized() {
+    using FieldType = tuple_element_t<_i, typename ViewType::Fields>;
+    using T =
+        std::remove_cvref_t<std::remove_pointer_t<typename FieldType::Type>>;
+    return internal::skip_deserialization_v<T> &&
+           has_deserialized_field_with_name<FieldType::name_>();
+  }
+
+  template <int _i>
+  static constexpr size_t field_name_count() {
+    if constexpr (is_field_shadowed_by_deserialized<_i>()) {
+      return 0;
+    } else {
+      using FieldType = tuple_element_t<_i, typename ViewType::Fields>;
+      return 1 + internal::field_aliases_t<typename FieldType::Type>::size;
+    }
+  }
+
+  static constexpr size_t total_name_count() {
+    return []<int... _is>(std::integer_sequence<int, _is...>) {
+      return (size_t{0} + ... + field_name_count<_is>());
+    }(std::make_integer_sequence<int, size_>());
+  }
+
+  struct NameEntry {
+    std::string_view name;
+    std::string_view primary_name;
+    int field_idx;
+    bool has_aliases;
+  };
+
   static constexpr auto make_sorted_name_table() {
     return []<int... _is>(std::integer_sequence<int, _is...>) {
-      std::array<std::pair<std::string_view, int>, sizeof...(_is)> table{
-          std::pair<std::string_view, int>{
-              tuple_element_t<_is, typename ViewType::Fields>::name(), _is}...};
+      std::array<NameEntry, total_name_count()> table{};
+      size_t pos = 0;
+      auto add_field = [&]<int _idx>() {
+        if constexpr (!is_field_shadowed_by_deserialized<_idx>()) {
+          using FieldType = tuple_element_t<_idx, typename ViewType::Fields>;
+          using Aliases = internal::field_aliases_t<typename FieldType::Type>;
+          constexpr auto primary = FieldType::name();
+          constexpr bool has_aliases = Aliases::size > 0;
+          table[pos++] = NameEntry{primary, primary, _idx, has_aliases};
+          if constexpr (has_aliases) {
+            for (const auto alias : Aliases::to_array()) {
+              table[pos++] = NameEntry{alias, primary, _idx, true};
+            }
+          }
+        }
+      };
+      (add_field.template operator()<_is>(), ...);
       for (size_t i = 1; i < table.size(); ++i) {
         const auto key = table[i];
         size_t j = i;
-        while (j > 0 && key.first < table[j - 1].first) {
+        while (j > 0 && key.name < table[j - 1].name) {
           table[j] = table[j - 1];
           --j;
         }
@@ -118,25 +181,26 @@ class ViewReaderWithDefault {
     }(std::make_integer_sequence<int, size_>());
   }
 
-  static int find_field_index(const std::string_view _name) noexcept {
-    if constexpr (size_ == 0) {
-      return -1;
+  static const NameEntry* find_field_entry(
+      const std::string_view _name) noexcept {
+    if constexpr (total_name_count() == 0) {
+      return nullptr;
     } else {
       static constexpr auto table = make_sorted_name_table();
       size_t lo = 0;
       size_t hi = table.size();
       while (lo < hi) {
         const size_t mid = lo + (hi - lo) / 2;
-        if (table[mid].first < _name) {
+        if (table[mid].name < _name) {
           lo = mid + 1;
         } else {
           hi = mid;
         }
       }
-      if (lo < table.size() && table[lo].first == _name) {
-        return table[lo].second;
+      if (lo < table.size() && table[lo].name == _name) {
+        return &table[lo];
       }
-      return -1;
+      return nullptr;
     }
   }
 
@@ -150,6 +214,21 @@ class ViewReaderWithDefault {
         std::remove_cvref_t<std::remove_pointer_t<decltype(extra_fields)>>;
     using T = std::remove_cvref_t<
         std::remove_pointer_t<typename ExtraFieldsType::Type>>;
+    if constexpr (_overlay) {
+      for (auto& [k, v] : *extra_fields) {
+        if (k == _current_name) {
+          auto res = read_into_or_read<R, W, T, ProcessorsType>(_r, _var,
+                                                                std::move(v));
+          if (!res) {
+            _errors->emplace_back(
+                wrap_field_error(_current_name, std::move(res).error()));
+            return;
+          }
+          v = std::move(*res);
+          return;
+        }
+      }
+    }
     auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
     if (!res) {
       _errors->emplace_back(
@@ -166,31 +245,86 @@ class ViewReaderWithDefault {
     using FieldType = tuple_element_t<_i, typename ViewType::Fields>;
     using OriginalType = typename FieldType::Type;
     using T = std::remove_cvref_t<std::remove_pointer_t<OriginalType>>;
-    using Peel = peel_transparent<T, R>;
-    auto res = read_field_core<R, W, typename Peel::CoreType, ProcessorsType>(
-        _r, _var, FieldType::name(), _errors);
-    if (!res) [[unlikely]] {
-      return;
+    constexpr auto name = FieldType::name();
+    if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                  !is_nullable_v<T>) {
+      if (_r.is_empty(_var)) {
+        return;
+      }
     }
-    // Parser::check_deferred_defaults relies on DefaultVal fields being
-    // replaced as a whole. For pure non-DefaultVal transparent wrappers on
-    // mutable fields, assign directly to the inner CoreType without
-    // instantiating per-wrapper move helpers.
-    if constexpr (std::is_pointer_v<OriginalType>) {
-      using TargetType = std::remove_pointer_t<OriginalType>;
-      if constexpr (Peel::peeled && !Peel::has_default_val &&
-                    !std::is_const_v<TargetType> &&
-                    !std::is_array_v<TargetType> &&
-                    !rfl::internal::is_array_v<typename Peel::CoreType>) {
-        Peel::unwrap_ref(*rfl::get<_i>(*_view)) = std::move(*res);
-      } else if constexpr (Peel::peeled) {
-        auto wrapped = Peel::wrap(std::move(*res));
-        move_assign_field(rfl::get<_i>(*_view), &wrapped);
+    if constexpr (_overlay) {
+      if constexpr (std::is_pointer_v<OriginalType>) {
+        using Target = std::remove_pointer_t<OriginalType>;
+        if constexpr (std::is_array_v<Target>) {
+          auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
+          if (!res) [[unlikely]] {
+            _errors->emplace_back(
+                wrap_field_error(name, std::move(res).error()));
+            return;
+          }
+          move_assign_field(rfl::get<_i>(*_view), &(*res));
+        } else if constexpr (std::is_const_v<Target>) {
+          auto res = [&]() {
+            if constexpr (std::is_copy_constructible_v<T>) {
+              return read_into_or_read<R, W, T, ProcessorsType>(
+                  _r, _var, T(*rfl::get<_i>(*_view)));
+            } else {
+              return Parser<R, W, T, ProcessorsType>::read(_r, _var);
+            }
+          }();
+          if (!res) [[unlikely]] {
+            _errors->emplace_back(
+                wrap_field_error(name, std::move(res).error()));
+            return;
+          }
+          move_assign_field(rfl::get<_i>(*_view), &(*res));
+        } else {
+          auto res = read_into_or_read<R, W, T, ProcessorsType>(
+              _r, _var, std::move(*rfl::get<_i>(*_view)));
+          if (!res) [[unlikely]] {
+            _errors->emplace_back(
+                wrap_field_error(name, std::move(res).error()));
+            return;
+          }
+          move_assign_field(rfl::get<_i>(*_view), &(*res));
+        }
       } else {
-        move_assign_field(rfl::get<_i>(*_view), &(*res));
+        auto res = read_into_or_read<R, W, T, ProcessorsType>(
+            _r, _var, std::move(rfl::get<_i>(*_view)));
+        if (!res) [[unlikely]] {
+          _errors->emplace_back(
+              wrap_field_error(name, std::move(res).error()));
+          return;
+        }
+        rfl::get<_i>(*_view) = std::move(*res);
       }
     } else {
-      rfl::get<_i>(*_view) = Peel::wrap(std::move(*res));
+      using Peel = peel_transparent<T, R>;
+      auto res = read_field_core<R, W, typename Peel::CoreType, ProcessorsType>(
+          _r, _var, name, _errors);
+      if (!res) [[unlikely]] {
+        return;
+      }
+      // Parser::check_deferred_defaults relies on DefaultVal fields being
+      // replaced as a whole. For pure non-DefaultVal transparent wrappers on
+      // mutable fields, assign directly to the inner CoreType without
+      // instantiating per-wrapper move helpers.
+      if constexpr (std::is_pointer_v<OriginalType>) {
+        using TargetType = std::remove_pointer_t<OriginalType>;
+        if constexpr (Peel::peeled && !Peel::has_default_val &&
+                      !std::is_const_v<TargetType> &&
+                      !std::is_array_v<TargetType> &&
+                      !rfl::internal::is_array_v<typename Peel::CoreType>) {
+          Peel::unwrap_ref(*rfl::get<_i>(*_view)) = std::move(*res);
+        } else if constexpr (Peel::peeled) {
+          auto wrapped = Peel::wrap(std::move(*res));
+          move_assign_field(rfl::get<_i>(*_view), &wrapped);
+        } else {
+          move_assign_field(rfl::get<_i>(*_view), &(*res));
+        }
+      } else {
+        rfl::get<_i>(*_view) = Peel::wrap(std::move(*res));
+      }
     }
   }
 
@@ -200,14 +334,27 @@ class ViewReaderWithDefault {
       const std::optional<SourceLocation>& _key_loc, auto* _view, auto* _errors,
       auto* _found, std::integer_sequence<int, is...>) {
     bool already_assigned = false;
-    const int idx = find_field_index(_current_name);
-    if (idx >= 0 && !(*_found)[static_cast<size_t>(idx)]) {
-      (*_found)[static_cast<size_t>(idx)] = true;
-      already_assigned = true;
-      static_cast<void>(
-          ((idx == is ? (assign_one_field<is>(_r, _var, _view, _errors), true)
-                      : false) ||
-           ...));
+    if (const auto* entry = find_field_entry(_current_name)) {
+      const int idx = entry->field_idx;
+      if ((*_found)[static_cast<size_t>(idx)]) {
+        if (entry->has_aliases) [[unlikely]] {
+          already_assigned = true;
+          std::stringstream stream;
+          stream << "Field named '" << entry->primary_name
+                 << "' was specified more than once (conflicting key '"
+                 << _current_name << "').";
+          _errors->emplace_back(make_nested_error(std::string(_current_name),
+                                                  stream.str()));
+          return;
+        }
+      } else {
+        (*_found)[static_cast<size_t>(idx)] = true;
+        already_assigned = true;
+        static_cast<void>(
+            ((idx == is ? (assign_one_field<is>(_r, _var, _view, _errors), true)
+                        : false) ||
+             ...));
+      }
     }
 
     if constexpr (ViewType::pos_extra_fields() != -1) {

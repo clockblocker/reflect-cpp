@@ -297,4 +297,32 @@ TEST(cli, test_short_cluster_nested_wrappers) {
   EXPECT_TRUE(result.value().verbose.value().value());
 }
 
+TEST(cli, test_short_cluster_invalid_utf8_lead_byte) {
+  // Invalid/truncated UTF-8 lead byte must not swallow a following '=' or ASCII
+  // character.
+  const auto res = read<Opts>({"-\xC3=1"});
+  ASSERT_FALSE(res);
+  EXPECT_EQ(std::string(res.error().what()), "Unknown short argument: -\xC3");
+
+  const auto res2 = read<Opts>({"-q\xE9v"});
+  ASSERT_FALSE(res2);
+  EXPECT_EQ(std::string(res2.error().what()),
+            "Unknown short argument: -\xE9 (in '-q\xE9v').");
+}
+
+TEST(cli, test_short_leading_equals_rejected) {
+  // `-=` and `-=foo` must be rejected cleanly (never produce an empty short key
+  // or consume the following token).
+  EXPECT_FALSE(read<Opts>({"-="}));
+  EXPECT_FALSE(read<Opts>({"-=foo"}));
+  EXPECT_FALSE(read<Opts>({"-=", "value"}));
+
+  const rfl::cli::internal::Options no_group{};
+  const auto raw = rfl::cli::internal::parse_string_views(
+      std::vector<std::string_view>{"-="}, no_group);
+  EXPECT_FALSE(raw);
+  const auto raw_val = rfl::cli::internal::parse_string_views(
+      std::vector<std::string_view>{"-=foo"}, no_group);
+  EXPECT_FALSE(raw_val);
+}
 }  // namespace test_short_clusters

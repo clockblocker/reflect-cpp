@@ -5,6 +5,7 @@
 #include <optional>
 #include <type_traits>
 
+#include "../Alias.hpp"
 #include "../Attribute.hpp"
 #include "../Box.hpp"
 #include "../DefaultVal.hpp"
@@ -86,6 +87,10 @@ class is_attribute<Positional<Type>>
 
 template <class Type, bool _skip_serialization, bool _skip_deserialization>
 class is_attribute<Skip<Type, _skip_serialization, _skip_deserialization>>
+    : public is_attribute<std::remove_cvref_t<Type>> {};
+
+template <StringLiteral _alias, class Type>
+class is_attribute<Alias<_alias, Type>>
     : public is_attribute<std::remove_cvref_t<Type>> {};
 
 template <class T>

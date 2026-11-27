@@ -25,6 +25,8 @@ struct Attribute {
   static constexpr bool is_transparent_wrapper_ = true;
 
   /// Default constructor.
+  template <class U = Type>
+    requires std::is_default_constructible_v<U>
   Attribute() : value_(Type()) {}
 
   /// Constructs from a const reference to the value.

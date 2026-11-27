@@ -11,6 +11,7 @@
 #include "is_empty.hpp"
 #include "is_field.hpp"
 #include "is_named_tuple.hpp"
+#include "is_tagged_union.hpp"
 #include "no_duplicate_field_names.hpp"
 #include "to_flattened_ptr_tuple.hpp"
 #include "to_ptr_field_tuple.hpp"
@@ -23,8 +24,13 @@ auto flatten_ptr_field_tuple(PtrFieldTuple& _t) {
   const auto get_one = [&]<int _i>(std::integral_constant<int, _i>) {
     using T = tuple_element_t<_i, std::remove_cvref_t<PtrFieldTuple>>;
     if constexpr (internal::is_flatten_field<T>::value) {
-      auto subtuple = to_ptr_field_tuple(*rfl::get<_i>(_t).get());
-      return flatten_ptr_field_tuple(subtuple);
+      using Inner = remove_all_ptrs_t<typename T::Type>;
+      if constexpr (is_tagged_union_based<Inner>) {
+        return rfl::Tuple<>();
+      } else {
+        auto subtuple = to_ptr_field_tuple(*rfl::get<_i>(_t).get());
+        return flatten_ptr_field_tuple(subtuple);
+      }
     } else {
       return rfl::make_tuple(rfl::get<_i>(_t));
     }

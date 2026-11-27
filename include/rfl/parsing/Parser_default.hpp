@@ -18,15 +18,20 @@
 #include "../internal/always_inline.hpp"
 #include "../internal/cold.hpp"
 #include "../internal/default_if_missing_v.hpp"
+#include "../internal/default_if_null_v.hpp"
 #include "../internal/has_default_val_v.hpp"
+#include "../internal/has_flattened_tagged_union.hpp"
 #include "../internal/has_reflection_method_v.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/has_reflector.hpp"
 #include "../internal/TransparentWrapper.hpp"
+#include "../internal/is_attribute.hpp"
 #include "../internal/is_basic_type.hpp"
 #include "../internal/is_deprecated.hpp"
 #include "../internal/is_description.hpp"
 #include "../internal/is_literal.hpp"
+#include "../internal/is_safe_default_constructible.hpp"
+#include "../internal/is_tagged_union.hpp"
 #include "../internal/is_validator.hpp"
 #include "../internal/no_duplicate_keys_v.hpp"
 #include "../internal/processed_t.hpp"
@@ -34,10 +39,12 @@
 #include "../internal/to_ptr_named_tuple.hpp"
 #include "../to_view.hpp"
 #include "AreReaderAndWriter.hpp"
-#include "check_default_value.hpp"
 #include "FieldErrors.hpp"
+#include "FlattenedTaggedUnionParser.hpp"
+#include "check_default_value.hpp"
 #include "MapParser.hpp"
 #include "Parent.hpp"
+#include "ParserAlias.hpp"
 #include "ParserArray.hpp"
 #include "ParserAtomic.hpp"
 #include "ParserAtomicFlag.hpp"
@@ -77,6 +84,8 @@
 #include "Parser_base.hpp"
 #include "VectorParser.hpp"
 #include "call_destructors_where_necessary.hpp"
+#include "default_construct.hpp"
+#include "is_nullable.hpp"
 #include "is_string_map.hpp"
 #include "make_type_name.hpp"
 #include "schema/Type.hpp"
@@ -166,11 +175,22 @@ struct Parser {
     } else if constexpr (is_rfl_variant_v<T>) {
       return ParserRflVariant<R, W, T, ProcessorsType>::read(_r, _var);
 
-    } else if constexpr (is_tagged_union_v<T>) {
-      return ParserTaggedUnion<R, W, T, ProcessorsType>::read(_r, _var);
+    } else if constexpr (internal::is_tagged_union_based<T>) {
+      using BaseTU = internal::tagged_union_base_t<T>;
+      if constexpr (std::is_same_v<std::remove_cvref_t<T>, BaseTU>) {
+        return ParserTaggedUnion<R, W, BaseTU, ProcessorsType>::read(_r, _var);
+      } else {
+        return ParserTaggedUnion<R, W, BaseTU, ProcessorsType>::read(_r, _var)
+            .transform([](BaseTU&& _base) -> T {
+              return internal::from_tagged_union_base<T>(std::move(_base));
+            });
+      }
 
     } else if constexpr (is_rename_v<T>) {
       return ParserRename<R, W, T, ProcessorsType>::read(_r, _var);
+
+    } else if constexpr (is_alias_v<T>) {
+      return ParserAlias<R, W, T, ProcessorsType>::read(_r, _var);
 
     } else if constexpr (is_result_v<T>) {
       return ParserResult<R, W, T, ProcessorsType>::read(_r, _var);
@@ -253,6 +273,18 @@ struct Parser {
                           ProcessorsType>::read(_r, _var);
 
     } else if constexpr (internal::has_read_reflector<T>) {
+      if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                    !is_nullable_v<T>) {
+        if (_r.is_empty(_var)) {
+          if constexpr (internal::is_safe_default_constructible_v<T>) {
+            return rfl::parsing::default_construct<T>();
+          } else {
+            return Result<T>(
+                error("Cannot construct non-default-constructible type '" +
+                      type_name_t<T>().str() + "' from a null value."));
+          }
+        }
+      }
       const auto wrap_in_t = [](auto&& _named_tuple) -> Result<T> {
         try {
           using NT = decltype(_named_tuple);
@@ -267,13 +299,38 @@ struct Parser {
 
     } else if constexpr (schemaful::IsSchemafulReader<R> &&
                          internal::is_literal_v<T>) {
+      if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                    internal::is_safe_default_constructible_v<T>) {
+        if (_r.is_empty(_var)) {
+          return rfl::parsing::default_construct<T>();
+        }
+      }
       return _r.template to_basic_type<T>(_var);
 
     } else if constexpr (R::template has_custom_constructor<T>) {
+      if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                    !is_nullable_v<T> &&
+                    internal::is_safe_default_constructible_v<T>) {
+        if (_r.is_empty(_var)) {
+          return rfl::parsing::default_construct<T>();
+        }
+      }
       return _r.template use_custom_constructor<T>(_var);
 
     } else {
       if constexpr (internal::has_reflection_type_v<T>) {
+        if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                      !is_nullable_v<T>) {
+          if (_r.is_empty(_var)) {
+            if constexpr (internal::is_safe_default_constructible_v<T>) {
+              return rfl::parsing::default_construct<T>();
+            } else {
+              return Result<T>(
+                  error("Cannot construct non-default-constructible type '" +
+                        type_name_t<T>().str() + "' from a null value."));
+            }
+          }
+        }
         using ReflectionType = std::remove_cvref_t<typename T::ReflectionType>;
         const auto wrap_in_t = [](auto&& _named_tuple) -> Result<T> {
           try {
@@ -303,10 +360,16 @@ struct Parser {
         return Parser<R, W, ReflectionType, ProcessorsType>::read(_r, _var)
             .and_then(wrap_in_t);
 
+      } else if constexpr (internal::has_flattened_tagged_union_v<T>) {
+        return FlattenedTaggedUnionParser<R, W, T, ProcessorsType>::read(_r,
+                                                                         _var);
+
       } else if constexpr (internal::default_if_missing_v<ProcessorsType> ||
                            internal::has_unwrapped_default_val_v<T> ||
                            (internal::has_default_val_v<T> &&
-                            requires { T{}; })) {
+                            requires { T{}; }) ||
+                           (internal::default_if_null_v<ProcessorsType> &&
+                            internal::is_safe_default_constructible_v<T>)) {
         // A DefaultVal inside rfl::Short, rfl::Positional, rfl::Description
         // or rfl::Deprecated is filled in only if T{} exists. Otherwise T is
         // read like a struct without DefaultVal fields, and those fields are
@@ -320,6 +383,177 @@ struct Parser {
   }
 
  public:
+  /**
+   * @brief Overlays input data onto an existing base value.
+   *
+   * For structs and transparent wrappers, fields absent from the input preserve
+   * their values from `_base`, nested structs are overlaid recursively, and
+   * leaf/container values present in the input replace `_base`.
+   *
+   * @param _r The reader to use.
+   * @param _var The input variable to read from.
+   * @param _base The base value to overlay onto.
+   * @return A Result containing the overlaid value or an error.
+   */
+  static RFL_ALWAYS_INLINE auto read_into(const R& _r, const InputVarType& _var,
+                                          [[maybe_unused]] T _base)
+    requires(!std::is_array_v<T>)
+  {
+    if constexpr (internal::is_basic_type_v<T> || is_bytestring_v<T> ||
+                  is_vectorstring_v<T> || is_string_map_v<T> ||
+                  is_vector_like_v<T>) {
+      return read(_r, _var);
+
+    } else if constexpr (is_shared_ptr_v<T>) {
+      return ParserSharedPtr<R, W, typename T::element_type,
+                             ProcessorsType>::read_into(_r, _var,
+                                                        std::move(_base));
+
+    } else if constexpr (is_unique_ptr_v<T>) {
+      return ParserUniquePtr<R, W, typename T::element_type,
+                             ProcessorsType>::read_into(_r, _var,
+                                                        std::move(_base));
+
+    } else if constexpr (is_optional_v<T>) {
+      return ParserOptional<R, W, typename std::remove_cvref_t<T>::value_type,
+                            ProcessorsType>::read_into(_r, _var,
+                                                       std::move(_base));
+
+    } else if constexpr (is_box_v<T>) {
+      using IsBox = is_box<std::remove_cvref_t<T>>;
+      return ParserBox<R, W, typename IsBox::element_type, IsBox::copyability,
+                       ProcessorsType>::read_into(_r, _var, std::move(_base));
+
+    } else if constexpr (is_ref_v<T>) {
+      using IsRef = is_ref<std::remove_cvref_t<T>>;
+      return ParserRef<R, W, typename IsRef::element_type,
+                       ProcessorsType>::read_into(_r, _var, std::move(_base));
+
+    } else if constexpr (is_variant_v<T> || is_rfl_variant_v<T> ||
+                         is_tagged_union_v<T>) {
+      return read(_r, _var);
+
+    } else if constexpr (is_rename_v<T>) {
+      return ParserRename<R, W, T, ProcessorsType>::read_into(_r, _var,
+                                                              std::move(_base));
+
+    } else if constexpr (is_alias_v<T>) {
+      return ParserAlias<R, W, T, ProcessorsType>::read_into(_r, _var,
+                                                             std::move(_base));
+
+    } else if constexpr (is_result_v<T> || is_expected_v<T> ||
+                         is_duration_v<T> || is_filepath_v<T>) {
+      return read(_r, _var);
+
+    } else if constexpr (is_skip_v<T>) {
+      using U = std::remove_cvref_t<T>;
+      return ParserSkip<R, W, typename U::Type, U::skip_serialization_,
+                        U::skip_deserialization_,
+                        ProcessorsType>::read_into(_r, _var, std::move(_base));
+
+    } else if constexpr (is_span_v<T> || is_time_point_v<T>) {
+      return read(_r, _var);
+
+    } else if constexpr (is_default_val_v<T>) {
+      return ParserDefaultVal<R, W, T, ProcessorsType>::read_into(
+          _r, _var, std::move(_base));
+
+    } else if constexpr (is_short_v<T>) {
+      return ParserShort<R, W, T, ProcessorsType>::read_into(_r, _var,
+                                                             std::move(_base));
+
+    } else if constexpr (is_positional_v<T>) {
+      return ParserPositional<R, W, typename std::remove_cvref_t<T>::Type,
+                              ProcessorsType>::read_into(_r, _var,
+                                                         std::move(_base));
+
+    } else if constexpr (is_reference_wrapper_v<T> || is_array_v<T> ||
+                         is_rfl_array_v<T> || is_tuple_v<T> ||
+                         is_rfl_tuple_v<T> || is_pair_v<T> ||
+                         std::is_enum_v<T> || is_wstring_v<T> ||
+                         is_string_view_v<T>) {
+      return read(_r, _var);
+
+    } else if constexpr (is_commented_v<T>) {
+      return ParserCommented<R, W, T, ProcessorsType>::read_into(
+          _r, _var, std::move(_base));
+
+    } else if constexpr (std::is_pointer_v<T> || is_c_array_v<T>) {
+      return read(_r, _var);
+
+    } else if constexpr (internal::has_read_reflector<T>) {
+      if constexpr (internal::has_write_reflector<T>) {
+        const auto wrap_in_t = [](auto&& _named_tuple) -> Result<T> {
+          try {
+            using NT = decltype(_named_tuple);
+            return Reflector<T>::to(std::forward<NT>(_named_tuple));
+          } catch (std::exception& e) {
+            return error(e.what());
+          }
+        };
+        try {
+          return read_into_or_read<R, W, typename Reflector<T>::ReflType,
+                                   ProcessorsType>(_r, _var,
+                                                   Reflector<T>::from(_base))
+              .and_then(wrap_in_t);
+        } catch (std::exception& e) {
+          return error(e.what());
+        }
+      } else {
+        return read(_r, _var);
+      }
+
+    } else if constexpr ((schemaful::IsSchemafulReader<R> &&
+                          internal::is_literal_v<T>) ||
+                         R::template has_custom_constructor<T>) {
+      return read(_r, _var);
+
+    } else if constexpr (internal::has_reflection_type_v<T>) {
+      if constexpr (internal::is_literal_v<T>) {
+        return read(_r, _var);
+      } else {
+        using ReflectionType = std::remove_cvref_t<typename T::ReflectionType>;
+        const auto wrap_in_t = [](auto&& _named_tuple) -> Result<T> {
+          try {
+            using NT = decltype(_named_tuple);
+            if constexpr (internal::HasFromReflectionMethod<T>) {
+              return T::from_reflection(std::forward<NT>(_named_tuple));
+            } else if constexpr (internal::is_validator_v<T>) {
+              return T::from_value(std::forward<NT>(_named_tuple));
+            } else {
+              return T{std::forward<NT>(_named_tuple)};
+            }
+          } catch (std::exception& e) {
+            return error(e.what());
+          }
+        };
+        if constexpr (internal::is_description_v<T> ||
+                      internal::is_deprecated_v<T> ||
+                      internal::is_attribute_v<T> ||
+                      internal::is_validator_v<T>) {
+          return read_into_or_read<R, W, ReflectionType, ProcessorsType>(
+                     _r, _var, std::move(_base.value()))
+              .and_then(wrap_in_t);
+        } else if constexpr (internal::has_reflection_method_v<T> &&
+                             std::is_constructible_v<
+                                 ReflectionType,
+                                 decltype(_base.reflection())>) {
+          return read_into_or_read<R, W, ReflectionType, ProcessorsType>(
+                     _r, _var, ReflectionType(_base.reflection()))
+              .and_then(wrap_in_t);
+        } else {
+          return read(_r, _var);
+        }
+      }
+
+    } else if constexpr (internal::has_flattened_tagged_union_v<T>) {
+      return read(_r, _var);
+
+    } else {
+      return read_struct_into(_r, _var, std::move(_base));
+    }
+  }
+
   /**
    * @brief Writes a value to the output.
    *
@@ -379,11 +613,16 @@ struct Parser {
     } else if constexpr (is_rfl_variant_v<T>) {
       ParserRflVariant<R, W, T, ProcessorsType>::write(_w, _var, _parent);
 
-    } else if constexpr (is_tagged_union_v<T>) {
-      ParserTaggedUnion<R, W, T, ProcessorsType>::write(_w, _var, _parent);
+    } else if constexpr (internal::is_tagged_union_based<T>) {
+      using BaseTU = internal::tagged_union_base_t<T>;
+      ParserTaggedUnion<R, W, BaseTU, ProcessorsType>::write(
+          _w, static_cast<const BaseTU&>(_var), _parent);
 
     } else if constexpr (is_rename_v<T>) {
       ParserRename<R, W, T, ProcessorsType>::write(_w, _var, _parent);
+
+    } else if constexpr (is_alias_v<T>) {
+      ParserAlias<R, W, T, ProcessorsType>::write(_w, _var, _parent);
 
     } else if constexpr (is_duration_v<T>) {
       using U = std::remove_cvref_t<T>;
@@ -483,6 +722,10 @@ struct Parser {
         Parser<R, W, ReflectionType, ProcessorsType>::write(_w, r, _parent);
       }
 
+    } else if constexpr (internal::has_flattened_tagged_union_v<T>) {
+      FlattenedTaggedUnionParser<R, W, T, ProcessorsType>::write(_w, _var,
+                                                                 _parent);
+
     } else {
       const auto ptr_named_tuple = ProcessorsType::template process<T>(
           internal::to_ptr_named_tuple(_var));
@@ -546,12 +789,16 @@ struct Parser {
     } else if constexpr (is_rfl_variant_v<U>) {
       return ParserRflVariant<R, W, U, ProcessorsType>::to_schema(_definitions);
 
-    } else if constexpr (is_tagged_union_v<U>) {
-      return ParserTaggedUnion<R, W, U, ProcessorsType>::to_schema(
+    } else if constexpr (internal::is_tagged_union_based<U>) {
+      using BaseTU = internal::tagged_union_base_t<U>;
+      return ParserTaggedUnion<R, W, BaseTU, ProcessorsType>::to_schema(
           _definitions);
 
     } else if constexpr (is_rename_v<U>) {
       return ParserRename<R, W, U, ProcessorsType>::to_schema(_definitions);
+
+    } else if constexpr (is_alias_v<U>) {
+      return ParserAlias<R, W, U, ProcessorsType>::to_schema(_definitions);
 
     } else if constexpr (is_result_v<U>) {
       return ParserResult<R, W, U, ProcessorsType>::to_schema(_definitions);
@@ -712,12 +959,18 @@ struct Parser {
         (*_definitions)[name] = Parser<R, W, typename Reflector<U>::ReflType,
                                        ProcessorsType>::to_schema(_definitions);
 
+      } else if constexpr (internal::has_flattened_tagged_union_v<U>) {
+        (*_definitions)[name] =
+            FlattenedTaggedUnionParser<R, W, U, ProcessorsType>::to_schema(
+                _definitions);
+
       } else {
         using NamedTupleType = internal::processed_t<U, ProcessorsType>;
-        // The schema takes the default values of rfl::DefaultVal fields from
-        // a default-constructed instance. A tagged union wrapper holds its
-        // alternative through a pointer that U{} leaves null, so we construct
-        // the wrapper that holds the alternative by value instead.
+        // The schema takes the default values of rfl::DefaultVal fields (and
+        // all fields under rfl::DefaultIfMissing) from a default-constructed
+        // instance. A tagged union wrapper holds its alternative through a
+        // pointer that U{} leaves null, so we construct the wrapper that holds
+        // the alternative by value instead.
         using DefaultsType = tagged_union_wrapper_no_ptr_t<U>;
         if constexpr (internal::has_unwrapped_default_val_v<U>) {
           static_assert(requires { DefaultsType{}; },
@@ -734,11 +987,23 @@ struct Parser {
             if (internal::has_unwrapped_default_val_v<U>) {
               throw;
             }
-            // T{} threw, and T's only DefaultVal fields are inside
-            // rfl::Short, rfl::Positional, rfl::Description or
-            // rfl::Deprecated, so it is described like a struct without
-            // DefaultVal fields: those fields are required and have no
-            // default value.
+            (*_definitions)[name] =
+                Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
+                    _definitions);
+          }
+        } else if constexpr (internal::default_if_missing_v<ProcessorsType>) {
+          if constexpr (internal::is_safe_default_constructible_v<
+                            DefaultsType>) {
+            try {
+              (*_definitions)[name] =
+                  schema_with_defaults<DefaultsType, NamedTupleType>(
+                      _definitions);
+            } catch (...) {
+              (*_definitions)[name] =
+                  Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
+                      _definitions);
+            }
+          } else {
             (*_definitions)[name] =
                 Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
                     _definitions);
@@ -841,6 +1106,15 @@ struct Parser {
       // satisfy its validator and validation cannot be deferred. The outer
       // handler is for this line only.
       auto t = default_construct<T>(&deferred);
+      if constexpr (internal::default_if_null_v<ProcessorsType>) {
+        if (_r.is_empty(_var)) {
+          if (deferred.num() != 0) [[unlikely]] {
+            return error(default_construction_error(
+                deferred.first_error()->what().c_str()));
+          }
+          return t;
+        }
+      }
       try {
         auto view = ProcessorsType::template process<T>(to_view(t));
         using ViewType = decltype(view);
@@ -875,7 +1149,8 @@ struct Parser {
       }
     } catch (std::exception& e) {
       if constexpr (!internal::default_if_missing_v<ProcessorsType> &&
-                    !internal::has_unwrapped_default_val_v<T>) {
+                    !internal::has_unwrapped_default_val_v<T> &&
+                    !internal::default_if_null_v<ProcessorsType>) {
         // Its only rfl::DefaultVal fields are inside rfl::Short,
         // rfl::Positional, rfl::Description or rfl::Deprecated. Read it like
         // a struct without DefaultVal fields, with those fields required.
@@ -946,7 +1221,8 @@ struct Parser {
         std::make_index_sequence<ViewType::size()>());
     FieldErrors<ProcessorsType> errors;
     for_each_field(_view, [&](size_t _i, const auto& _field) {
-      if (_found[_i] || should_stop_on_field_error<ProcessorsType>(errors)) {
+      if ((_found[_i] && !internal::default_if_null_v<ProcessorsType>) ||
+          should_stop_on_field_error<ProcessorsType>(errors)) {
         return;
       }
       auto check = DefaultValueCheck{};
@@ -959,8 +1235,9 @@ struct Parser {
                            ? "is invalid: " + check.invalid->what()
                            : "could not be checked: " + *check.unchecked;
       errors.emplace_back(make_nested_error(
-          name, "Field named '" + name + "' not found, and its default value " +
-                    why));
+          name, "Field named '" + name + "'" +
+                    (_found[_i] ? " was null" : " not found") +
+                    ", and its default value " + why));
     });
     if constexpr (internal::fail_fast_v<ProcessorsType>) {
       return std::move(errors).error();
@@ -994,13 +1271,34 @@ struct Parser {
     }(std::make_index_sequence<ViewType::size()>());
   }
 
+  /// Overlays input data onto an existing struct instance, preserving any
+  /// fields not present in the input and recursively overlaying nested structs.
+  static Result<T> read_struct_into(const R& _r, const InputVarType& _var,
+                                    T _base) {
+    try {
+      auto view = ProcessorsType::template process<T>(to_view(_base));
+      using ViewType = std::remove_cvref_t<decltype(view)>;
+      auto err = Parser<R, W, ViewType, ProcessorsType>::read_view_into(
+          _r, _var, &view);
+      if (err) [[unlikely]] {
+        return error(std::move(*err));
+      }
+      return _base;
+    } catch (std::exception& e) {
+      return error(e.what());
+    }
+  }
+
   /// The error returned by read_struct_with_default when T{} throws. On its
   /// own, the exception reads as if the input was wrong, so we name the struct
   /// and explain why it was default-constructed.
   RFL_COLD static Error default_construction_error(const char* _what) {
-    const std::string reason = internal::has_unwrapped_default_val_v<T>
-                                   ? "it contains rfl::DefaultVal"
-                                   : "it is read with rfl::DefaultIfMissing";
+    const std::string reason =
+        internal::has_unwrapped_default_val_v<T>
+            ? "it contains rfl::DefaultVal"
+            : (internal::default_if_missing_v<ProcessorsType>
+                   ? "it is read with rfl::DefaultIfMissing"
+                   : "it is read with rfl::DefaultIfNull");
     return Error(
         "Could not default-construct " + type_name_t<T>().str() +
         ", which is required because " + reason +

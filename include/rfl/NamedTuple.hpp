@@ -14,6 +14,7 @@
 #include "internal/StringLiteral.hpp"
 #include "internal/find_index.hpp"
 #include "internal/is_extra_fields.hpp"
+#include "internal/no_duplicate_field_names.hpp"
 #include "make_field.hpp"
 #include "make_from_tuple.hpp"
 #include "tuple_cat.hpp"
@@ -45,6 +46,9 @@ class NamedTuple {
   using Fields = rfl::Tuple<std::remove_cvref_t<FieldTypes>...>;
   using Names = Literal<std::remove_cvref_t<FieldTypes>::name_...>;
   using Values = rfl::Tuple<typename std::remove_cvref_t<FieldTypes>::Type...>;
+
+  static_assert(internal::no_duplicate_field_names<Fields>(),
+                "Duplicate field names are not allowed in named tuples.");
 
  public:
   /// @brief Construct NamedTuple from values of each field type.
@@ -686,13 +690,12 @@ class NamedTuple {
       rfl::Tuple<OtherFieldTypes...>&& _other_fields,
       std::integer_sequence<int, _is...>) {
     const auto get_field = [&]<int _i>(Index<_i>) {
-      constexpr auto field_name =
-          internal::nth_element_t<_i, FieldTypes...>::name_;
-      constexpr auto index =
-          internal::find_index<field_name, rfl::Tuple<OtherFieldTypes...>>();
+      constexpr auto index = internal::find_matching_field_index<
+          _i, Fields, rfl::Tuple<OtherFieldTypes...>>();
       using FieldType = internal::nth_element_t<_i, FieldTypes...>;
-      using T = std::remove_cvref_t<typename FieldType::Type>;
-      return FieldType(std::forward<T>(rfl::get<index>(_other_fields).value_));
+      using OtherFieldType = internal::nth_element_t<index, OtherFieldTypes...>;
+      return FieldType(std::forward<typename OtherFieldType::Type>(
+          rfl::get<index>(_other_fields).value_));
     };
     return rfl::make_tuple(get_field(Index<_is>{})...);
   }

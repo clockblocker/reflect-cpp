@@ -706,4 +706,87 @@ TEST(nlohmann, error_kind_parity_with_json) {
 }
 #endif
 
+TEST(nlohmann, error_kind_propagation) {
+  struct Sample {
+    std::string name;
+    uint16_t port;
+    int8_t delta;
+    bool active;
+    double ratio;
+    std::vector<int> items;
+  };
+
+  // Object/array/primitive type mismatches -> invalid_type
+  {
+    const auto not_obj = rfl::nlohmann::read<Sample>(nlohmann::json::array());
+    ASSERT_FALSE(not_obj.has_value());
+    EXPECT_EQ(not_obj.error().kind(), rfl::ErrorKind::invalid_type);
+  }
+  {
+    const auto bad_types = rfl::nlohmann::read<Sample>(nlohmann::json{
+        {"name", 123},
+        {"port", "8080"},
+        {"delta", true},
+        {"active", "yes"},
+        {"ratio", "half"},
+        {"items", nlohmann::json::object()},
+    });
+    ASSERT_FALSE(bad_types.has_value());
+    const auto details = bad_types.error().details();
+    ASSERT_EQ(details.size(), 6u);
+    for (const auto& d : details) {
+      EXPECT_EQ(d.kind, rfl::ErrorKind::invalid_type);
+    }
+  }
+
+  // Numeric range and sign overflow -> invalid_value
+  {
+    const auto neg_uint = rfl::nlohmann::read<uint32_t>(nlohmann::json(-1));
+    ASSERT_FALSE(neg_uint.has_value());
+    EXPECT_EQ(neg_uint.error().kind(), rfl::ErrorKind::invalid_value);
+
+    const auto big_uint =
+        rfl::nlohmann::read<uint16_t>(nlohmann::json(100000u));
+    ASSERT_FALSE(big_uint.has_value());
+    EXPECT_EQ(big_uint.error().kind(), rfl::ErrorKind::invalid_value);
+
+    const auto big_int = rfl::nlohmann::read<int8_t>(nlohmann::json(200));
+    ASSERT_FALSE(big_int.has_value());
+    EXPECT_EQ(big_int.error().kind(), rfl::ErrorKind::invalid_value);
+
+    const auto small_int = rfl::nlohmann::read<int8_t>(nlohmann::json(-200));
+    ASSERT_FALSE(small_int.has_value());
+    EXPECT_EQ(small_int.error().kind(), rfl::ErrorKind::invalid_value);
+  }
+
+  // Missing field in object -> missing_field
+  {
+    const auto missing =
+        rfl::nlohmann::read<Sample>(nlohmann::json{{"name", "svc"}});
+    ASSERT_FALSE(missing.has_value());
+    EXPECT_EQ(missing.error().kind(), rfl::ErrorKind::missing_field);
+
+    const nlohmann::json obj = {{"a", 1}};
+    const rfl::nlohmann::Reader<> reader;
+    const auto obj_res =
+        reader.to_object(rfl::nlohmann::Reader<>::InputVarType{&obj});
+    ASSERT_TRUE(obj_res.has_value());
+    const auto field_res = reader.get_field_from_object("missing", *obj_res);
+    ASSERT_FALSE(field_res.has_value());
+    EXPECT_EQ(field_res.error().kind(), rfl::ErrorKind::missing_field);
+  }
+
+  // Out-of-bounds array index -> invalid_length
+  {
+    const nlohmann::json arr = nlohmann::json::array({10, 20});
+    const rfl::nlohmann::Reader<> reader;
+    const auto arr_res =
+        reader.to_array(rfl::nlohmann::Reader<>::InputVarType{&arr});
+    ASSERT_TRUE(arr_res.has_value());
+    const auto oob = reader.get_field_from_array(2, *arr_res);
+    ASSERT_FALSE(oob.has_value());
+    EXPECT_EQ(oob.error().kind(), rfl::ErrorKind::invalid_length);
+  }
+}
+
 }  // namespace test_nlohmann

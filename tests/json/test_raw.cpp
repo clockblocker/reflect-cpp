@@ -56,9 +56,23 @@ TEST(json, test_raw_constructors_and_accessors) {
   const auto valid = rfl::json::Raw::from_string(R"({ "k" : [1, 2] })");
   ASSERT_TRUE(valid.has_value());
   EXPECT_EQ(valid->str(), R"({ "k" : [1, 2] })");
-  EXPECT_FALSE(rfl::json::Raw::from_string("").has_value());
-  EXPECT_FALSE(rfl::json::Raw::from_string("{not json").has_value());
-  EXPECT_FALSE(rfl::json::Raw::from_string("1 2").has_value());
+
+  const auto empty_err = rfl::json::Raw::from_string("");
+  ASSERT_FALSE(empty_err.has_value());
+  EXPECT_EQ(empty_err.error().kind(), rfl::ErrorKind::syntax_error);
+
+  const auto malformed_err = rfl::json::Raw::from_string("{not json");
+  ASSERT_FALSE(malformed_err.has_value());
+  EXPECT_EQ(malformed_err.error().kind(), rfl::ErrorKind::syntax_error);
+
+  const auto trailing_err = rfl::json::Raw::from_string("1 2");
+  ASSERT_FALSE(trailing_err.has_value());
+  EXPECT_EQ(trailing_err.error().kind(), rfl::ErrorKind::syntax_error);
+
+  const auto insitu_err =
+      rfl::json::Raw::from_string("1", YYJSON_READ_INSITU);
+  ASSERT_FALSE(insitu_err.has_value());
+  EXPECT_EQ(insitu_err.error().kind(), rfl::ErrorKind::other);
 }
 
 TEST(json, test_raw_root_values) {

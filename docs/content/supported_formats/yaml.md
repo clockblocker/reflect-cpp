@@ -63,6 +63,19 @@ Note that `std::cout` is also an ostream, so this works as well:
 rfl::yaml::write(person, std::cout) << std::endl;
 ```
 
+## Overlaying onto an existing struct (`read_into` / `load_into`)
+
+For layered configuration, you can overlay partial YAML onto an existing base struct with `rfl::yaml::read_into` and `rfl::yaml::load_into`:
+
+```cpp
+const auto config =
+    rfl::yaml::load_into(Config{}, "workspace.yaml")
+        .and_then([](Config c) { return rfl::yaml::load_into(std::move(c), "user.yaml"); })
+        .and_then([](Config c) { return rfl::yaml::load_into(std::move(c), "local.yaml"); });
+```
+
+Missing fields preserve their values from the base struct, nested structs are overlaid recursively, explicit `null` clears `std::optional<T>`, processors (such as `rfl::NoExtraFields` or `rfl::SnakeCaseToCamelCase`) work as template parameters, and errors leave an lvalue base untouched.
+
 ## Custom constructors
 
 One of the great things about C++ is that it gives you control over

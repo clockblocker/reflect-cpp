@@ -5,6 +5,7 @@
 
 #include "../Result.hpp"
 #include "../Vectorstring.hpp"
+#include "../internal/default_if_null_v.hpp"
 #include "Parent.hpp"
 #include "Parser_base.hpp"
 #include "schema/Type.hpp"
@@ -35,6 +36,11 @@ struct ParserVectorstring {
    */
   static Result<Vectorstring> read(const R& _r,
                                    const InputVarType& _var) noexcept {
+    if constexpr (internal::default_if_null_v<ProcessorsType>) {
+      if (_r.is_empty(_var)) {
+        return Vectorstring{};
+      }
+    }
     return _r.template to_basic_type<Vectorstring>(_var);
   }
 

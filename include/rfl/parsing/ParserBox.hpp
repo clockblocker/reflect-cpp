@@ -10,6 +10,7 @@
 #include "../atomic/remove_atomic_t.hpp"
 #include "../atomic/set_atomic.hpp"
 #include "../internal/default_if_missing_v.hpp"
+#include "../internal/default_if_null_v.hpp"
 #include "../internal/has_default_val_v.hpp"
 #include "Parser_base.hpp"
 #include "schema/Type.hpp"
@@ -48,6 +49,8 @@ struct ParserBox {
                     "Atomic types cannot be mixed with rfl::DefaultVal");
       static_assert(!internal::default_if_missing_v<ProcessorsType>,
                     "Atomic types cannot be mixed with rfl::DefaultIfMissing");
+      static_assert(!internal::default_if_null_v<ProcessorsType>,
+                    "Atomic types cannot be mixed with rfl::DefaultIfNull");
 
       return Parser<R, W, RemoveAtomicT, ProcessorsType>::read(_r, _var)
           .transform([](auto&& _t) {
@@ -62,6 +65,28 @@ struct ParserBox {
       };
       return Parser<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(_r,
                                                                         _var)
+          .transform(to_box);
+    }
+  }
+
+  /**
+   * @brief Overlays a Box from the input onto an existing Box.
+   *
+   * @param _r The reader to use.
+   * @param _var The input variable to read from.
+   * @param _base The existing Box.
+   * @return A Result containing the overlaid Box or an error.
+   */
+  static Result<Box<T, C>> read_into(const R& _r, const InputVarType& _var,
+                                     Box<T, C> _base) noexcept {
+    if constexpr (atomic::is_atomic_v<T>) {
+      return read(_r, _var);
+    } else {
+      const auto to_box = [](auto&& _t) {
+        return Box<T, C>::make(std::forward<decltype(_t)>(_t));
+      };
+      return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
+                 _r, _var, std::move(*_base))
           .transform(to_box);
     }
   }

@@ -106,6 +106,16 @@ inline rfl::Result<ParsedArgs> parse_string_views(
     }
     return all_paths->find_long(_key);
   };
+  const auto find_long_alias = [&](const std::string_view _key) {
+    if (!_options.all_paths_options
+        || _key.find(path_separator) == std::string_view::npos) {
+      return _options.find_long_alias(_key);
+    }
+    if (!all_paths) {
+      all_paths = &_options.all_paths_options();
+    }
+    return all_paths->find_long_alias(_key);
+  };
 
   // Every occurrence of a list option adds to it. Counter options increment on
   // each occurrence. Any other option can be given only once unless
@@ -271,7 +281,7 @@ inline rfl::Result<ParsedArgs> parse_string_views(
       bool negated = false;
       bool matched_prefix = false;
       std::string prefix_suffix;
-      if (const auto* canonical = _options.find_long_alias(key)) {
+      if (const auto* canonical = find_long_alias(key)) {
         key = *canonical;
       }
       auto option = find_long(key);
@@ -402,6 +412,10 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         continue;
       }
 
+      if (group.starts_with('=')) {
+        return error("Invalid short option '" + std::string(arg_raw) + "'.");
+      }
+
       // Check for an exact multi-character single-dash short option (e.g. -CC,
       // -rp, -rp=paths) before splitting character-by-character into clusters.
       const auto full_eq = group.find('=');
@@ -418,13 +432,20 @@ inline rfl::Result<ParsedArgs> parse_string_views(
         // names matched above). An unknown character may take several bytes in
         // UTF-8, so take them all for the message.
         const auto c = static_cast<unsigned char>(group[j]);
+        size_t len = 1;
+        if (!exact_multi_short && _options.group_short_options && c >= 0xC0) {
+          const size_t expected = c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : 2;
+          while (len < expected && j + len < group.size()
+                 && (static_cast<unsigned char>(group[j + len]) & 0xC0)
+                        == 0x80) {
+            ++len;
+          }
+        }
         auto key = std::string(
             exact_multi_short
                 ? full_key
-                : (_options.group_short_options
-                       ? group.substr(
-                             j, c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 1)
-                       : full_key));
+                : (_options.group_short_options ? group.substr(j, len)
+                                                : full_key));
         const auto option = _options.find_short(key);
         const auto rest = group.substr(j + key.size());
         const auto name = "-" + key;

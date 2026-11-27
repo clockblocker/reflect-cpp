@@ -21,9 +21,10 @@ template <class R, class W, class NamedTupleType, class ProcessorsType>
 class is_view_reader<ViewReader<R, W, NamedTupleType, ProcessorsType>>
     : public std::true_type {};
 
-template <class R, class W, class NamedTupleType, class ProcessorsType>
+template <class R, class W, class NamedTupleType, class ProcessorsType,
+          bool _overlay>
 class is_view_reader<
-    ViewReaderWithDefault<R, W, NamedTupleType, ProcessorsType>>
+    ViewReaderWithDefault<R, W, NamedTupleType, ProcessorsType, _overlay>>
     : public std::true_type {};
 
 template <class T>

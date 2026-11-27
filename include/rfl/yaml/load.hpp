@@ -1,6 +1,8 @@
 #ifndef RFL_YAML_LOAD_HPP_
 #define RFL_YAML_LOAD_HPP_
 
+#include <utility>
+
 #include "../Result.hpp"
 #include "../SourceMap.hpp"
 #include "../io/load_string.hpp"
@@ -33,6 +35,22 @@ Result<T> load(const std::string& _fname, SourceMap* _source_map) {
     return read<T, Ps...>(_str, _source_map);
   };
   return rfl::io::load_string(_fname).and_then(read_string);
+}
+
+/// Loads a YAML file from disk and overlays it onto an existing object.
+/// Missing fields preserve values from `_base`; atomic on error.
+/// @tparam Ps Processors to apply during parsing
+/// @tparam T The type to overlay onto (deduced from `_base`)
+/// @param _base The base object to overlay onto
+/// @param _fname The filename/path of the YAML file to load
+/// @return Result containing either the overlaid object or an error message
+template <class... Ps, class T>
+Result<T> load_into(T _base, const std::string& _fname) {
+  auto str = rfl::io::load_string(_fname);
+  if (!str) {
+    return error(std::move(str).error());
+  }
+  return read_into<Ps...>(std::move(_base), std::string_view(*str));
 }
 
 }  // namespace yaml

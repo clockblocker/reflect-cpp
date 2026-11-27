@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "../Alias.hpp"
 #include "../DefaultHint.hpp"
 #include "../DefaultVal.hpp"
 #include "../Deprecated.hpp"
@@ -26,8 +27,10 @@
 #include "../ValueName.hpp"
 #include "../internal/StringLiteral.hpp"
 #include "../internal/TransparentWrapper.hpp"
+#include "../internal/field_aliases.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/has_reflector.hpp"
+#include "../internal/is_alias.hpp"
 #include "../internal/is_extra_fields.hpp"
 #include "../internal/is_named_tuple.hpp"
 #include "../internal/is_positional.hpp"
@@ -409,12 +412,14 @@ struct Options {
     if (open) {
       const auto rest = _name.substr(open->first.size());
       const auto sep = rest.find(path_separator);
-      if (open->first.empty() && sep != std::string_view::npos) {
-        // A dotted key whose leading segment is a known nested struct or map
-        // field (e.g. `--database.nope` beside rfl::ExtraFields) belongs to
-        // that field, not to ExtraFields.
-        const auto head_prefix = rest.substr(0, sep + 1);
-        if (has_prefix(long_options, head_prefix)
+      if (sep != std::string_view::npos) {
+        // A dotted key whose leading segment is a known field (nested struct,
+        // map, or scalar, e.g. `--database.nope` or `--port.foo` beside
+        // rfl::ExtraFields) belongs to that field, not to ExtraFields.
+        const auto head = open->first + std::string(rest.substr(0, sep));
+        const auto head_prefix = head + path_separator;
+        if (find_pair(long_options, head) != nullptr
+            || has_prefix(long_options, head_prefix)
             || has_prefix(open_prefixes, head_prefix)) {
           return Option{};
         }
@@ -566,6 +571,15 @@ struct cli_annotations<Deprecated<_deprecation_message, _description, T>>
 
 template <rfl::internal::StringLiteral _name, class T>
 struct cli_annotations<Rename<_name, T>> : cli_annotations_t<T> {};
+
+template <rfl::internal::StringLiteral _name, class T>
+struct cli_annotations<Alias<_name, T>> : cli_annotations_t<T> {
+  template <class Fn>
+  static void for_each_alias(Fn&& _fn) {
+    _fn(_name.string_view());
+    cli_annotations_t<T>::for_each_alias(_fn);
+  }
+};
 
 template <class T>
 struct cli_annotations<Positional<T>> : cli_annotations_t<T> {
@@ -759,6 +773,7 @@ auto unwrap_option_type() {
   }
   else if constexpr (rfl::internal::is_short_v<U>
                      || rfl::internal::is_positional_v<U>
+                     || rfl::internal::is_alias_v<U>
                      || rfl::internal::is_transparent_wrapper_v<U>
                      || parsing::is_rename_v<U>
                      || parsing::is_default_val_v<U>
@@ -940,8 +955,51 @@ void collect_value_options(Options* _options) {
 }
 
 template <class T, class ProcessorsType, class VisitedType>
+void collect_alias_paths(const std::string& _alias_prefix,
+                         const std::string& _canonical_prefix,
+                         Options* _options) {
+  using NT = option_fields_t<T, ProcessorsType>;
+  using NextVisitedType = typename VisitedType::template add<T>;
+  [&]<size_t... _is>(std::index_sequence<_is...>) {
+    auto add_one = [&]<size_t _i>() {
+      using FieldType = rfl::tuple_element_t<_i, typename NT::Fields>;
+      using FT = std::remove_cvref_t<typename FieldType::Type>;
+      if constexpr (!rfl::internal::is_extra_fields_v<FT>) {
+        using U = unwrapped_option_t<FT, ProcessorsType>;
+        using Ann = cli_annotations_t<FT>;
+        const std::string field_name(FieldType::name());
+        const std::string alias_path = _alias_prefix + field_name;
+        const std::string canonical_path = _canonical_prefix + field_name;
+        if constexpr (is_option_struct_v<U> && !is_open_option_v<U>
+                      && !parsing::is_string_map_v<U>
+                      && !NextVisitedType::template contains<U>) {
+          collect_alias_paths<U, ProcessorsType, NextVisitedType>(
+              alias_path + path_separator, canonical_path + path_separator,
+              _options);
+          Ann::for_each_alias([&](const std::string_view _alias) {
+            collect_alias_paths<U, ProcessorsType, NextVisitedType>(
+                _alias_prefix + std::string(_alias) + path_separator,
+                canonical_path + path_separator, _options);
+          });
+        } else {
+          _options->add_long_alias(alias_path, canonical_path);
+          Ann::for_each_alias([&](const std::string_view _alias) {
+            _options->add_long_alias(_alias_prefix + std::string(_alias),
+                                     canonical_path);
+          });
+        }
+      }
+    };
+    (add_one.template operator()<_is>(), ...);
+  }(std::make_index_sequence<NT::size()>());
+}
+
+template <class T, class ProcessorsType, class VisitedType>
 void collect_options(const std::string& _prefix, Options* _options) {
   using NT = option_fields_t<T, ProcessorsType>;
+  static_assert(
+      rfl::internal::no_alias_collisions<typename NT::Fields>(),
+      "Field alias collides with another field's name or alias.");
   using NextVisitedType = typename VisitedType::template add<T>;
   [&]<size_t... _is>(std::index_sequence<_is...>) {
     auto add_one = [&]<size_t _i>() {
@@ -1027,6 +1085,11 @@ void collect_options(const std::string& _prefix, Options* _options) {
                 path + path_separator, _options);
             collect_opt_groups<U, ProcessorsType, NextVisitedType>(
                 path + path_separator, _options);
+            Ann::for_each_alias([&](const std::string_view _alias) {
+              collect_alias_paths<U, ProcessorsType, NextVisitedType>(
+                  _prefix + std::string(_alias) + path_separator,
+                  path + path_separator, _options);
+            });
           }
         } else {
           static_assert(
@@ -1138,6 +1201,9 @@ void collect_short_and_positional(Options* _options) {
 template <class T, class ProcessorsType>
 void collect_top_level_options(Options* _options) {
   using NT = option_fields_t<T, ProcessorsType>;
+  static_assert(
+      rfl::internal::no_alias_collisions<typename NT::Fields>(),
+      "Field alias collides with another field's name or alias.");
   [&]<size_t... _is>(std::index_sequence<_is...>) {
     auto add_one = [&]<size_t _i>() {
       using FieldType = rfl::tuple_element_t<_i, typename NT::Fields>;

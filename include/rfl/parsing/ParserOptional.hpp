@@ -62,6 +62,40 @@ struct ParserOptional {
   }
 
   /**
+   * @brief Overlays an optional value from the input onto an existing optional.
+   *
+   * If the input is null/empty, resets to `std::nullopt`. If the base holds a
+   * value, recursively overlays onto it; otherwise parses a fresh value.
+   *
+   * @param _r The reader to use.
+   * @param _var The input variable to read from.
+   * @param _base The existing optional value.
+   * @return A Result containing the overlaid optional value or an error.
+   */
+  static Result<std::optional<T>> read_into(
+      const R& _r, const InputVarType& _var,
+      std::optional<T> _base) noexcept {
+    if constexpr (schemaful::IsSchemafulReader<R>) {
+      return read(_r, _var);
+    } else {
+      if (_r.is_empty(_var)) {
+        return std::optional<T>();
+      }
+      const auto to_opt = [](auto&& _t) {
+        return std::make_optional<T>(std::forward<decltype(_t)>(_t));
+      };
+      if (_base.has_value()) {
+        return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
+                   _r, _var, std::move(*_base))
+            .transform(to_opt);
+      }
+      return Parser<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(_r,
+                                                                        _var)
+          .transform(to_opt);
+    }
+  }
+
+  /**
    * @brief Writes an optional value to the output.
    *
    * @tparam P The type of the parent.

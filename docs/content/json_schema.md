@@ -269,3 +269,76 @@ const std::string json_schema = rfl::json::to_schema<Person>(rfl::json::pretty);
 ```
 
 `rfl::Deprecated` behaves like a thin wrapper around the underlying type, just like `rfl::Description`. You can access the underlying value using `.get()`, `.value()`, `operator()()`, `operator*()`, `operator->()`, or the assignment operator.
+
+## Default values with `rfl::DefaultIfMissing`
+
+When you generate a schema with the `rfl::DefaultIfMissing` processor, all fields are omitted from `"required"` and—whenever the struct is default-constructible—each field's default value from `T{}` is emitted as a JSON Schema `"default"` annotation:
+
+```cpp
+struct Config {
+  int port = 8080;
+  std::string host = "localhost";
+  bool verbose = true;
+  std::optional<std::string> tls_cert;
+  std::optional<int> timeout = 30;
+};
+
+const std::string json_schema =
+    rfl::json::to_schema<Config, rfl::DefaultIfMissing>(rfl::json::pretty);
+```
+
+This produces:
+
+```json
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$ref": "#/$defs/Config",
+    "$defs": {
+        "Config": {
+            "type": "object",
+            "properties": {
+                "port": {
+                    "type": "integer",
+                    "default": 8080
+                },
+                "host": {
+                    "type": "string",
+                    "default": "localhost"
+                },
+                "verbose": {
+                    "default": true,
+                    "type": "boolean"
+                },
+                "tls_cert": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ]
+                },
+                "timeout": {
+                    "default": 30,
+                    "anyOf": [
+                        {
+                            "type": "integer"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ]
+                }
+            },
+            "required": []
+        }
+    }
+}
+```
+
+A few details to keep in mind:
+
+- Empty nullable fields (`std::optional`, `std::shared_ptr`, `std::unique_ptr` initialized to `std::nullopt` / `nullptr`) do not emit `"default": null`; initialized ones (like `timeout = 30`) emit their default value.
+- If a struct is not default-constructible, or if default-constructing it throws an exception (for example, an uninitialized `rfl::Validator` field whose zero value is invalid), schema generation still succeeds and simply omits `"default"` annotations for that struct.
+- Without `rfl::DefaultIfMissing`, plain fields do not emit `"default"` annotations (use `rfl::DefaultVal<T>` for per-field defaults).

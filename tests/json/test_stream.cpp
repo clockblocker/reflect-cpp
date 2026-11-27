@@ -1184,4 +1184,93 @@ TEST(json, test_stream_4kib_chunks_and_unbuffered_linear) {
   }
 }
 
+TEST(json, test_stream_error_kind) {
+  // StreamReader I/O error -> io_error
+  {
+    std::istringstream bad_in;
+    bad_in.setstate(std::ios::badbit);
+    rfl::json::StreamReader<Row> reader(bad_in, rfl::json::StreamFormat::ndjson);
+    const auto r = reader.next();
+    ASSERT_TRUE(r.has_value());
+    ASSERT_FALSE(r->has_value());
+    EXPECT_EQ(r->error().kind(), rfl::ErrorKind::io_error);
+  }
+
+  // StreamWriter I/O errors (write, flush, finish) -> io_error
+  {
+    std::ostringstream bad_out;
+    bad_out.setstate(std::ios::badbit);
+    rfl::json::StreamWriter writer(bad_out, rfl::json::StreamFormat::json_array);
+    const auto w = writer.write(Row{1, "a", 1.0});
+    ASSERT_FALSE(w.has_value());
+    EXPECT_EQ(w.error().kind(), rfl::ErrorKind::io_error);
+    const auto f = writer.flush();
+    ASSERT_FALSE(f.has_value());
+    EXPECT_EQ(f.error().kind(), rfl::ErrorKind::io_error);
+    const auto fin = writer.finish();
+    ASSERT_FALSE(fin.has_value());
+    EXPECT_EQ(fin.error().kind(), rfl::ErrorKind::io_error);
+    const auto fin_retry = writer.finish();
+    ASSERT_FALSE(fin_retry.has_value());
+    EXPECT_EQ(fin_retry.error().kind(), rfl::ErrorKind::io_error);
+  }
+
+  // Malformed JSON / truncated / trailing garbage / max_record_bytes -> syntax_error
+  {
+    rfl::json::StreamReader<Row> malformed(
+        "{not json\n", rfl::json::StreamFormat::ndjson);
+    const auto r = malformed.next();
+    ASSERT_TRUE(r.has_value());
+    ASSERT_FALSE(r->has_value());
+    EXPECT_EQ(r->error().kind(), rfl::ErrorKind::syntax_error);
+  }
+  {
+    rfl::json::StreamReader<int> truncated(
+        "[1, 2", rfl::json::StreamFormat::json_array);
+    ASSERT_TRUE(truncated.next()->has_value());
+    ASSERT_TRUE(truncated.next()->has_value());
+    const auto r = truncated.next();
+    ASSERT_TRUE(r.has_value());
+    ASSERT_FALSE(r->has_value());
+    EXPECT_EQ(r->error().kind(), rfl::ErrorKind::syntax_error);
+  }
+  {
+    rfl::json::StreamReader<int> trailing(
+        "[1] garbage", rfl::json::StreamFormat::json_array);
+    ASSERT_TRUE(trailing.next()->has_value());
+    const auto r = trailing.next();
+    ASSERT_TRUE(r.has_value());
+    ASSERT_FALSE(r->has_value());
+    EXPECT_EQ(r->error().kind(), rfl::ErrorKind::syntax_error);
+  }
+  {
+    rfl::json::StreamReader<int> trailing_comma(
+        "[1,]", rfl::json::StreamFormat::json_array);
+    ASSERT_TRUE(trailing_comma.next()->has_value());
+    const auto r = trailing_comma.next();
+    ASSERT_TRUE(r.has_value());
+    ASSERT_FALSE(r->has_value());
+    EXPECT_EQ(r->error().kind(), rfl::ErrorKind::syntax_error);
+  }
+  {
+    rfl::json::StreamReader<std::string> too_big(
+        R"("1234567890")", rfl::json::StreamFormat::ndjson, 0, 5);
+    const auto r = too_big.next();
+    ASSERT_TRUE(r.has_value());
+    ASSERT_FALSE(r->has_value());
+    EXPECT_EQ(r->error().kind(), rfl::ErrorKind::syntax_error);
+  }
+
+  // Non-array start in json_array mode -> invalid_type
+  {
+    rfl::json::StreamReader<Row> non_array(
+        R"({"id":1,"name":"x","score":1.0})",
+        rfl::json::StreamFormat::json_array);
+    const auto r = non_array.next();
+    ASSERT_TRUE(r.has_value());
+    ASSERT_FALSE(r->has_value());
+    EXPECT_EQ(r->error().kind(), rfl::ErrorKind::invalid_type);
+  }
+}
+
 }  // namespace test_stream
