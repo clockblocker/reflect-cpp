@@ -20,6 +20,7 @@
 #include "../internal/is_deprecated.hpp"
 #include "../internal/is_description.hpp"
 #include "../internal/is_literal.hpp"
+#include "../internal/is_safe_default_constructible.hpp"
 #include "../internal/is_validator.hpp"
 #include "../internal/processed_t.hpp"
 #include "../internal/ptr_cast.hpp"
@@ -228,7 +229,7 @@ struct Parser {
       if constexpr (internal::default_if_null_v<ProcessorsType> &&
                     !is_nullable_v<T>) {
         if (_r.is_empty(_var)) {
-          if constexpr (std::is_default_constructible_v<T>) {
+          if constexpr (internal::is_safe_default_constructible_v<T>) {
             return default_construct<T>();
           } else {
             return Result<T>(
@@ -252,7 +253,7 @@ struct Parser {
     } else if constexpr (schemaful::IsSchemafulReader<R> &&
                          internal::is_literal_v<T>) {
       if constexpr (internal::default_if_null_v<ProcessorsType> &&
-                    std::is_default_constructible_v<T>) {
+                    internal::is_safe_default_constructible_v<T>) {
         if (_r.is_empty(_var)) {
           return default_construct<T>();
         }
@@ -262,7 +263,7 @@ struct Parser {
     } else if constexpr (R::template has_custom_constructor<T>) {
       if constexpr (internal::default_if_null_v<ProcessorsType> &&
                     !is_nullable_v<T> &&
-                    std::is_default_constructible_v<T>) {
+                    internal::is_safe_default_constructible_v<T>) {
         if (_r.is_empty(_var)) {
           return default_construct<T>();
         }
@@ -274,7 +275,7 @@ struct Parser {
         if constexpr (internal::default_if_null_v<ProcessorsType> &&
                       !is_nullable_v<T>) {
           if (_r.is_empty(_var)) {
-            if constexpr (std::is_default_constructible_v<T>) {
+            if constexpr (internal::is_safe_default_constructible_v<T>) {
               return default_construct<T>();
             } else {
               return Result<T>(
@@ -310,7 +311,7 @@ struct Parser {
       } else if constexpr (internal::default_if_missing_v<ProcessorsType> ||
                            internal::has_default_val_v<T> ||
                            (internal::default_if_null_v<ProcessorsType> &&
-                            std::is_default_constructible_v<T>)) {
+                            internal::is_safe_default_constructible_v<T>)) {
         return read_struct_with_default(_r, _var);
 
       } else {

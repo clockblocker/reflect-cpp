@@ -501,13 +501,17 @@ TEST(json, test_default_if_null_wrapped_non_default_constructible) {
   static_assert(
       !std::is_default_constructible_v<rfl::SkipSerialization<NoDefault>>);
   static_assert(!std::is_default_constructible_v<rfl::Attribute<NoDefault>>);
-  static_assert(!std::is_default_constructible_v<rfl::Box<NoDefault>>);
-  static_assert(!std::is_default_constructible_v<rfl::Ref<NoDefault>>);
+  static_assert(
+      !rfl::internal::is_safe_default_constructible_v<rfl::Box<NoDefault>>);
+  static_assert(
+      !rfl::internal::is_safe_default_constructible_v<rfl::Ref<NoDefault>>);
   static_assert(!std::is_default_constructible_v<rfl::Rename<"r", NoDefault>>);
   static_assert(!std::is_default_constructible_v<rfl::DefaultVal<NoDefault>>);
   static_assert(!std::is_default_constructible_v<rfl::Short<"s", NoDefault>>);
   static_assert(!std::is_default_constructible_v<rfl::Positional<NoDefault>>);
   static_assert(!std::is_default_constructible_v<WrappedNoDefaultFields>);
+  static_assert(
+      !rfl::internal::is_safe_default_constructible_v<WrappedNoDefaultFields>);
 
   const std::string valid_json = R"({
     "desc": 1,
@@ -612,6 +616,119 @@ TEST(json, test_default_if_null_variants_with_nullable_alternative) {
   EXPECT_EQ(std::get<int>(in_struct.value().plain_std_var), 7);
   ASSERT_TRUE(rfl::holds_alternative<int>(in_struct.value().plain_rfl_var));
   EXPECT_EQ(rfl::get<int>(in_struct.value().plain_rfl_var), 9);
+}
+
+struct DT;
+struct Leaf {
+  int x = 0;
+};
+struct Node {
+  rfl::Box<DT> lesser;
+};
+struct DT {
+  std::variant<Leaf, Node> v;
+};
+
+struct Tree {
+  struct Branch {
+    rfl::Box<Tree> child;
+  };
+  std::optional<Branch> b;
+};
+
+struct DirectNode {
+  int v = 1;
+  rfl::Box<DirectNode> next;
+};
+
+struct BoxAndRefOnlyNoDefault {
+  rfl::Box<NoDefault> box;
+  rfl::Ref<NoDefault> ref;
+};
+
+// Regression test: recursive structs with incomplete types in rfl::Box /
+// rfl::Ref must remain valid for normal read/write AND DefaultIfNull, while
+// cyclic Box/Ref graphs and Box<NoDefault>/Ref<NoDefault> must be rejected as
+// unsafe to default-construct without stack overflow or compile errors.
+TEST(json, test_default_if_null_recursive_and_cyclic_box_ref) {
+  static_assert(rfl::internal::is_safe_default_constructible_v<DT>);
+  static_assert(rfl::internal::is_safe_default_constructible_v<Tree>);
+  static_assert(!rfl::internal::is_safe_default_constructible_v<DirectNode>);
+  static_assert(
+      !rfl::internal::is_safe_default_constructible_v<rfl::Box<DirectNode>>);
+  static_assert(
+      !rfl::internal::is_safe_default_constructible_v<rfl::Ref<DirectNode>>);
+  static_assert(
+      !rfl::internal::is_safe_default_constructible_v<BoxAndRefOnlyNoDefault>);
+
+  // 1. Recursive variant struct DT: normal write + read and DefaultIfNull read.
+  const DT dt_orig{Node{.lesser = rfl::make_box<DT>(DT{Leaf{.x = 42}})}};
+  const auto dt_json = rfl::json::write(dt_orig);
+
+  const auto dt_normal = rfl::json::read<DT>(dt_json);
+  ASSERT_TRUE(dt_normal.has_value()) << dt_normal.error().what();
+  ASSERT_TRUE(std::holds_alternative<Node>(dt_normal.value().v));
+  const auto& inner_dt = *std::get<Node>(dt_normal.value().v).lesser;
+  ASSERT_TRUE(std::holds_alternative<Leaf>(inner_dt.v));
+  EXPECT_EQ(std::get<Leaf>(inner_dt.v).x, 42);
+
+  const auto dt_with_flag = rfl::json::read<DT, rfl::DefaultIfNull>(dt_json);
+  ASSERT_TRUE(dt_with_flag.has_value()) << dt_with_flag.error().what();
+  ASSERT_TRUE(std::holds_alternative<Node>(dt_with_flag.value().v));
+  const auto& inner_dt2 = *std::get<Node>(dt_with_flag.value().v).lesser;
+  ASSERT_TRUE(std::holds_alternative<Leaf>(inner_dt2.v));
+  EXPECT_EQ(std::get<Leaf>(inner_dt2.v).x, 42);
+
+  const auto dt_null = rfl::json::read<DT, rfl::DefaultIfNull>("null");
+  ASSERT_TRUE(dt_null.has_value()) << dt_null.error().what();
+  ASSERT_TRUE(std::holds_alternative<Leaf>(dt_null.value().v));
+  EXPECT_EQ(std::get<Leaf>(dt_null.value().v).x, 0);
+
+  // 2. Recursive optional-wrapped Tree: normal write + read and DefaultIfNull.
+  const Tree tree_orig{
+      .b = Tree::Branch{.child = rfl::make_box<Tree>(Tree{.b = std::nullopt})}};
+  const auto tree_json = rfl::json::write(tree_orig);
+
+  const auto tree_normal = rfl::json::read<Tree>(tree_json);
+  ASSERT_TRUE(tree_normal.has_value()) << tree_normal.error().what();
+  ASSERT_TRUE(tree_normal.value().b.has_value());
+  EXPECT_FALSE(tree_normal.value().b->child->b.has_value());
+
+  const auto tree_with_flag =
+      rfl::json::read<Tree, rfl::DefaultIfNull>(tree_json);
+  ASSERT_TRUE(tree_with_flag.has_value()) << tree_with_flag.error().what();
+  ASSERT_TRUE(tree_with_flag.value().b.has_value());
+  EXPECT_FALSE(tree_with_flag.value().b->child->b.has_value());
+
+  const auto tree_null = rfl::json::read<Tree, rfl::DefaultIfNull>("null");
+  ASSERT_TRUE(tree_null.has_value()) << tree_null.error().what();
+  EXPECT_FALSE(tree_null.value().b.has_value());
+
+  // 3. Cyclic DirectNode: must NOT stack-overflow on null.
+  const auto cyclic_null =
+      rfl::json::read<DirectNode, rfl::DefaultIfNull>("null");
+  EXPECT_FALSE(cyclic_null.has_value());
+
+  const auto cyclic_field_null =
+      rfl::json::read<DirectNode, rfl::DefaultIfNull>(
+          R"({"v": 7, "next": null})");
+  EXPECT_FALSE(cyclic_field_null.has_value());
+
+  // 4. Struct containing ONLY Box<NoDefault> and Ref<NoDefault> compiles
+  // cleanly with DefaultIfNull and handles both valid input and null cleanly.
+  const auto box_ref_ok =
+      rfl::json::read<BoxAndRefOnlyNoDefault, rfl::DefaultIfNull>(
+          R"({"box": 10, "ref": 20})");
+  ASSERT_TRUE(box_ref_ok.has_value()) << box_ref_ok.error().what();
+  EXPECT_EQ(box_ref_ok.value().box->v, 10);
+  EXPECT_EQ(box_ref_ok.value().ref->v, 20);
+
+  EXPECT_FALSE(
+      (rfl::json::read<BoxAndRefOnlyNoDefault, rfl::DefaultIfNull>("null"))
+          .has_value());
+  EXPECT_FALSE((rfl::json::read<BoxAndRefOnlyNoDefault, rfl::DefaultIfNull>(
+                    R"({"box": null, "ref": 20})"))
+                   .has_value());
 }
 
 }  // namespace test_default_if_null

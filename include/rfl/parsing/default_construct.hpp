@@ -5,6 +5,7 @@
 #include <type_traits>
 
 #include "../Result.hpp"
+#include "../internal/is_safe_default_constructible.hpp"
 
 namespace rfl::parsing {
 
@@ -12,6 +13,7 @@ namespace rfl::parsing {
 /// constructor and returning it as an rfl::Error so noexcept parsers never
 /// terminate.
 template <class T>
+  requires internal::is_safe_default_constructible_v<T>
 Result<T> default_construct() noexcept {
   if constexpr (std::is_nothrow_default_constructible_v<T>) {
     return T{};
