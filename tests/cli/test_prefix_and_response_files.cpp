@@ -72,6 +72,28 @@ TEST(cli, dynamic_options_prefix_match_and_suggest) {
   const auto s_hidden = opts.suggest("-secret-interna");
   EXPECT_FALSE(s_hidden.has_value());
   EXPECT_EQ(opts.usage().find("secret-internal"), std::string::npos);
+
+  // Hidden option aliases are also excluded from suggestions, and
+  // allow_option_like_values accepts `-CFLAGS -O2`.
+  opts.allow_option_like_values = true;
+  opts.add_value("CFLAGS", {}, {.group = "Compiler"})
+      .add_alias("secret-alias", "secret-internal")
+      .add_optional_value(
+          "report",
+          "a-long-heap-allocated-default-implicit-value-string-over-32-chars",
+          {}, {.group = "Output"});
+  EXPECT_FALSE(opts.suggest("-secret-alia").has_value());
+
+  const auto r2 = opts.parse({"-CFLAGS", "-O2", "-report"});
+  ASSERT_TRUE(r2) << r2.error().what();
+  EXPECT_EQ(r2->values.at("CFLAGS"), "-O2");
+  EXPECT_EQ(
+      r2->values.at("report"),
+      "a-long-heap-allocated-default-implicit-value-string-over-32-chars");
+
+  const auto grouped_help = opts.usage();
+  EXPECT_NE(grouped_help.find("Compiler:\n"), std::string::npos);
+  EXPECT_NE(grouped_help.find("Output:\n"), std::string::npos);
 }
 
 TEST(cli, expand_response_files) {

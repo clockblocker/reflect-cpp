@@ -197,7 +197,9 @@ inline rfl::Result<ParsedArgs> parse_string_views(
     switch (_option.kind) {
       case OptionKind::value:
         // -k value
-        if (!has_next || looks_like_option(_args[*_i + 1])) {
+        if (!has_next
+            || (!_options.allow_option_like_values
+                && looks_like_option(_args[*_i + 1]))) {
           return error(
               "Missing value for option '" + std::string(_raw) + "'.");
         }

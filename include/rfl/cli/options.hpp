@@ -81,9 +81,8 @@ struct Option {
   bool is_list = false;
 
   /// For OptionKind::implicit_value: the value that the option stands for
-  /// when it is given without one. It views the rfl::ImplicitValue's
-  /// template argument, which lives as long as the program.
-  std::string_view implicit_value = {};
+  /// when it is given without one.
+  std::string implicit_value = {};
 
   /// Whether a list option consumes multiple space-separated tokens after one
   /// occurrence (rfl::MultiToken).
@@ -223,6 +222,10 @@ struct Options {
 
   /// Prefix used when `allow_universal_negation` is true (default `"no"`).
   std::string negation_prefix = "no";
+
+  /// Whether `OptionKind::value` options consume the next token even when it
+  /// begins with `'-'` (e.g. `-CFLAGS -O2`, matching POSIX `getopt_long`).
+  bool allow_option_like_values = false;
 
   /// Records one leaf long option along with its optional hidden/group/value_name
   /// metadata. Non-template to avoid per-field template instantiations.
@@ -855,7 +858,7 @@ Option implicit_value_option() {
                 "bool, a std::string or a list, such as "
                 "rfl::ImplicitValue<int, \"1\">.");
   return Option{OptionKind::implicit_value, is_option_list_v<U>,
-                Annotations::implicit_value.string_view(), false,
+                std::string(Annotations::implicit_value.string_view()), false,
                 Annotations::is_sensitive};
 }
 

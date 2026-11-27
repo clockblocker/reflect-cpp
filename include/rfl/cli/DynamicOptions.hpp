@@ -82,6 +82,7 @@ class DynamicOptions {
   bool bool_value_tokens = false;
   bool allow_universal_negation = false;
   bool negative_numbers_are_options = false;
+  bool allow_option_like_values = false;
   std::string negation_prefix = "no";
 
   DynamicOptions() {
@@ -172,15 +173,8 @@ class DynamicOptions {
   /// captured in `OptionOccurrence::prefix_suffix` and `OptionOccurrence::value`.
   DynamicOptions& add_prefix_flag(std::string _prefix,
                                   const DynamicOptionFlags& _flags = {}) {
-    finalized_ = false;
-    internal::Option opt;
-    opt.kind = internal::OptionKind::flag;
-    opt.is_list = true;
-    opt.sensitive = _flags.sensitive;
-    meta_.push_back(Meta{_prefix, {}, opt.kind, _flags.required, _flags.hidden,
-                         _flags.description, _flags.default_hint, _flags.group});
-    opts_.add_prefix_option(std::move(_prefix), opt);
-    return *this;
+    return add_prefix_entry(std::move(_prefix), internal::OptionKind::flag,
+                            _flags);
   }
 
   /// Registers a prefix-matched option that also consumes a value argument
@@ -188,15 +182,8 @@ class DynamicOptions {
   /// `OptionOccurrence::prefix_suffix` and the argument in `OptionOccurrence::value`.
   DynamicOptions& add_prefix_value(std::string _prefix,
                                    const DynamicOptionFlags& _flags = {}) {
-    finalized_ = false;
-    internal::Option opt;
-    opt.kind = internal::OptionKind::value;
-    opt.is_list = true;
-    opt.sensitive = _flags.sensitive;
-    meta_.push_back(Meta{_prefix, {}, opt.kind, _flags.required, _flags.hidden,
-                         _flags.description, _flags.default_hint, _flags.group});
-    opts_.add_prefix_option(std::move(_prefix), opt);
-    return *this;
+    return add_prefix_entry(std::move(_prefix), internal::OptionKind::value,
+                            _flags);
   }
 
   /// Adds an extra suggestion candidate string (e.g. `-fno-inline` or custom
@@ -211,6 +198,17 @@ class DynamicOptions {
   std::optional<std::string> suggest(const std::string_view _unknown,
                                      const double _min_similarity = 0.6) const {
     const std::string prefix = single_dash_long ? "-" : "--";
+    std::vector<std::string> hidden_names;
+    for (const auto& m : meta_) {
+      if (m.hidden) {
+        hidden_names.push_back(m.long_name);
+      }
+    }
+    std::sort(hidden_names.begin(), hidden_names.end());
+    const auto is_hidden = [&](const std::string& _name) {
+      return std::binary_search(hidden_names.begin(), hidden_names.end(), _name);
+    };
+
     std::vector<std::string> candidates;
     candidates.reserve(meta_.size() + opts_.long_aliases.size()
                        + opts_.negated_options.size() + extra_candidates_.size());
@@ -219,11 +217,15 @@ class DynamicOptions {
         candidates.push_back(prefix + m.long_name);
       }
     }
-    for (const auto& [alias, _] : opts_.long_aliases) {
-      candidates.push_back(prefix + alias);
+    for (const auto& [alias, target] : opts_.long_aliases) {
+      if (!is_hidden(target)) {
+        candidates.push_back(prefix + alias);
+      }
     }
-    for (const auto& [neg, _] : opts_.negated_options) {
-      candidates.push_back(prefix + neg);
+    for (const auto& [neg, target] : opts_.negated_options) {
+      if (!is_hidden(target)) {
+        candidates.push_back(prefix + neg);
+      }
     }
     for (const auto& extra : extra_candidates_) {
       candidates.push_back(extra);
@@ -265,41 +267,21 @@ class DynamicOptions {
   /// Parses `argc`/`argv` (skipping `argv[0]`). Masks sensitive option values
   /// in place with `'*'` in `argv`.
   rfl::Result<DynamicParseResult> parse(int _argc, char* _argv[]) const {
-    sync_flags();
-    return internal::check_short_names(opts_)
-        .and_then([&](bool) {
-          return internal::parse_argv(_argc, _argv, opts_);
-        })
-        .and_then([&](ParsedArgs _parsed) {
-          return finish(std::move(_parsed));
-        });
+    return parse_impl([&] { return internal::parse_argv(_argc, _argv, opts_); });
   }
 
   /// Parses `argc`/`argv` (skipping `argv[0]`).
   rfl::Result<DynamicParseResult> parse(int _argc,
                                         const char* const _argv[]) const {
-    sync_flags();
-    return internal::check_short_names(opts_)
-        .and_then([&](bool) {
-          return internal::parse_argv(_argc, _argv, opts_);
-        })
-        .and_then([&](ParsedArgs _parsed) {
-          return finish(std::move(_parsed));
-        });
+    return parse_impl([&] { return internal::parse_argv(_argc, _argv, opts_); });
   }
 
   /// Parses a range of argument strings (does NOT skip the first element).
   template <class R = std::initializer_list<std::string_view>>
     requires internal::StringRange<R> || internal::WideStringRange<R>
   rfl::Result<DynamicParseResult> parse(R&& _args) const {
-    sync_flags();
-    return internal::check_short_names(opts_)
-        .and_then([&](bool) {
-          return internal::parse_argv(std::forward<R>(_args), opts_);
-        })
-        .and_then([&](ParsedArgs _parsed) {
-          return finish(std::move(_parsed));
-        });
+    return parse_impl(
+        [&] { return internal::parse_argv(std::forward<R>(_args), opts_); });
   }
 
   /// Parses a standard INI configuration stream (`[Section]` + `key = value`)
@@ -385,27 +367,62 @@ class DynamicOptions {
     if (!_header.empty()) {
       oss << _header << "\n";
     }
+    const auto format_entry = [&](const Meta& _m) {
+      oss << "  ";
+      if (!_m.short_name.empty()) {
+        oss << "-" << _m.short_name << ", ";
+      }
+      oss << (single_dash_long ? "-" : "--") << _m.long_name;
+      if (_m.kind == internal::OptionKind::value) {
+        oss << " arg";
+        if (!_m.default_hint.empty()) {
+          oss << " (=" << _m.default_hint << ")";
+        }
+      } else if (_m.kind == internal::OptionKind::implicit_value) {
+        oss << " [=arg]";
+      }
+      if (!_m.description.empty()) {
+        oss << "  " << _m.description;
+      }
+      oss << "\n";
+    };
+
+    const bool has_groups = std::any_of(
+        meta_.begin(), meta_.end(),
+        [](const Meta& _m) { return !_m.hidden && !_m.group.empty(); });
+    if (!has_groups) {
+      for (const auto& m : meta_) {
+        if (!m.hidden) {
+          format_entry(m);
+        }
+      }
+      return oss.str();
+    }
+
+    std::vector<std::string> group_order;
     for (const auto& m : meta_) {
       if (m.hidden) {
         continue;
       }
-      oss << "  ";
-      if (!m.short_name.empty()) {
-        oss << "-" << m.short_name << ", ";
+      if (std::find(group_order.begin(), group_order.end(), m.group)
+          == group_order.end()) {
+        group_order.push_back(m.group);
       }
-      oss << "--" << m.long_name;
-      if (m.kind == internal::OptionKind::value) {
-        oss << " arg";
-        if (!m.default_hint.empty()) {
-          oss << " (=" << m.default_hint << ")";
+    }
+    bool first_group = true;
+    for (const auto& g : group_order) {
+      if (!first_group) {
+        oss << "\n";
+      }
+      first_group = false;
+      if (!g.empty()) {
+        oss << g << ":\n";
+      }
+      for (const auto& m : meta_) {
+        if (!m.hidden && m.group == g) {
+          format_entry(m);
         }
-      } else if (m.kind == internal::OptionKind::implicit_value) {
-        oss << " [=arg]";
       }
-      if (!m.description.empty()) {
-        oss << "  " << m.description;
-      }
-      oss << "\n";
     }
     return oss.str();
   }
@@ -421,6 +438,28 @@ class DynamicOptions {
     std::string default_hint;
     std::string group;
   };
+
+  DynamicOptions& add_prefix_entry(std::string _prefix,
+                                   const internal::OptionKind _kind,
+                                   const DynamicOptionFlags& _flags) {
+    finalized_ = false;
+    internal::Option opt;
+    opt.kind = _kind;
+    opt.is_list = true;
+    opt.sensitive = _flags.sensitive;
+    meta_.push_back(Meta{_prefix, {}, opt.kind, _flags.required, _flags.hidden,
+                         _flags.description, _flags.default_hint, _flags.group});
+    opts_.add_prefix_option(std::move(_prefix), opt);
+    return *this;
+  }
+
+  template <class ParseFn>
+  rfl::Result<DynamicParseResult> parse_impl(ParseFn&& _parse_fn) const {
+    sync_flags();
+    return internal::check_short_names(opts_)
+        .and_then([&](bool) { return _parse_fn(); })
+        .and_then([&](ParsedArgs _parsed) { return finish(std::move(_parsed)); });
+  }
 
   void add_entry(std::string _long_name, std::string _short_name,
                  const internal::Option& _opt,
@@ -452,6 +491,7 @@ class DynamicOptions {
     opts_.bool_value_tokens = bool_value_tokens;
     opts_.allow_universal_negation = allow_universal_negation;
     opts_.negation_prefix = negation_prefix;
+    opts_.allow_option_like_values = allow_option_like_values;
     if (negative_numbers_are_options) {
       opts_.negative_numbers_are_options = true;
     }
