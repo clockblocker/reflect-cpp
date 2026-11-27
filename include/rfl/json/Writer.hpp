@@ -81,6 +81,12 @@ class RFL_API Writer {
   /// @return An output variable representing null
   OutputVarType null_as_root() const noexcept;
 
+  /// Creates a raw JSON value as the root element of the output.
+  /// Emits null if _str is empty.
+  /// @param _str The raw JSON text to write
+  /// @return An output variable representing the raw JSON value
+  OutputVarType raw_as_root(const std::string_view& _str) const noexcept;
+
   /// Creates a value as the root element of the output.
   /// Supports basic types like strings, numbers, and booleans.
   /// @tparam T The type of the value to serialize
@@ -176,6 +182,26 @@ class RFL_API Writer {
   /// @return An output variable representing the null value
   OutputVarType add_null_to_object(const std::string_view& _name,
                                    OutputObjectType* _parent) const;
+
+  /// Adds a raw JSON value to a parent array.
+  /// Emits null if _str is empty.
+  /// @param _str The raw JSON text to add
+  /// @param _parent Pointer to the parent array to add to
+  /// @return An output variable representing the raw JSON value
+  /// @throws std::runtime_error if the value cannot be added
+  OutputVarType add_raw_to_array(const std::string_view& _str,
+                                 OutputArrayType* _parent) const;
+
+  /// Adds a raw JSON value to a parent object with the specified field name.
+  /// Emits null if _str is empty.
+  /// @param _name The name of the field in the parent object
+  /// @param _str The raw JSON text to add
+  /// @param _parent Pointer to the parent object to add to
+  /// @return An output variable representing the raw JSON value
+  /// @throws std::runtime_error if the field cannot be added
+  OutputVarType add_raw_to_object(const std::string_view& _name,
+                                  const std::string_view& _str,
+                                  OutputObjectType* _parent) const;
 
   /// Finalizes a JSON array after all elements have been added.
   /// This is a no-op for yyjson as arrays don't need explicit finalization.

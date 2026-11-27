@@ -50,6 +50,15 @@ Writer::OutputVarType Writer::null_as_root() const noexcept {
   return OutputVarType(null);
 }
 
+Writer::OutputVarType Writer::raw_as_root(
+    const std::string_view& _str) const noexcept {
+  const auto val = _str.empty()
+                       ? yyjson_mut_null(doc())
+                       : yyjson_mut_rawncpy(doc(), _str.data(), _str.size());
+  yyjson_mut_doc_set_root(doc(), val);
+  return OutputVarType(val);
+}
+
 Writer::OutputArrayType Writer::add_array_to_array(
     const size_t, OutputArrayType* _parent) const {
   const auto arr = yyjson_mut_arr(doc());
@@ -116,6 +125,34 @@ Writer::OutputVarType Writer::add_null_to_object(
                              "' to object.");
   }
   return OutputVarType(null);
+}
+
+Writer::OutputVarType Writer::add_raw_to_array(
+    const std::string_view& _str, OutputArrayType* _parent) const {
+  const auto val = _str.empty()
+                       ? yyjson_mut_null(doc())
+                       : yyjson_mut_rawncpy(doc(), _str.data(), _str.size());
+  const bool ok = yyjson_mut_arr_add_val(_parent->val_, val);
+  if (!ok) {
+    throw std::runtime_error("Adding raw JSON to an array failed.");
+  }
+  return OutputVarType(val);
+}
+
+Writer::OutputVarType Writer::add_raw_to_object(
+    const std::string_view& _name, const std::string_view& _str,
+    OutputObjectType* _parent) const {
+  const auto val = _str.empty()
+                       ? yyjson_mut_null(doc())
+                       : yyjson_mut_rawncpy(doc(), _str.data(), _str.size());
+  const bool ok = yyjson_mut_obj_add(
+      _parent->val_, yyjson_mut_strncpy(doc(), _name.data(), _name.size()),
+      val);
+  if (!ok) {
+    throw std::runtime_error("Could not add field '" + std::string(_name) +
+                             "' to object.");
+  }
+  return OutputVarType(val);
 }
 
 void Writer::end_array(OutputArrayType*) const noexcept {}

@@ -3,6 +3,7 @@
 
 #include "../rfl.hpp"
 #include "json/Parser.hpp"
+#include "json/Raw.hpp"
 #include "json/Reader.hpp"
 #include "json/Writer.hpp"
 #include "json/load.hpp"
