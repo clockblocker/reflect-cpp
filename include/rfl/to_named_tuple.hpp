@@ -8,6 +8,7 @@
 #include "always_false.hpp"
 #include "internal/copy_to_field_tuple.hpp"
 #include "internal/has_flatten_fields.hpp"
+#include "internal/has_flattened_tagged_union.hpp"
 #include "internal/is_field.hpp"
 #include "internal/is_named_tuple.hpp"
 #include "internal/move_field_tuple_to_named_tuple.hpp"
@@ -24,6 +25,10 @@ namespace rfl {
 /// @return A named tuple representation of the struct
 auto to_named_tuple(auto&& _t) {
   using T = std::remove_cvref_t<decltype(_t)>;
+  static_assert(
+      !internal::has_flattened_tagged_union_v<T>,
+      "rfl::to_named_tuple is not supported for structs containing "
+      "rfl::Flatten<rfl::TaggedUnion<...>>.");
   if constexpr (internal::is_named_tuple_v<std::remove_cvref_t<T>>) {
     return _t;
   } else if constexpr (internal::is_field_v<std::remove_cvref_t<T>>) {
@@ -47,6 +52,10 @@ auto to_named_tuple(auto&& _t) {
 template <class ProcessorsType>
 auto to_named_tuple(const auto& _t) {
   using T = std::remove_cvref_t<decltype(_t)>;
+  static_assert(
+      !internal::has_flattened_tagged_union_v<T>,
+      "rfl::to_named_tuple is not supported for structs containing "
+      "rfl::Flatten<rfl::TaggedUnion<...>>.");
   if constexpr (internal::is_named_tuple_v<std::remove_cvref_t<T>>) {
     return _t;
   } else if constexpr (internal::is_field_v<std::remove_cvref_t<T>>) {

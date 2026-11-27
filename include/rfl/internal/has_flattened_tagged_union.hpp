@@ -8,6 +8,7 @@
 
 #include "../Tuple.hpp"
 #include "../tuple_cat.hpp"
+#include "StringLiteral.hpp"
 #include "has_reflection_type_v.hpp"
 #include "has_reflector.hpp"
 #include "is_empty.hpp"
@@ -17,7 +18,34 @@
 #include "ptr_tuple_t.hpp"
 #include "to_ptr_tuple.hpp"
 
+namespace rfl::parsing {
+template <class T, class TagType, internal::StringLiteral _discriminator,
+          bool _as_const_pointer>
+struct TaggedUnionWrapperNoFields;
+
+template <class T, class TagType, internal::StringLiteral _discriminator,
+          bool _as_const_pointer>
+struct TaggedUnionWrapperWithFields;
+}  // namespace rfl::parsing
+
 namespace rfl::internal {
+
+template <class T>
+struct is_tagged_union_wrapper : std::false_type {};
+
+template <class T, class TagType, StringLiteral _discriminator,
+          bool _as_const_pointer>
+struct is_tagged_union_wrapper<parsing::TaggedUnionWrapperNoFields<
+    T, TagType, _discriminator, _as_const_pointer>> : std::true_type {};
+
+template <class T, class TagType, StringLiteral _discriminator,
+          bool _as_const_pointer>
+struct is_tagged_union_wrapper<parsing::TaggedUnionWrapperWithFields<
+    T, TagType, _discriminator, _as_const_pointer>> : std::true_type {};
+
+template <class T>
+constexpr bool is_tagged_union_wrapper_v =
+    is_tagged_union_wrapper<std::remove_cvref_t<T>>::value;
 
 template <class T>
 constexpr bool has_flattened_tagged_union_impl();
@@ -178,6 +206,14 @@ auto to_flattened_tu_ptrs(T& _t) {
           std::remove_pointer_t<tuple_element_t<_i, PtrTuple>>>;
       if constexpr (is_flatten_field_v<Elem>) {
         using Inner = remove_all_ptrs_t<typename Elem::Type>;
+        static_assert(
+            is_tagged_union_wrapper_v<T> ||
+                !std::is_pointer_v<typename Elem::Type> ||
+                (!is_tagged_union_based<Inner> &&
+                 !has_flattened_tagged_union_impl<Inner>()),
+            "rfl::Flatten with a raw pointer to a TaggedUnion (or a struct "
+            "containing a flattened TaggedUnion) is not supported; use value "
+            "semantics instead.");
         auto& target = deref_to_ref(rfl::get<_i>(ptr_tuple)->get());
         if constexpr (is_tagged_union_based<Inner>) {
           return rfl::make_tuple(&target);

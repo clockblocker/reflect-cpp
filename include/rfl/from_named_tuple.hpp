@@ -6,6 +6,7 @@
 #include "internal/copy_from_named_tuple.hpp"
 #include "internal/copy_from_tuple.hpp"
 #include "internal/has_fields.hpp"
+#include "internal/has_flattened_tagged_union.hpp"
 #include "internal/move_from_named_tuple.hpp"
 #include "internal/move_from_tuple.hpp"
 #include "named_tuple_t.hpp"
@@ -23,6 +24,10 @@ namespace rfl {
 /// @return An instance of struct T
 template <class T, class NamedTupleType>
 auto from_named_tuple(NamedTupleType&& _n) {
+  static_assert(
+      !internal::has_flattened_tagged_union_v<T>,
+      "rfl::from_named_tuple is not supported for structs containing "
+      "rfl::Flatten<rfl::TaggedUnion<...>>.");
   using RequiredType = std::remove_cvref_t<rfl::named_tuple_t<T>>;
   if constexpr (!std::is_same<std::remove_cvref_t<NamedTupleType>,
                               RequiredType>()) {
@@ -52,6 +57,10 @@ auto from_named_tuple(NamedTupleType&& _n) {
 /// @return An instance of struct T
 template <class T, class NamedTupleType>
 auto from_named_tuple(const NamedTupleType& _n) {
+  static_assert(
+      !internal::has_flattened_tagged_union_v<T>,
+      "rfl::from_named_tuple is not supported for structs containing "
+      "rfl::Flatten<rfl::TaggedUnion<...>>.");
   using RequiredType = std::remove_cvref_t<rfl::named_tuple_t<T>>;
   if constexpr (!std::is_same<std::remove_cvref_t<NamedTupleType>,
                               RequiredType>()) {
