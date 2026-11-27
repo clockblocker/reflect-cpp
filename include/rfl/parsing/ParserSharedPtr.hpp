@@ -12,6 +12,7 @@
 #include "../atomic/remove_atomic_t.hpp"
 #include "../atomic/set_atomic.hpp"
 #include "../internal/default_if_missing_v.hpp"
+#include "../internal/default_if_null_v.hpp"
 #include "../internal/has_default_val_v.hpp"
 #include "Parent.hpp"
 #include "Parser_base.hpp"
@@ -53,6 +54,8 @@ struct ParserSharedPtr {
                     "Atomic types cannot be mixed with rfl::DefaultVal");
       static_assert(!internal::default_if_missing_v<ProcessorsType>,
                     "Atomic types cannot be mixed with rfl::DefaultIfMissing");
+      static_assert(!internal::default_if_null_v<ProcessorsType>,
+                    "Atomic types cannot be mixed with rfl::DefaultIfNull");
 
       return Parser<R, W, RemoveAtomicT, ProcessorsType>::read(_r, _var)
           .transform([](auto&& _t) {

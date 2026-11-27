@@ -21,6 +21,7 @@
 #include "rfl/CodePoints.hpp"
 #include "rfl/Commented.hpp"
 #include "rfl/DefaultIfMissing.hpp"
+#include "rfl/DefaultIfNull.hpp"
 #include "rfl/DefaultVal.hpp"
 #include "rfl/Description.hpp"
 #include "rfl/DurationsAsCount.hpp"

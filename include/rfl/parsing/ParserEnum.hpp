@@ -8,6 +8,7 @@
 #include "../config.hpp"
 #include "../enums.hpp"
 #include "../internal/case_insensitive_enums_v.hpp"
+#include "../internal/default_if_null_v.hpp"
 #include "../internal/enum_names_only_v.hpp"
 #include "../internal/enums/is_flag_enum.hpp"
 #include "../internal/enums/is_scoped_enum.hpp"
@@ -17,6 +18,7 @@
 #include "Parent.hpp"
 #include "Parser_base.hpp"
 #include "call_destructors_where_necessary.hpp"
+#include "is_nullable.hpp"
 #include "make_type_name.hpp"
 #include "schema/Type.hpp"
 #include "schemaful/IsSchemafulReader.hpp"
@@ -40,6 +42,12 @@ struct ParserEnum {
    * @return A Result containing the parsed enum or an error.
    */
   static Result<T> read(const R& _r, const InputVarType& _var) noexcept {
+    if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                  !is_nullable_v<T>) {
+      if (_r.is_empty(_var)) {
+        return T{};
+      }
+    }
     if constexpr (internal::has_read_reflector<T>) {
       const auto wrap_in_t = [](auto&& _named_tuple) -> Result<T> {
         try {

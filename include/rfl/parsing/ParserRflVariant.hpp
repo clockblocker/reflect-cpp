@@ -8,6 +8,7 @@
 #include "../Variant.hpp"
 #include "../internal/add_tags_to_variants_v.hpp"
 #include "../internal/all_fields.hpp"
+#include "../internal/default_if_null_v.hpp"
 #include "../internal/nth_element_t.hpp"
 #include "../internal/variants_as_one_of_v.hpp"
 #include "../visit.hpp"
@@ -15,6 +16,7 @@
 #include "Parent.hpp"
 #include "Parser_base.hpp"
 #include "VariantAlternativeWrapper.hpp"
+#include "default_construct.hpp"
 #include "schema/Type.hpp"
 #include "schemaful/IsSchemafulReader.hpp"
 #include "schemaful/IsSchemafulWriter.hpp"
@@ -53,6 +55,13 @@ class ParserRflVariant<R, W, rfl::Variant<AlternativeTypes...>,
    */
   static Result<rfl::Variant<AlternativeTypes...>> read(
       const R& _r, const InputVarType& _var) noexcept {
+    if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                  std::is_default_constructible_v<
+                      internal::nth_element_t<0, AlternativeTypes...>>) {
+      if (_r.is_empty(_var)) {
+        return default_construct<rfl::Variant<AlternativeTypes...>>();
+      }
+    }
     if constexpr (internal::all_fields_v<AlternativeTypes...>) {
       if constexpr (schemaful::IsSchemafulReader<R>) {
         using WrappedType = rfl::Variant<NamedTuple<AlternativeTypes>...>;

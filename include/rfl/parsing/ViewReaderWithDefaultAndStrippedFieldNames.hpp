@@ -10,9 +10,11 @@
 
 #include "../Result.hpp"
 #include "../Tuple.hpp"
+#include "../internal/default_if_null_v.hpp"
 #include "../internal/is_array.hpp"
 #include "FieldErrors.hpp"
 #include "Parser_base.hpp"
+#include "is_nullable.hpp"
 #include "wrap_error.hpp"
 
 namespace rfl::parsing {
@@ -86,6 +88,12 @@ class ViewReaderWithDefaultAndStrippedFieldNames {
         std::remove_cvref_t<std::remove_pointer_t<typename FieldType::Type>>;
     constexpr auto name = FieldType::name();
     if (_i == i) {
+      if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                    !is_nullable_v<T>) {
+        if (_r.is_empty(_var)) {
+          return;
+        }
+      }
       auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
       if (!res) {
         _errors->emplace_back(wrap_field_error(name, std::move(res).error()));

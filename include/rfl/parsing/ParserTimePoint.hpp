@@ -11,6 +11,7 @@
 #include <type_traits>
 
 #include "../Result.hpp"
+#include "../internal/default_if_null_v.hpp"
 #include "Parent.hpp"
 #include "Parser_base.hpp"
 #include "schema/Type.hpp"
@@ -47,6 +48,11 @@ struct ParserTimePoint {
    */
   static Result<TimePointType> read(const R& _r,
                                     const InputVarType& _var) noexcept {
+    if constexpr (internal::default_if_null_v<ProcessorsType>) {
+      if (_r.is_empty(_var)) {
+        return TimePointType{};
+      }
+    }
     return Parser<R, W, std::string, ProcessorsType>::read(_r, _var).and_then(
         from_string);
   }
