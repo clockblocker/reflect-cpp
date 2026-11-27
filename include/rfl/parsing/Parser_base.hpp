@@ -21,6 +21,23 @@ template <class R, class W, class T, class ProcessorsType>
 struct Parser;
 
 /**
+ * @brief Constructs a Result without calling the noexcept rvalue constructor
+ *        when moving V may throw (e.g., structs containing const members with
+ *        a throwing copy constructor), so callers inside try/catch can convert
+ *        exceptions into rfl::Error instead of calling std::terminate().
+ */
+template <class ResultType, class U>
+ResultType make_result_safe(U&& _u) {
+  using V = std::remove_cvref_t<U>;
+  if constexpr (!std::is_nothrow_move_constructible_v<V> &&
+                std::is_copy_constructible_v<V>) {
+    return ResultType(static_cast<const V&>(_u));
+  } else {
+    return ResultType(std::forward<U>(_u));
+  }
+}
+
+/**
  * @brief Overlays input into an existing value when the parser supports
  *        `read_into`, otherwise parses a fresh replacement via `read`.
  */

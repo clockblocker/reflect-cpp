@@ -74,7 +74,7 @@ const auto config =
         .and_then([](Config c) { return rfl::yaml::load_into(std::move(c), "local.yaml"); });
 ```
 
-Missing fields preserve their values from the base struct, nested structs are overlaid recursively, explicit `null` clears `std::optional<T>`, processors (such as `rfl::NoExtraFields` or `rfl::SnakeCaseToCamelCase`) work as template parameters, and errors leave an lvalue base untouched.
+Missing fields preserve their values from the base struct, nested structs and `rfl::ExtraFields` merge keys recursively while containers (`std::vector`, `std::map`, etc.) replace the base value wholesale when present (so `{}` clears a map), explicit `null` clears `std::optional<T>`, processors (such as `rfl::NoExtraFields` or `rfl::SnakeCaseToCamelCase`) work as template parameters, `const` fields require copy-constructible types, and errors leave an lvalue base untouched. Note that an empty YAML document (`""`) loads as a null YAML node and fails to cast to a mapping; pass `"{}"` for an empty overlay mapping.
 
 ## Custom constructors
 

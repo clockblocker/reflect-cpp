@@ -7,8 +7,10 @@
 #include <memory>
 #include <optional>
 #include <rfl.hpp>
+#include <rfl/Deprecated.hpp>
 #include <rfl/json.hpp>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -415,6 +417,328 @@ TEST(json, read_into_istream_flags_and_load_into) {
       rfl::json::load_into(base, "/nonexistent/path/rfl_overlay_missing.json");
   EXPECT_FALSE(missing.has_value());
   EXPECT_EQ(base.workers, 2);
+}
+
+struct NonDefaultInner {
+  int a;
+  std::string label;
+  NonDefaultInner() = delete;
+  NonDefaultInner(int _a, std::string _label)
+      : a(_a), label(std::move(_label)) {}
+};
+
+struct NonDefaultOuter {
+  NonDefaultInner inner;
+  int port;
+  NonDefaultOuter() = delete;
+  NonDefaultOuter(NonDefaultInner _inner, int _port)
+      : inner(std::move(_inner)), port(_port) {}
+};
+
+struct FlattenedMeta {
+  std::string env = "prod";
+  int version = 1;
+};
+
+struct WithFlattenedAndWrappers {
+  rfl::Flatten<FlattenedMeta> meta;
+  rfl::Commented<int> timeout = 30;
+  rfl::Deprecated<"use new_port", "old port", int> legacy_port = 8000;
+  rfl::Attribute<std::string> id = std::string("a1");
+  rfl::Generic raw_extra;
+};
+
+struct ReflectedEndpoint {
+  std::string host;
+  int port;
+};
+
+struct ReadOnlyReflected {
+  int x;
+};
+
+struct CustomReflectionObj {
+  struct Repr {
+    std::string host = "h";
+    int port = 80;
+  };
+  using ReflectionType = Repr;
+
+  std::string host;
+  int port;
+  bool throw_on_reflect = false;
+
+  CustomReflectionObj(const Repr& _r) : host(_r.host), port(_r.port) {}
+  CustomReflectionObj(std::string _h, int _p, bool _throw = false)
+      : host(std::move(_h)), port(_p), throw_on_reflect(_throw) {}
+
+  Repr reflection() const {
+    if (throw_on_reflect) {
+      throw std::runtime_error("reflection() threw");
+    }
+    return Repr{.host = host, .port = port};
+  }
+};
+
+struct ThrowingCopyPayload {
+  int value = 1;
+  bool fail_copy = false;
+  mutable int copy_budget = 0;
+
+  ThrowingCopyPayload() = default;
+  ThrowingCopyPayload(int _v, bool _fail, int _budget = 0)
+      : value(_v), fail_copy(_fail), copy_budget(_budget) {}
+  ThrowingCopyPayload(const ThrowingCopyPayload& _o)
+      : value(_o.value), fail_copy(_o.fail_copy), copy_budget(_o.copy_budget) {
+    if (_o.fail_copy) {
+      if (_o.copy_budget <= 0) {
+        throw std::runtime_error("copy ctor threw");
+      }
+      --_o.copy_budget;
+      copy_budget = _o.copy_budget;
+    }
+  }
+  ThrowingCopyPayload(ThrowingCopyPayload&&) noexcept = default;
+  ThrowingCopyPayload& operator=(const ThrowingCopyPayload&) = default;
+  ThrowingCopyPayload& operator=(ThrowingCopyPayload&&) noexcept = default;
+};
+
+}  // namespace test_read_into
+
+namespace rfl {
+
+template <>
+struct Reflector<test_read_into::ReflectedEndpoint> {
+  struct ReflType {
+    std::string host;
+    int port;
+  };
+  static test_read_into::ReflectedEndpoint to(const ReflType& _v) {
+    return test_read_into::ReflectedEndpoint{.host = _v.host, .port = _v.port};
+  }
+  static ReflType from(const test_read_into::ReflectedEndpoint& _v) {
+    if (_v.host == "THROW_FROM") {
+      throw std::runtime_error("Reflector::from threw");
+    }
+    return ReflType{.host = _v.host, .port = _v.port};
+  }
+};
+
+template <>
+struct Reflector<test_read_into::ReadOnlyReflected> {
+  struct ReflType {
+    int x;
+  };
+  static test_read_into::ReadOnlyReflected to(const ReflType& _v) {
+    return test_read_into::ReadOnlyReflected{.x = _v.x};
+  }
+};
+
+}  // namespace rfl
+
+namespace test_read_into {
+
+TEST(json, read_into_non_default_no_field_names_named_tuple_fail_fast) {
+  // Non-default-constructible nested struct
+  const NonDefaultOuter base(NonDefaultInner(10, "base"), 8080);
+  const auto merged =
+      rfl::json::read_into(base, R"({"inner":{"a":42}})");
+  ASSERT_TRUE(merged.has_value()) << merged.error().what();
+  EXPECT_EQ(merged->inner.a, 42);
+  EXPECT_EQ(merged->inner.label, "base");
+  EXPECT_EQ(merged->port, 8080);
+
+  // rfl::NoFieldNames positional array overlay (prefix overrides only)
+  const auto positional =
+      rfl::json::read_into<rfl::NoFieldNames>(base, R"([[77]])");
+  ASSERT_TRUE(positional.has_value()) << positional.error().what();
+  EXPECT_EQ(positional->inner.a, 77);
+  EXPECT_EQ(positional->inner.label, "base");
+  EXPECT_EQ(positional->port, 8080);
+
+  // rfl::NamedTuple overlay
+  using NT = rfl::NamedTuple<rfl::Field<"a", int>, rfl::Field<"b", std::string>>;
+  const NT nt_base(1, std::string("keep"));
+  const auto nt_merged = rfl::json::read_into(nt_base, R"({"a":9})");
+  ASSERT_TRUE(nt_merged.has_value()) << nt_merged.error().what();
+  EXPECT_EQ(nt_merged->get<"a">(), 9);
+  EXPECT_EQ(nt_merged->get<"b">(), "keep");
+
+  // rfl::FailFast stops at first field error and leaves base untouched
+  const ServerConfig srv;
+  const auto ff = rfl::json::read_into<rfl::FailFast>(
+      srv, R"({"port":"bad","host":123})");
+  EXPECT_FALSE(ff.has_value());
+  EXPECT_EQ(srv.port, 8080);
+  EXPECT_EQ(srv.host, "127.0.0.1");
+}
+
+TEST(json, read_into_flatten_wrappers_generic_reflector_and_throw_safety) {
+  // Flatten + Commented + Deprecated + Attribute + Generic fast-path
+  WithFlattenedAndWrappers w;
+  w.raw_extra = rfl::Generic(std::string("old_raw"));
+  const auto w_merged = rfl::json::read_into(
+      w, R"({"version":2,"timeout":60,"raw_extra":{"k":1}})");
+  ASSERT_TRUE(w_merged.has_value()) << w_merged.error().what();
+  EXPECT_EQ(w_merged->meta.value().env, "prod");
+  EXPECT_EQ(w_merged->meta.value().version, 2);
+  EXPECT_EQ(w_merged->timeout.value(), 60);
+  EXPECT_EQ(w_merged->legacy_port.value(), 8000);
+  EXPECT_EQ(w_merged->id.value(), "a1");
+  EXPECT_TRUE(w_merged->raw_extra.to_object().has_value());
+
+  // Reflector<T> (read+write): partial overlay preserves untouched field
+  const ReflectedEndpoint ep{.host = "alpha", .port = 8080};
+  const auto ep_merged = rfl::json::read_into(ep, R"({"port":9090})");
+  ASSERT_TRUE(ep_merged.has_value()) << ep_merged.error().what();
+  EXPECT_EQ(ep_merged->host, "alpha");
+  EXPECT_EQ(ep_merged->port, 9090);
+
+  // Reflector<T>::from throwing returns Error instead of std::terminate()
+  const ReflectedEndpoint bad_ep{.host = "THROW_FROM", .port = 8080};
+  const auto bad_ep_res = rfl::json::read_into(bad_ep, R"({"port":9090})");
+  EXPECT_FALSE(bad_ep_res.has_value());
+
+  // Read-only Reflector<T> falls back to read()
+  const ReadOnlyReflected ro{.x = 5};
+  const auto ro_res = rfl::json::read_into(ro, R"({"x":12})");
+  ASSERT_TRUE(ro_res.has_value()) << ro_res.error().what();
+  EXPECT_EQ(ro_res->x, 12);
+
+  // Custom ReflectionType: partial overlay + throwing reflection() safety
+  const CustomReflectionObj cr("db.local", 5432, false);
+  const auto cr_merged = rfl::json::read_into(cr, R"({"port":5433})");
+  ASSERT_TRUE(cr_merged.has_value()) << cr_merged.error().what();
+  EXPECT_EQ(cr_merged->host, "db.local");
+  EXPECT_EQ(cr_merged->port, 5433);
+
+  const CustomReflectionObj bad_cr("db.local", 5432, true);
+  const auto bad_cr_res = rfl::json::read_into(bad_cr, R"({"port":5433})");
+  EXPECT_FALSE(bad_cr_res.has_value());
+
+  // Throwing copy in Ref<T> and std::shared_ptr<T> returns Error (no terminate)
+  const auto bad_ref = rfl::Ref<ThrowingCopyPayload>::make(7, true);
+  const auto bad_ref_res = rfl::json::read_into(bad_ref, R"({"value":9})");
+  EXPECT_FALSE(bad_ref_res.has_value());
+
+  const auto bad_sp = std::make_shared<ThrowingCopyPayload>(7, true);
+  const auto bad_sp_res = rfl::json::read_into(bad_sp, R"({"value":9})");
+  EXPECT_FALSE(bad_sp_res.has_value());
+}
+
+struct InnerWithConst {
+  const int id;
+  int port;
+};
+
+struct OuterWithConstFields {
+  const std::string tag;
+  InnerWithConst inner;
+};
+
+struct WithThrowingConstField {
+  const ThrowingCopyPayload payload;
+};
+
+TEST(json, read_into_top_level_and_nested_const_fields) {
+  const OuterWithConstFields base{
+      .tag = "v1",
+      .inner = InnerWithConst{.id = 100, .port = 8080},
+  };
+
+  // Overlay only inner.port -> preserves top-level const tag and inner const id
+  const auto merged1 =
+      rfl::json::read_into(base, R"({"inner":{"port":9090}})");
+  ASSERT_TRUE(merged1.has_value()) << merged1.error().what();
+  EXPECT_EQ(merged1->tag, "v1");
+  EXPECT_EQ(merged1->inner.id, 100);
+  EXPECT_EQ(merged1->inner.port, 9090);
+
+  // Overlay top-level const tag AND inner const id -> both updated cleanly,
+  // while original lvalue base remains untouched.
+  const auto merged2 = rfl::json::read_into(
+      base, R"({"tag":"v2","inner":{"id":200}})");
+  ASSERT_TRUE(merged2.has_value()) << merged2.error().what();
+  EXPECT_EQ(merged2->tag, "v2");
+  EXPECT_EQ(merged2->inner.id, 200);
+  EXPECT_EQ(merged2->inner.port, 8080);
+  EXPECT_EQ(base.tag, "v1");
+  EXPECT_EQ(base.inner.id, 100);
+
+  // Positional NoFieldNames overlay on struct with nested const field.
+  const auto pos = rfl::json::read_into<rfl::NoFieldNames>(
+      base, R"(["v3",[300]])");
+  ASSERT_TRUE(pos.has_value()) << pos.error().what();
+  EXPECT_EQ(pos->tag, "v3");
+  EXPECT_EQ(pos->inner.id, 300);
+  EXPECT_EQ(pos->inner.port, 8080);
+
+  // Throwing copy on a const field inside ViewReaderWithDefault returns an
+  // Error instead of calling std::terminate(). Sweep copy_budget across every
+  // copy hop so the copy inside ViewReaderWithDefault is guaranteed to throw.
+  bool caught_as_result_error = false;
+  for (int budget = 0; budget <= 8; ++budget) {
+    try {
+      const auto res = rfl::json::read_into(
+          WithThrowingConstField{
+              .payload = ThrowingCopyPayload(5, true, budget)},
+          R"({"payload":{"value":9}})");
+      if (!res.has_value()) {
+        caught_as_result_error = true;
+      }
+    } catch (const std::runtime_error&) {
+      // Thrown in non-noexcept caller parameter copy before entering
+      // ViewReaderWithDefault.
+    }
+  }
+  EXPECT_TRUE(caught_as_result_error);
+}
+
+struct OuterWithThrowingInner {
+  WithThrowingConstField inner;
+};
+
+struct OuterWithOptionalThrowingInner {
+  std::optional<WithThrowingConstField> inner;
+};
+
+TEST(json, read_into_nested_and_optional_throwing_const_fields) {
+  // Non-const nested struct containing a throwing const field must convert
+  // copy exceptions into Result::error rather than calling std::terminate().
+  bool nested_caught_as_error = false;
+  for (int budget = 0; budget <= 12; ++budget) {
+    try {
+      const auto res = rfl::json::read_into(
+          OuterWithThrowingInner{
+              .inner = WithThrowingConstField{
+                  .payload = ThrowingCopyPayload(5, true, budget)}},
+          R"({"inner":{"payload":{"value":9}}})");
+      if (!res.has_value()) {
+        nested_caught_as_error = true;
+      }
+    } catch (const std::runtime_error&) {
+      // Thrown in non-noexcept caller parameter copy before entering parser.
+    }
+  }
+  EXPECT_TRUE(nested_caught_as_error);
+
+  // std::optional<WithThrowingConstField> must also never std::terminate().
+  bool opt_caught_as_error = false;
+  for (int budget = 0; budget <= 12; ++budget) {
+    try {
+      const auto res = rfl::json::read_into(
+          OuterWithOptionalThrowingInner{
+              .inner = WithThrowingConstField{
+                  .payload = ThrowingCopyPayload(5, true, budget)}},
+          R"({"inner":{"payload":{"value":9}}})");
+      if (!res.has_value()) {
+        opt_caught_as_error = true;
+      }
+    } catch (const std::runtime_error&) {
+      // Thrown in non-noexcept caller parameter copy before entering parser.
+    }
+  }
+  EXPECT_TRUE(opt_caught_as_error);
 }
 
 }  // namespace test_read_into

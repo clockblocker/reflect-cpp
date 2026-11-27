@@ -155,5 +155,5 @@ const auto updated = rfl::from_generic_into(person, patch).value();
 // updated.first_name == "Bart", updated.last_name == "Simpson", updated.age == 11
 ```
 
-Missing fields preserve their values from the base struct, nested structs are overlaid recursively, and processors can be passed as template arguments (`rfl::from_generic_into<rfl::NoExtraFields>(base, patch)`). Errors leave an lvalue base untouched.
+Missing fields preserve their values from the base struct, nested structs and `rfl::ExtraFields` merge keys recursively while containers (`std::vector`, `std::map`, etc.) replace the base value wholesale when present (so an empty object clears a map), `const` fields require copy-constructible types, and processors can be passed as template arguments (`rfl::from_generic_into<rfl::NoExtraFields>(base, patch)`). Errors leave an lvalue base untouched.
 

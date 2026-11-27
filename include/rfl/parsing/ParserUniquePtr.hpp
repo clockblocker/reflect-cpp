@@ -102,17 +102,20 @@ struct ParserUniquePtr {
       if (_r.is_empty(_var)) {
         return std::unique_ptr<T>();
       }
-      const auto to_unique = [](auto&& _t) {
-        return std::make_unique<T>(std::forward<decltype(_t)>(_t));
-      };
-      if (_base) {
-        return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
-                   _r, _var, std::move(*_base))
-            .transform(to_unique);
+      try {
+        auto res =
+            _base
+                ? read_into_or_read<R, W, std::remove_cvref_t<T>,
+                                    ProcessorsType>(_r, _var, std::move(*_base))
+                : Parser<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(
+                      _r, _var);
+        if (!res) {
+          return error(std::move(res).error());
+        }
+        return std::make_unique<T>(std::move(*res));
+      } catch (std::exception& e) {
+        return error(e.what());
       }
-      return Parser<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(_r,
-                                                                        _var)
-          .transform(to_unique);
     }
   }
 

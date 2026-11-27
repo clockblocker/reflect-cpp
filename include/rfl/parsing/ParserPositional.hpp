@@ -51,12 +51,18 @@ struct ParserPositional {
    */
   static Result<Positional<T>> read_into(const R& _r, const InputVarType& _var,
                                          Positional<T> _base) noexcept {
-    const auto to_positional = [](auto&& _t) {
-      return Positional<T>(std::forward<decltype(_t)>(_t));
-    };
-    return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
-               _r, _var, std::move(_base.value()))
-        .transform(to_positional);
+    try {
+      auto res =
+          read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
+              _r, _var, std::move(_base.value()));
+      if (!res) {
+        return error(std::move(res).error());
+      }
+      return make_result_safe<Result<Positional<T>>>(
+          Positional<T>(std::move(*res)));
+    } catch (std::exception& e) {
+      return error(e.what());
+    }
   }
 
   /**

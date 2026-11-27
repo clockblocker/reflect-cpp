@@ -601,14 +601,32 @@ struct NamedTupleParser {
   static Result<NamedTuple<FieldTypes...>> read_into(
       const R& _r, const InputVarType& _var,
       NamedTuple<FieldTypes...> _base) noexcept {
-    auto view = rfl::to_view(_base);
-    using ViewType = std::remove_cvref_t<decltype(view)>;
-    auto err = Parser<R, W, ViewType, ProcessorsType>::read_view_into(_r, _var,
-                                                                      &view);
-    if (err) [[unlikely]] {
-      return error(std::move(*err));
+    try {
+      auto view = rfl::to_view(_base);
+      using ViewType = std::remove_cvref_t<decltype(view)>;
+      auto err = Parser<R, W, ViewType, ProcessorsType>::read_view_into(
+          _r, _var, &view);
+      if (err) [[unlikely]] {
+        return error(std::move(*err));
+      }
+      return make_result_safe<Result<NamedTuple<FieldTypes...>>>(
+          std::move(_base));
+    } catch (std::exception& e) {
+      return error(e.what());
     }
-    return _base;
+  }
+
+  static std::optional<Error> read_into_in_place(
+      const R& _r, const InputVarType& _var,
+      NamedTuple<FieldTypes...>* _base) noexcept {
+    try {
+      auto view = rfl::to_view(*_base);
+      using ViewType = std::remove_cvref_t<decltype(view)>;
+      return Parser<R, W, ViewType, ProcessorsType>::read_view_into(_r, _var,
+                                                                    &view);
+    } catch (std::exception& e) {
+      return Error(e.what());
+    }
   }
 
   /**

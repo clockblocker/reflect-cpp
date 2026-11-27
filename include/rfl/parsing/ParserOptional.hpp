@@ -81,17 +81,72 @@ struct ParserOptional {
       if (_r.is_empty(_var)) {
         return std::optional<T>();
       }
-      const auto to_opt = [](auto&& _t) {
-        return std::make_optional<T>(std::forward<decltype(_t)>(_t));
-      };
-      if (_base.has_value()) {
-        return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
-                   _r, _var, std::move(*_base))
-            .transform(to_opt);
+      try {
+        auto res =
+            _base.has_value()
+                ? read_into_or_read<R, W, std::remove_cvref_t<T>,
+                                    ProcessorsType>(_r, _var, std::move(*_base))
+                : Parser<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(
+                      _r, _var);
+        if (!res) {
+          return error(std::move(res).error());
+        }
+        return make_result_safe<Result<std::optional<T>>>(
+            std::make_optional<T>(std::move(*res)));
+      } catch (std::exception& e) {
+        return error(e.what());
       }
-      return Parser<R, W, std::remove_cvref_t<T>, ProcessorsType>::read(_r,
-                                                                        _var)
-          .transform(to_opt);
+    }
+  }
+
+  static std::optional<Error> read_into_in_place(
+      const R& _r, const InputVarType& _var, std::optional<T>* _base) noexcept {
+    using CleanT = std::remove_cvref_t<T>;
+    if constexpr (schemaful::IsSchemafulReader<R>) {
+      auto res = read(_r, _var);
+      if (!res) {
+        return std::move(res).error();
+      }
+      try {
+        *_base = std::move(*res);
+        return std::nullopt;
+      } catch (std::exception& e) {
+        _base->reset();
+        return Error(e.what());
+      }
+    } else {
+      if (_r.is_empty(_var)) {
+        _base->reset();
+        return std::nullopt;
+      }
+      try {
+        if (_base->has_value()) {
+          if constexpr (requires(CleanT* _p) {
+                          Parser<R, W, CleanT, ProcessorsType>::
+                              read_into_in_place(_r, _var, _p);
+                        }) {
+            return Parser<R, W, CleanT, ProcessorsType>::read_into_in_place(
+                _r, _var, &(**_base));
+          } else {
+            auto res = read_into_or_read<R, W, CleanT, ProcessorsType>(
+                _r, _var, std::move(**_base));
+            if (!res) {
+              return std::move(res).error();
+            }
+            _base->emplace(std::move(*res));
+            return std::nullopt;
+          }
+        }
+        auto res = Parser<R, W, CleanT, ProcessorsType>::read(_r, _var);
+        if (!res) {
+          return std::move(res).error();
+        }
+        _base->emplace(std::move(*res));
+        return std::nullopt;
+      } catch (std::exception& e) {
+        _base->reset();
+        return Error(e.what());
+      }
     }
   }
 

@@ -127,4 +127,46 @@ TEST(generic, from_generic_into_move_only) {
   EXPECT_EQ(merged.inner->b, 40);
 }
 
+struct NonDefaultInner {
+  int a;
+  std::string tag;
+  NonDefaultInner() = delete;
+  NonDefaultInner(int _a, std::string _tag) : a(_a), tag(std::move(_tag)) {}
+};
+
+struct NonDefaultOuter {
+  NonDefaultInner inner;
+  int count;
+  NonDefaultOuter() = delete;
+  NonDefaultOuter(NonDefaultInner _inner, int _count)
+      : inner(std::move(_inner)), count(_count) {}
+};
+
+TEST(generic, read_into_non_default_constructible_and_no_field_names) {
+  const NonDefaultOuter base(NonDefaultInner(10, "base"), 1);
+
+  auto inner_patch = rfl::Generic::Object();
+  inner_patch["a"] = 25;
+  auto patch = rfl::Generic::Object();
+  patch["inner"] = inner_patch;
+
+  const auto merged = rfl::from_generic_into(base, patch);
+  ASSERT_TRUE(merged.has_value()) << merged.error().what();
+  EXPECT_EQ(merged->inner.a, 25);
+  EXPECT_EQ(merged->inner.tag, "base");
+  EXPECT_EQ(merged->count, 1);
+
+  // rfl::NoFieldNames positional array overlay: only first element provided.
+  auto arr = rfl::Generic::Array();
+  auto inner_arr = rfl::Generic::Array();
+  inner_arr.push_back(99);
+  arr.push_back(inner_arr);
+  const auto positional =
+      rfl::from_generic_into<rfl::NoFieldNames>(base, arr);
+  ASSERT_TRUE(positional.has_value()) << positional.error().what();
+  EXPECT_EQ(positional->inner.a, 99);
+  EXPECT_EQ(positional->inner.tag, "base");
+  EXPECT_EQ(positional->count, 1);
+}
+
 }  // namespace test_generic_read_into

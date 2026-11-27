@@ -215,4 +215,26 @@ TEST(yaml, read_into_move_only_and_stream_and_load_into) {
   EXPECT_EQ(from_file.server->tls.min_version, 13);
 }
 
+TEST(yaml, read_into_empty_document_vs_empty_mapping) {
+  const ServerConfig base{
+      .host = "localhost",
+      .port = 8080,
+      .tls = TlsConfig{.enabled = true, .cert_path = "/a.pem", .min_version = 12},
+  };
+
+  // Empty YAML document ("") parses as a null node and fails cleanly without
+  // mutating the base struct.
+  const auto empty_doc = rfl::yaml::read_into(base, "");
+  EXPECT_FALSE(empty_doc.has_value());
+  EXPECT_EQ(base.host, "localhost");
+  EXPECT_EQ(base.port, 8080);
+
+  // Explicit empty mapping ("{}") preserves all base fields.
+  const auto empty_map = rfl::yaml::read_into(base, "{}");
+  ASSERT_TRUE(empty_map.has_value()) << empty_map.error().what();
+  EXPECT_EQ(empty_map->host, "localhost");
+  EXPECT_EQ(empty_map->port, 8080);
+  EXPECT_TRUE(empty_map->tls.enabled);
+}
+
 }  // namespace test_yaml_read_into

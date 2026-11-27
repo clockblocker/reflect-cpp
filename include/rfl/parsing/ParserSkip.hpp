@@ -73,16 +73,22 @@ struct ParserSkip {
       const R& _r, const InputVarType& _var,
       internal::Skip<T, _skip_serialization, _skip_deserialization> _base)
       noexcept {
-    if constexpr (_skip_deserialization) {
-      return _base;
-    } else {
-      const auto to_skip = [](auto&& _t) {
-        return internal::Skip<T, _skip_serialization, _skip_deserialization>(
-            std::forward<decltype(_t)>(_t));
-      };
-      return read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
-                 _r, _var, std::move(_base.value()))
-          .transform(to_skip);
+    using SkipType =
+        internal::Skip<T, _skip_serialization, _skip_deserialization>;
+    try {
+      if constexpr (_skip_deserialization) {
+        return make_result_safe<Result<SkipType>>(std::move(_base));
+      } else {
+        auto res =
+            read_into_or_read<R, W, std::remove_cvref_t<T>, ProcessorsType>(
+                _r, _var, std::move(_base.value()));
+        if (!res) {
+          return error(std::move(res).error());
+        }
+        return make_result_safe<Result<SkipType>>(SkipType(std::move(*res)));
+      }
+    } catch (std::exception& e) {
+      return error(e.what());
     }
   }
 

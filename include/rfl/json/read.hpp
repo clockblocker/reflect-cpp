@@ -167,12 +167,14 @@ Result<T> read_into(T _base, const std::string_view _json_str,
   if (!doc) {
     return error("Could not parse document: " + std::string(err.msg));
   }
+  struct DocGuard {
+    yyjson_doc* doc_;
+    ~DocGuard() { yyjson_doc_free(doc_); }
+  } guard{doc};
   yyjson_val* root = yyjson_doc_get_root(doc);
   const auto r = Reader();
-  auto res = parsing::read_into_or_read<Reader, Writer, T, Processors<Ps...>>(
+  return parsing::read_into_or_read<Reader, Writer, T, Processors<Ps...>>(
       r, InputVarType(root), std::move(_base));
-  yyjson_doc_free(doc);
-  return res;
 }
 
 /// Overlays JSON from an input stream onto an existing object. Atomic on error.
