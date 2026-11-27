@@ -27,7 +27,10 @@ TEST(json, test_raw_constructors_and_accessors) {
   EXPECT_EQ(def.str(), "null");
   EXPECT_EQ(def.value(), "null");
   EXPECT_STREQ(def.c_str(), "null");
-  EXPECT_FALSE(def.empty());
+
+  static_assert(!std::is_convertible_v<std::string, rfl::json::Raw>);
+  static_assert(!std::is_convertible_v<std::string_view, rfl::json::Raw>);
+  static_assert(!std::is_convertible_v<const char*, rfl::json::Raw>);
 
   const rfl::json::Raw from_cstr(R"({"a":1})");
   const rfl::json::Raw from_sv(std::string_view{R"({"a":1})"});
@@ -40,13 +43,22 @@ TEST(json, test_raw_constructors_and_accessors) {
   EXPECT_EQ(from_null, def);
 
   const rfl::json::Raw empty_raw("");
-  EXPECT_TRUE(empty_raw.empty());
+  EXPECT_EQ(empty_raw.str(), "null");
+  EXPECT_EQ(empty_raw, def);
   EXPECT_EQ(rfl::json::write(empty_raw), "null");
   EXPECT_EQ(rfl::json::write(def), "null");
   EXPECT_EQ(rfl::json::write(std::vector<rfl::json::Raw>{empty_raw, def}),
             "[null,null]");
   EXPECT_EQ(rfl::json::write(Envelope{.type = "empty", .payload = empty_raw}),
             R"({"type":"empty","payload":null})");
+
+  // Validating factory rejects malformed JSON and preserves valid JSON verbatim.
+  const auto valid = rfl::json::Raw::from_string(R"({ "k" : [1, 2] })");
+  ASSERT_TRUE(valid.has_value());
+  EXPECT_EQ(valid->str(), R"({ "k" : [1, 2] })");
+  EXPECT_FALSE(rfl::json::Raw::from_string("").has_value());
+  EXPECT_FALSE(rfl::json::Raw::from_string("{not json").has_value());
+  EXPECT_FALSE(rfl::json::Raw::from_string("1 2").has_value());
 }
 
 TEST(json, test_raw_root_values) {
@@ -141,6 +153,25 @@ TEST(json, test_raw_to_schema) {
   EXPECT_NE(req_schema.find("rfl__Generic"), std::string::npos);
   EXPECT_NE(req_schema.find(R"("required":["type","payload"])"),
             std::string::npos);
+}
+
+TEST(json, test_raw_bignum_and_nested_reparse) {
+  // With YYJSON_READ_BIGNUM_AS_RAW, integers wider than 64 bits survive verbatim.
+  const std::string big = "1234567890123456789012345678901234567890";
+  const auto big_env = rfl::json::read<Envelope>(
+      R"({"type":"bignum","payload":{"amount":)" + big + "}}",
+      YYJSON_READ_BIGNUM_AS_RAW);
+  ASSERT_TRUE(big_env.has_value());
+  EXPECT_EQ(big_env->payload.str(), R"({"amount":)" + big + "}");
+
+  // Nested Raw inside a Raw payload can be re-parsed into a typed struct.
+  const auto outer = rfl::json::read<Envelope>(
+      R"({"type":"outer","payload":{"type":"inner","payload":[1,2,3]}})");
+  ASSERT_TRUE(outer.has_value());
+  const auto inner = rfl::json::read<Envelope>(outer->payload.str());
+  ASSERT_TRUE(inner.has_value());
+  EXPECT_EQ(inner->type, "inner");
+  EXPECT_EQ(inner->payload.str(), "[1,2,3]");
 }
 
 }  // namespace test_raw

@@ -28,25 +28,54 @@
 
 namespace rfl::json {
 
-/// Holds a raw, unparsed JSON value for passthrough serialization and
-/// deserialization without converting into intermediate C++ structures.
+/// Holds a raw JSON value for passthrough serialization and deserialization
+/// without converting into intermediate C++ structures.
+///
+/// Note on reading vs. writing:
+/// - Writing emits the stored JSON text verbatim via `yyjson_mut_rawncpy`
+///   without re-parsing. Use `Raw::from_string()` when constructing from
+///   untrusted input so malformed JSON is rejected up front.
+/// - Reading captures the parsed yyjson subtree via `yyjson_val_write`, which
+///   canonicalizes whitespace. Pass `YYJSON_READ_BIGNUM_AS_RAW` to
+///   `rfl::json::read` if you need integers wider than 64 bits preserved
+///   verbatim.
 class Raw {
  public:
   Raw() = default;
 
-  Raw(std::string _value) : value_(std::move(_value)) {}
+  explicit Raw(std::string _value)
+      : value_(_value.empty() ? std::string("null") : std::move(_value)) {}
 
-  Raw(std::string_view _value) : value_(_value) {}
+  explicit Raw(const std::string_view _value)
+      : value_(_value.empty() ? std::string("null") : std::string(_value)) {}
 
-  Raw(const char* _value) : value_(_value ? _value : "null") {}
+  explicit Raw(const char* _value)
+      : value_((_value && _value[0] != '\0') ? std::string(_value)
+                                             : std::string("null")) {}
+
+  /// Validates that `_str` contains a single well-formed JSON value and
+  /// constructs a `Raw` holding `_str` verbatim.
+  static Result<Raw> from_string(const std::string_view _str,
+                                 const yyjson_read_flag _flag = 0) {
+    if (_flag & YYJSON_READ_INSITU) {
+      return error("YYJSON_READ_INSITU is not supported");
+    }
+    yyjson_read_err err{};
+    yyjson_doc* doc = yyjson_read_opts(const_cast<char*>(_str.data()),
+                                       _str.size(), _flag, nullptr, &err);
+    if (!doc) {
+      return error("Invalid raw JSON: " +
+                   std::string(err.msg ? err.msg : "parse error"));
+    }
+    yyjson_doc_free(doc);
+    return Raw(_str);
+  }
 
   const std::string& str() const noexcept { return value_; }
 
   const std::string& value() const noexcept { return value_; }
 
   const char* c_str() const noexcept { return value_.c_str(); }
-
-  bool empty() const noexcept { return value_.empty(); }
 
   bool operator==(const Raw&) const = default;
 
@@ -73,6 +102,13 @@ class Raw {
 }  // namespace rfl::json
 
 namespace rfl::parsing {
+
+template <class R, class W, class ProcessorsType>
+  requires AreReaderAndWriter<R, W, json::Raw>
+struct Parser<R, W, json::Raw, ProcessorsType> {
+  static_assert(always_false_v<R>,
+                "rfl::json::Raw is only supported with rfl::json.");
+};
 
 template <class ProcessorsType>
   requires AreReaderAndWriter<json::Reader, json::Writer, json::Raw>
