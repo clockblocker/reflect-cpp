@@ -15,6 +15,7 @@
 #include "../DefaultVal.hpp"
 #include "../Deprecated.hpp"
 #include "../Description.hpp"
+#include "../Group.hpp"
 #include "../Hidden.hpp"
 #include "../ImplicitValue.hpp"
 #include "../Positional.hpp"
@@ -111,6 +112,9 @@ struct Options {
   /// Paths of fields wrapped in rfl::Hidden, which are parsed normally but
   /// omitted from usage() and --help.
   std::set<std::string> hidden_options;
+
+  /// Section header name for fields wrapped in rfl::Group, by path.
+  std::map<std::string, std::string> option_groups;
 
   /// Whether options that match no field are an error (rfl::NoExtraFields).
   bool reject_unknown = false;
@@ -272,10 +276,12 @@ struct cli_annotations {
   static constexpr bool is_short = false;
   static constexpr bool is_positional = false;
   static constexpr bool is_hidden = false;
+  static constexpr bool has_group = false;
   static constexpr size_t num_implicit_value = 0;
   static constexpr rfl::internal::StringLiteral<1> short_name = "";
   static constexpr int count = 0;
   static constexpr rfl::internal::StringLiteral<1> implicit_value = "";
+  static constexpr rfl::internal::StringLiteral<1> group_name = "";
 };
 
 template <class T>
@@ -323,6 +329,12 @@ struct cli_annotations<ImplicitValue<T, _implicit>> : cli_annotations_t<T> {
 template <class T>
 struct cli_annotations<Hidden<T>> : cli_annotations_t<T> {
   static constexpr bool is_hidden = true;
+};
+
+template <rfl::internal::StringLiteral _group, class T>
+struct cli_annotations<Group<_group, T>> : cli_annotations_t<T> {
+  static constexpr bool has_group = true;
+  static constexpr auto group_name = _group;
 };
 
 /// The CLI metadata of the _i-th field of a NamedTuple. InnerType is the
@@ -559,6 +571,10 @@ void add_option(const std::string& _path, Options* _options) {
   using U = unwrapped_option_t<T, ProcessorsType>;
   if constexpr (cli_annotations_t<T>::is_hidden) {
     _options->hidden_options.insert(_path);
+  }
+  if constexpr (cli_annotations_t<T>::has_group) {
+    _options->option_groups[_path] =
+        std::string(cli_annotations_t<T>::group_name.string_view());
   }
   if constexpr (cli_annotations_t<T>::num_implicit_value > 0) {
     _options->long_options[_path] =
