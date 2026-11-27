@@ -14,7 +14,6 @@
 #include "../internal/is_safe_default_constructible.hpp"
 #include "../internal/make_tag.hpp"
 #include "../internal/no_field_names_v.hpp"
-#include "../internal/nth_element_t.hpp"
 #include "../internal/strings/strings.hpp"
 #include "../named_tuple_t.hpp"
 #include "../visit.hpp"

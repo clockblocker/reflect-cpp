@@ -925,8 +925,16 @@ struct NamedTupleParser {
               const auto reset = [&]() {
                 if constexpr (std::is_const_v<ValueType> ||
                               !std::is_move_assignable_v<NonConstT>) {
-                  std::destroy_at(ptr);
-                  ::new (ptr) NonConstT{};
+                  if constexpr (std::is_nothrow_default_constructible_v<
+                                    NonConstT>) {
+                    std::destroy_at(ptr);
+                    ::new (ptr) NonConstT{};
+                  } else if constexpr (std::is_move_constructible_v<
+                                           NonConstT>) {
+                    NonConstT tmp{};
+                    std::destroy_at(ptr);
+                    ::new (ptr) NonConstT(std::move(tmp));
+                  }
                 } else {
                   *ptr = NonConstT{};
                 }
