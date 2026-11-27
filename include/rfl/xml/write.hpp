@@ -39,12 +39,13 @@ consteval auto get_root_name() {
 /// @tparam Ps Processors to apply during serialization (transforms the data)
 /// @param _obj The object to serialize to XML
 /// @param _parent The parent pugixml node (or document) to append under
-/// @param _root_name The name of the appended child element
-/// @return The newly appended pugixml node (or an empty node if `_parent` is empty)
+/// @param _root_name The name of the appended child element (must be non-empty)
+/// @return The newly appended pugixml node, or an empty node if `_parent` is
+/// empty or `_root_name` is empty
 template <class... Ps>
 pugi::xml_node write(const auto& _obj, pugi::xml_node _parent,
                      const std::string& _root_name) {
-  if (!_parent) {
+  if (!_parent || _root_name.empty()) {
     return pugi::xml_node();
   }
   using T = std::remove_cvref_t<decltype(_obj)>;

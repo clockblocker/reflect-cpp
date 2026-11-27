@@ -52,12 +52,12 @@ struct Reader {
   using InputVarType = XMLInputVar;
 
   /// Compile-time flag indicating whether type T has a custom constructor from XML.
-  /// If true, the type provides a static from_xml_node(const pugi::xml_node&)
+  /// If true, the type provides a static from_xml_obj(const pugi::xml_node&)
   /// method returning T or rfl::Result<T> for custom deserialization.
   template <class T>
   static constexpr bool has_custom_constructor =
       (requires(const pugi::xml_node& node) {
-        { T::from_xml_node(node) } -> std::convertible_to<rfl::Result<T>>;
+        { T::from_xml_obj(node) } -> std::convertible_to<rfl::Result<T>>;
       });
 
   /// Retrieves an element from an XML array by index.
@@ -224,8 +224,8 @@ struct Reader {
   }
 
   /// Uses a type's custom constructor to deserialize from an XML node.
-  /// Calls the type's static from_xml_node(const pugi::xml_node&) method.
-  /// @tparam T The type to construct, must have a from_xml_node() static method
+  /// Calls the type's static from_xml_obj(const pugi::xml_node&) method.
+  /// @tparam T The type to construct, must have a from_xml_obj() static method
   /// @param _var The XML value to deserialize from (must be a node, not an attribute)
   /// @return Result containing the constructed object, or an error if construction fails
   template <class T>
@@ -233,7 +233,7 @@ struct Reader {
       const InputVarType _var) const noexcept {
     const auto call_ctor = [](const pugi::xml_node& _node) -> rfl::Result<T> {
       try {
-        return T::from_xml_node(_node);
+        return T::from_xml_obj(_node);
       } catch (const std::exception& e) {
         return error(e.what());
       }

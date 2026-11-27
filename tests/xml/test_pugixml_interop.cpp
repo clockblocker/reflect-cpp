@@ -154,8 +154,9 @@ TEST(xml_pugixml_interop, write_splice_into_existing_node) {
   EXPECT_EQ(root, standalone.document_element());
   EXPECT_EQ(rfl::xml::read<Item>(standalone).value().item_name, "Sprocket");
 
-  // Writing into an empty handle fails safely by returning an empty node.
+  // Writing into an empty handle or with an empty runtime root name fails safely.
   EXPECT_FALSE(rfl::xml::write(item, pugi::xml_node{}));
+  EXPECT_FALSE(rfl::xml::write(item, config, ""));
 }
 
 struct RichText {
@@ -163,7 +164,7 @@ struct RichText {
   std::string plain;
   std::vector<std::string> bold_spans;
 
-  static rfl::Result<RichText> from_xml_node(const pugi::xml_node& _node) {
+  static rfl::Result<RichText> from_xml_obj(const pugi::xml_node& _node) {
     const auto lang_attr = _node.attribute("lang");
     if (!lang_attr) {
       return rfl::error("RichText node missing 'lang' attribute.");
@@ -192,7 +193,7 @@ struct Article {
 struct DirectValueNode {
   std::string text;
 
-  static DirectValueNode from_xml_node(const pugi::xml_node& _node) {
+  static DirectValueNode from_xml_obj(const pugi::xml_node& _node) {
     return DirectValueNode{.text = std::string(_node.child_value())};
   }
 };
@@ -200,7 +201,7 @@ struct DirectValueNode {
 struct ThrowingNode {
   int v = 0;
 
-  static ThrowingNode from_xml_node(const pugi::xml_node&) {
+  static ThrowingNode from_xml_obj(const pugi::xml_node&) {
     throw std::runtime_error("custom parse failure");
   }
 };
@@ -208,12 +209,12 @@ struct ThrowingNode {
 struct MoveOnlyNode {
   std::unique_ptr<int> value;
 
-  static rfl::Result<MoveOnlyNode> from_xml_node(const pugi::xml_node& _node) {
+  static rfl::Result<MoveOnlyNode> from_xml_obj(const pugi::xml_node& _node) {
     return MoveOnlyNode{.value = std::make_unique<int>(_node.text().as_int())};
   }
 };
 
-TEST(xml_pugixml_interop, custom_from_xml_node_in_reflected_struct) {
+TEST(xml_pugixml_interop, custom_from_xml_obj_in_reflected_struct) {
   const char* xml = R"(<?xml version="1.0" encoding="UTF-8"?>
 <Article>
   <title>Hello</title>
@@ -230,12 +231,12 @@ TEST(xml_pugixml_interop, custom_from_xml_node_in_reflected_struct) {
   EXPECT_EQ(res.value().body.bold_spans[0], "here");
   EXPECT_EQ(res.value().body.bold_spans[1], "there");
 
-  // Error returned by from_xml_node propagates cleanly.
+  // Error returned by from_xml_obj propagates cleanly.
   const auto missing_attr =
       rfl::xml::read<Article>("<Article><title>T</title><body>hi</body></Article>");
   EXPECT_FALSE(missing_attr);
 
-  // Attribute matched against a from_xml_node field returns an error cleanly.
+  // Attribute matched against a from_xml_obj field returns an error cleanly.
   const auto attr_instead_of_elem =
       rfl::xml::read<Article>("<Article body=\"oops\"><title>T</title></Article>");
   EXPECT_FALSE(attr_instead_of_elem);
