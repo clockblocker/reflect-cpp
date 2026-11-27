@@ -44,6 +44,47 @@ struct MultiToken {};
 /// process listings).
 struct Sensitive {};
 
+/// Adds an alternate long option name (without leading `--`) that maps to the
+/// same field as its canonical long name (may be repeated on one `Opt`).
+template <rfl::internal::StringLiteral _name>
+struct Alias {
+  static constexpr auto value = _name;
+};
+
+/// Marks an integral field as a repeatable counter flag (`-v`, `-vvv`,
+/// `--verbose --verbose` → 1, 3, 2).
+struct Counter {};
+
+/// Declares that this option cannot be combined with `--_other` (canonical long
+/// name). May be repeated on one `Opt`.
+template <rfl::internal::StringLiteral _other>
+struct Excludes {
+  static constexpr auto value = _other;
+};
+
+/// Declares that this option requires `--_other` (canonical long name) to also
+/// be supplied. May be repeated on one `Opt`.
+template <rfl::internal::StringLiteral _other>
+struct Needs {
+  static constexpr auto value = _other;
+};
+
+/// Allows negating a boolean/option flag via `--<prefix><name>` (default
+/// `"no-"`, e.g. `--pyc` / `--no-pyc`, or `"no"` for `-nofoo`).
+template <rfl::internal::StringLiteral _prefix = "no-">
+struct Negatable {
+  static constexpr auto prefix = _prefix;
+};
+
+/// Registers an explicit negated long option name (without leading `--`) that
+/// sets this option to `false` (e.g. `--skip-run-link-scripts` with
+/// `NegatedName<"run-link-scripts">`, or `-finline` with
+/// `NegatedName<"fno-inline">`). May be repeated on one `Opt`.
+template <rfl::internal::StringLiteral _name>
+struct NegatedName {
+  static constexpr auto value = _name;
+};
+
 template <rfl::internal::StringLiteral _desc>
 struct Desc {
   static constexpr auto value = _desc;
@@ -77,6 +118,7 @@ struct opt_attrs<> {
   static constexpr bool has_value_name = false;
   static constexpr bool is_multi_token = false;
   static constexpr bool is_sensitive = false;
+  static constexpr bool is_counter = false;
   static constexpr size_t num_implicit_value = 0;
   static constexpr int count = 0;
   static constexpr rfl::internal::StringLiteral<1> short_name = "";
@@ -87,6 +129,17 @@ struct opt_attrs<> {
   static constexpr bool is_deprecated = false;
   static constexpr std::string_view deprecation_message = {};
   static constexpr std::string_view default_hint = {};
+
+  template <class Fn>
+  static void for_each_alias(Fn&&) {}
+  template <class Fn>
+  static void for_each_excludes(Fn&&) {}
+  template <class Fn>
+  static void for_each_needs(Fn&&) {}
+  template <class Fn>
+  static void for_each_negated_prefix(Fn&&) {}
+  template <class Fn>
+  static void for_each_negated_name(Fn&&) {}
 };
 
 template <class First, class... Rest>
@@ -94,8 +147,9 @@ struct opt_attrs<First, Rest...> {
   static_assert(
       !std::is_same_v<First, First>,
       "Unknown attribute passed to rfl::cli::Opt. Use tags from "
-      "rfl::cli::attr (Short, Positional, Hidden, Group, ValueName, "
-      "Implicit, MultiToken, Desc, Deprecated, DefaultHint).");
+      "rfl::cli::attr (Short, Alias, Positional, Hidden, Group, ValueName, "
+      "Implicit, MultiToken, Sensitive, Counter, Excludes, Needs, Negatable, "
+      "NegatedName, Desc, Deprecated, DefaultHint).");
 };
 
 template <rfl::internal::StringLiteral _name, class... Rest>
@@ -147,6 +201,56 @@ struct opt_attrs<attr::MultiToken, Rest...> : opt_attrs<Rest...> {
 template <class... Rest>
 struct opt_attrs<attr::Sensitive, Rest...> : opt_attrs<Rest...> {
   static constexpr bool is_sensitive = true;
+};
+
+template <rfl::internal::StringLiteral _name, class... Rest>
+struct opt_attrs<attr::Alias<_name>, Rest...> : opt_attrs<Rest...> {
+  template <class Fn>
+  static void for_each_alias(Fn&& _fn) {
+    _fn(_name.string_view());
+    opt_attrs<Rest...>::for_each_alias(_fn);
+  }
+};
+
+template <class... Rest>
+struct opt_attrs<attr::Counter, Rest...> : opt_attrs<Rest...> {
+  static constexpr bool is_counter = true;
+};
+
+template <rfl::internal::StringLiteral _other, class... Rest>
+struct opt_attrs<attr::Excludes<_other>, Rest...> : opt_attrs<Rest...> {
+  template <class Fn>
+  static void for_each_excludes(Fn&& _fn) {
+    _fn(_other.string_view());
+    opt_attrs<Rest...>::for_each_excludes(_fn);
+  }
+};
+
+template <rfl::internal::StringLiteral _other, class... Rest>
+struct opt_attrs<attr::Needs<_other>, Rest...> : opt_attrs<Rest...> {
+  template <class Fn>
+  static void for_each_needs(Fn&& _fn) {
+    _fn(_other.string_view());
+    opt_attrs<Rest...>::for_each_needs(_fn);
+  }
+};
+
+template <rfl::internal::StringLiteral _prefix, class... Rest>
+struct opt_attrs<attr::Negatable<_prefix>, Rest...> : opt_attrs<Rest...> {
+  template <class Fn>
+  static void for_each_negated_prefix(Fn&& _fn) {
+    _fn(_prefix.string_view());
+    opt_attrs<Rest...>::for_each_negated_prefix(_fn);
+  }
+};
+
+template <rfl::internal::StringLiteral _name, class... Rest>
+struct opt_attrs<attr::NegatedName<_name>, Rest...> : opt_attrs<Rest...> {
+  template <class Fn>
+  static void for_each_negated_name(Fn&& _fn) {
+    _fn(_name.string_view());
+    opt_attrs<Rest...>::for_each_negated_name(_fn);
+  }
 };
 
 template <rfl::internal::StringLiteral _desc, class... Rest>

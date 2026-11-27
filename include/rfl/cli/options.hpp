@@ -33,14 +33,17 @@
 #include "../internal/processed_t.hpp"
 #include "../parsing/is_string_map.hpp"
 #include "AllowAbbreviations.hpp"
+#include "BoolValueTokens.hpp"
 #include "LastValueWins.hpp"
 #include "Opt.hpp"
 #include "OptionsFirst.hpp"
 #include "Parser.hpp"
+#include "PreserveNames.hpp"
 #include "PureFlags.hpp"
 #include "Reader.hpp"
 #include "RequireEquals.hpp"
 #include "SeparateOptionValues.hpp"
+#include "SingleDashLong.hpp"
 
 namespace rfl::cli::internal {
 
@@ -86,6 +89,9 @@ struct Option {
   /// Whether the option carries a sensitive value (rfl::cli::attr::Sensitive)
   /// that should be overwritten with `'*'` in mutable `char* argv[]`.
   bool sensitive = false;
+
+  /// Whether the option is an additive counter flag (`-v`, `-vvv` → 1, 3).
+  bool is_counter = false;
 };
 
 /// The options that a target struct accepts, built once per <T, ProcessorsType>
@@ -103,6 +109,21 @@ struct Options {
   /// The short aliases given by rfl::Short (`p` for `-p`), sorted by short
   /// name, mapped to the path of their field.
   std::vector<std::pair<std::string, std::string>> short_options;
+
+  /// Alternate long names (`attr::Alias`) mapped to their canonical long path.
+  /// Sorted by alias name.
+  std::vector<std::pair<std::string, std::string>> long_aliases;
+
+  /// Negated long option names (`--no-foo`, `-nofoo`, `-fno-inline`) mapped to
+  /// their canonical long path. Sorted by negated name.
+  std::vector<std::pair<std::string, std::string>> negated_options;
+
+  /// Mutual exclusions `(option, excluded_option)` in canonical long names.
+  std::vector<std::pair<std::string, std::string>> exclusions;
+
+  /// Co-dependency requirements `(option, required_option)` in canonical long
+  /// names.
+  std::vector<std::pair<std::string, std::string>> requirements;
 
   /// The paths of the rfl::Positional fields, in declaration order, wherever
   /// rfl::Positional sits among a field's wrappers. Each takes one positional
@@ -181,6 +202,14 @@ struct Options {
   /// (rfl::cli::RequireEquals).
   bool require_equals = false;
 
+  /// Whether single-dash tokens (`-foo`, `-foo=bar`) are parsed as long
+  /// options rather than short option clusters (rfl::cli::SingleDashLong).
+  bool single_dash_long = false;
+
+  /// Whether long boolean flags accept a separate following boolean literal
+  /// token (`--flag 0`, `--flag 1`, `--flag true`, `--flag false`).
+  bool bool_value_tokens = false;
+
   /// Records one leaf long option along with its optional hidden/group/value_name
   /// metadata. Non-template to avoid per-field template instantiations.
   void add_leaf_option(std::string _path, const Option& _opt,
@@ -214,11 +243,44 @@ struct Options {
     }
   }
 
+  /// Records a long option alias (e.g. `directory` → `dir`).
+  void add_long_alias(const std::string_view _alias,
+                      const std::string_view _long_name) {
+    if (!_alias.empty() && _alias != _long_name) {
+      long_aliases.emplace_back(std::string(_alias), std::string(_long_name));
+    }
+  }
+
+  void add_exclusion(const std::string_view _option,
+                     const std::string_view _excluded) {
+    if (!_option.empty() && !_excluded.empty()) {
+      exclusions.emplace_back(std::string(_option), std::string(_excluded));
+    }
+  }
+
+  void add_requirement(const std::string_view _option,
+                       const std::string_view _needed) {
+    if (!_option.empty() && !_needed.empty()) {
+      requirements.emplace_back(std::string(_option), std::string(_needed));
+    }
+  }
+
+  /// Records a negated long option name (e.g. `no-pyc` → `pyc`).
+  void add_negated_alias(const std::string_view _negated_name,
+                         const std::string_view _long_name) {
+    if (!_negated_name.empty() && _negated_name != _long_name) {
+      negated_options.emplace_back(std::string(_negated_name),
+                                   std::string(_long_name));
+    }
+  }
+
   /// Sorts all lookup tables so binary search lookups work. Must be called
   /// after populating or mutating any keyed table.
   void finalize() {
     sort_pairs(long_options);
     sort_pairs(short_options);
+    sort_pairs(long_aliases);
+    sort_pairs(negated_options);
     sort_pairs(open_prefixes);
     sort_pairs(open_prefix_options);
     for (auto& entry : open_prefix_options) {
@@ -254,7 +316,26 @@ struct Options {
         names.push_back(it->first);
       }
     }
+    for (auto it = lower_bound_pair(long_aliases, _prefix);
+         it != long_aliases.end() && it->first.starts_with(_prefix); ++it) {
+      if (it->first.rfind(path_separator) == last_separator
+          && std::find(names.begin(), names.end(), it->second) == names.end()) {
+        names.push_back(it->second);
+      }
+    }
+    std::sort(names.begin(), names.end());
     return names;
+  }
+
+  /// Resolves a long option alias to its canonical long option name, or nullptr.
+  const std::string* find_long_alias(const std::string_view _name) const {
+    return find_pair(long_aliases, _name);
+  }
+
+  /// Resolves a negated option name (e.g. `no-pyc`) to its canonical long
+  /// option name, or nullptr.
+  const std::string* find_negated_option(const std::string_view _name) const {
+    return find_pair(negated_options, _name);
   }
 
   /// Returns the long option `--_name`.
@@ -403,12 +484,24 @@ struct cli_annotations {
   static constexpr bool has_value_name = false;
   static constexpr bool is_multi_token = false;
   static constexpr bool is_sensitive = false;
+  static constexpr bool is_counter = false;
   static constexpr size_t num_implicit_value = 0;
   static constexpr rfl::internal::StringLiteral<1> short_name = "";
   static constexpr int count = 0;
   static constexpr rfl::internal::StringLiteral<1> implicit_value = "";
   static constexpr rfl::internal::StringLiteral<1> group_name = "";
   static constexpr rfl::internal::StringLiteral<1> value_name = "";
+
+  template <class Fn>
+  static void for_each_alias(Fn&&) {}
+  template <class Fn>
+  static void for_each_excludes(Fn&&) {}
+  template <class Fn>
+  static void for_each_needs(Fn&&) {}
+  template <class Fn>
+  static void for_each_negated_prefix(Fn&&) {}
+  template <class Fn>
+  static void for_each_negated_name(Fn&&) {}
 };
 
 template <class T>
@@ -480,9 +573,37 @@ struct cli_annotations<Opt<T, Attrs...>> {
       Info::is_multi_token || Inner::is_multi_token;
   static constexpr bool is_sensitive =
       Info::is_sensitive || Inner::is_sensitive;
+  static constexpr bool is_counter =
+      Info::is_counter || Inner::is_counter;
   static constexpr size_t num_implicit_value =
       Info::num_implicit_value + Inner::num_implicit_value;
   static constexpr int count = Info::count + Inner::count;
+
+  template <class Fn>
+  static void for_each_alias(Fn&& _fn) {
+    Info::for_each_alias(_fn);
+    Inner::for_each_alias(_fn);
+  }
+  template <class Fn>
+  static void for_each_excludes(Fn&& _fn) {
+    Info::for_each_excludes(_fn);
+    Inner::for_each_excludes(_fn);
+  }
+  template <class Fn>
+  static void for_each_needs(Fn&& _fn) {
+    Info::for_each_needs(_fn);
+    Inner::for_each_needs(_fn);
+  }
+  template <class Fn>
+  static void for_each_negated_prefix(Fn&& _fn) {
+    Info::for_each_negated_prefix(_fn);
+    Inner::for_each_negated_prefix(_fn);
+  }
+  template <class Fn>
+  static void for_each_negated_name(Fn&& _fn) {
+    Info::for_each_negated_name(_fn);
+    Inner::for_each_negated_name(_fn);
+  }
 
   static constexpr auto short_name = []() {
     if constexpr (Info::is_short) {
@@ -692,7 +813,15 @@ Option option_for() {
   using U = unwrapped_option_t<T, ProcessorsType>;
   static_assert(!cli_annotations_t<T>::is_multi_token || is_option_list_v<U>,
                 "rfl::cli::attr::MultiToken can only wrap a list type (such as std::vector).");
-  if constexpr (cli_annotations_t<T>::num_implicit_value > 0) {
+  if constexpr (cli_annotations_t<T>::is_counter) {
+    static_assert(std::is_integral_v<U> && !std::is_same_v<U, bool>,
+                  "rfl::cli::attr::Counter must wrap an integral type (not bool).");
+    Option opt;
+    opt.kind = OptionKind::flag;
+    opt.is_counter = true;
+    return opt;
+  }
+  else if constexpr (cli_annotations_t<T>::num_implicit_value > 0) {
     return implicit_value_option<T, ProcessorsType>();
   }
   else if constexpr (std::is_same_v<U, bool>) {
@@ -764,13 +893,45 @@ void collect_options(const std::string& _prefix, Options* _options) {
         using U = unwrapped_option_t<FT, ProcessorsType>;
         using Ann = cli_annotations_t<FT>;
         std::string path = _prefix + std::string(FieldType::name());
+        Ann::for_each_alias([&](const std::string_view _alias) {
+          _options->add_long_alias(
+              _prefix.empty() ? std::string(_alias)
+                              : _prefix + std::string(_alias),
+              path);
+        });
+        Ann::for_each_excludes([&](const std::string_view _other) {
+          _options->add_exclusion(path, _other);
+        });
+        Ann::for_each_needs([&](const std::string_view _other) {
+          _options->add_requirement(path, _other);
+        });
+        Ann::for_each_negated_prefix([&](const std::string_view _neg_prefix) {
+          _options->add_negated_alias(
+              _prefix + std::string(_neg_prefix) + std::string(FieldType::name()),
+              path);
+        });
+        Ann::for_each_negated_name([&](const std::string_view _neg_name) {
+          _options->add_negated_alias(
+              _prefix.empty() ? std::string(_neg_name)
+                              : _prefix + std::string(_neg_name),
+              path);
+        });
         constexpr bool is_hidden = Ann::is_hidden;
         constexpr auto group_name =
             Ann::has_group ? Ann::group_name.string_view() : std::string_view{};
         constexpr auto value_name =
             Ann::has_value_name ? Ann::value_name.string_view()
                                 : std::string_view{};
-        if constexpr (Ann::num_implicit_value > 0) {
+        if constexpr (Ann::is_counter) {
+          static_assert(
+              std::is_integral_v<U> && !std::is_same_v<U, bool>,
+              "rfl::cli::attr::Counter must wrap an integral type (not bool).");
+          Option opt;
+          opt.kind = OptionKind::flag;
+          opt.is_counter = true;
+          _options->add_leaf_option(std::move(path), opt, is_hidden, group_name,
+                                    value_name);
+        } else if constexpr (Ann::num_implicit_value > 0) {
           _options->add_leaf_option(
               std::move(path), implicit_value_option<FT, ProcessorsType>(),
               is_hidden, group_name, value_name);
@@ -848,7 +1009,25 @@ void collect_top_level_options(Options* _options) {
       using FieldType = rfl::tuple_element_t<_i, typename NT::Fields>;
       using FT = std::remove_cvref_t<typename FieldType::Type>;
       if constexpr (!rfl::internal::is_extra_fields_v<FT>) {
-        _options->long_options.emplace_back(std::string(FieldType::name()),
+        using Ann = cli_annotations_t<FT>;
+        const auto name = FieldType::name();
+        Ann::for_each_alias([&](const std::string_view _alias) {
+          _options->add_long_alias(_alias, name);
+        });
+        Ann::for_each_excludes([&](const std::string_view _other) {
+          _options->add_exclusion(name, _other);
+        });
+        Ann::for_each_needs([&](const std::string_view _other) {
+          _options->add_requirement(name, _other);
+        });
+        Ann::for_each_negated_prefix([&](const std::string_view _neg_prefix) {
+          _options->add_negated_alias(
+              std::string(_neg_prefix) + std::string(name), name);
+        });
+        Ann::for_each_negated_name([&](const std::string_view _neg_name) {
+          _options->add_negated_alias(_neg_name, name);
+        });
+        _options->long_options.emplace_back(std::string(name),
                                             option_for<FT, ProcessorsType>());
       }
     };
@@ -891,6 +1070,8 @@ Options make_options() {
   options.pure_flags = pure_flags_v<ProcessorsType>;
   options.last_value_wins = last_value_wins_v<ProcessorsType>;
   options.require_equals = require_equals_v<ProcessorsType>;
+  options.single_dash_long = single_dash_long_v<ProcessorsType>;
+  options.bool_value_tokens = bool_value_tokens_v<ProcessorsType>;
   using U = unwrapped_option_t<T, ProcessorsType>;
   if constexpr (_all_paths) {
     collect_value_options<T, ProcessorsType, type_list<>>(&options);

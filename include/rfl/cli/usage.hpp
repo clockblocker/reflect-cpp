@@ -954,14 +954,15 @@ class UsageWalker {
     const auto option = options_->find_long(_arg.name);
     _arg.kind = option.kind;
     _arg.implicit_value = std::string(option.implicit_value);
-    _arg.is_list = option.is_list;
+    _arg.is_list = option.is_list || option.is_counter;
     _arg.multi_token = option.multi_token;
     const bool pure_flag =
-        options_->pure_flags && _arg.kind == OptionKind::flag && !_arg.positional;
+        (options_->pure_flags || option.is_counter)
+        && _arg.kind == OptionKind::flag && !_arg.positional;
     if (pure_flag) {
       _arg.bare = true;
     }
-    if (_default && !(pure_flag && *_default == "false")) {
+    if (_default && !(pure_flag && (*_default == "false" || *_default == "0"))) {
       _arg.default_value = std::move(_default);
     } else if (!_arg.default_hint.empty() &&
                !(pure_flag && _arg.default_hint == "false")) {
@@ -1268,8 +1269,7 @@ inline std::string format_usage(const std::string& _program_name,
 template <class T, class... Ps>
 rfl::Result<std::string> usage(const std::string& _program_name,
                                const UsageOptions& _opts) {
-  using ProcessorsType =
-      rfl::internal::flatten_processors_t<SnakeCaseToKebabCase, Ps...>;
+  using ProcessorsType = internal::cli_processors_t<Ps...>;
   constexpr auto delimiter = internal::list_delimiter_v<ProcessorsType>;
   // The table that read() parses with, so the help shows what the parser
   // accepts, including the options inside nested structs and maps, and the
