@@ -28,6 +28,7 @@ reflect-cpp and sqlgen fill important gaps in C++ development. They reduce boile
 - Simple [installation](https://munich-data-engineering.github.io/reflect-cpp/install)
 - Simple extendability to [other serialization formats](https://munich-data-engineering.github.io/reflect-cpp/supported_formats/supporting_your_own_format)
 - Simple extendability to [custom classes](https://munich-data-engineering.github.io/reflect-cpp/concepts/custom_classes)
+- Read-only field aliases via [`rfl::Alias`](https://munich-data-engineering.github.io/reflect-cpp/alias) for backwards-compatible schema and config migration
 - Being one of the fastest serialization libraries in existence, as demonstrated by our [benchmarks](https://munich-data-engineering.github.io/reflect-cpp/benchmarks)
 
 <br>
