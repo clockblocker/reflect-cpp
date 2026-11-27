@@ -53,6 +53,8 @@ struct Validator {
 
   /// Default constructor - validates a default-constructed T.
   /// @throws std::exception if validation of the default value fails
+  template <class U = T>
+    requires std::is_default_constructible_v<U>
   Validator() : value_(ValidationType::validate(T()).value()) {}
 
   /// Move constructor.

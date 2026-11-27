@@ -19,6 +19,8 @@ struct DefaultVal {
   using Type = std::remove_cvref_t<T>;
 
   /// Default constructor - initializes with default-constructed value.
+  template <class U = Type>
+    requires std::is_default_constructible_v<U>
   DefaultVal() : value_(Type()) {}
 
   /// Constructs from a const reference to the value.
