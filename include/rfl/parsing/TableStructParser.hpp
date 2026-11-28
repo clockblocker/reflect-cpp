@@ -468,14 +468,16 @@ class TableViewReader {
   };
 
   TableViewReader(const R* _r, const Desc* _desc, void* const* _field_ptrs,
-                  bool* _found, bool* _set,
+                  bool* _found, bool* _set, std::size_t* _found_count,
                   FieldErrors<ProcessorsType>* _errors) noexcept
       : r_(_r),
         desc_(_desc),
         field_ptrs_(_field_ptrs),
         found_(_found),
         set_(_set),
-        errors_(_errors) {}
+        found_count_(_found_count),
+        errors_(_errors),
+        next_idx_(0) {}
 
   ~TableViewReader() = default;
 
@@ -483,15 +485,29 @@ class TableViewReader {
     return {desc_->names, desc_->size};
   }
 
-  void read(const std::string_view& _name, const InputVarType& _var) const {
+  RFL_ALWAYS_INLINE void read(const std::string_view& _name,
+                              const InputVarType& _var) const {
     if (should_stop_on_field_error<ProcessorsType>(*errors_)) return;
     bool already_assigned = false;
-    if (const int idx =
-            detail::find_in_table(desc_->lookup, desc_->size, _name);
-        idx >= 0 && idx != desc_->pos_extra_fields) {
+    int idx = -1;
+    if (next_idx_ < desc_->size &&
+        static_cast<int>(next_idx_) != desc_->pos_extra_fields &&
+        desc_->names[next_idx_] == _name) [[likely]] {
+      idx = static_cast<int>(next_idx_);
+      ++next_idx_;
+    } else {
+      const int found_idx =
+          detail::find_in_table(desc_->lookup, desc_->size, _name);
+      if (found_idx >= 0 && found_idx != desc_->pos_extra_fields) {
+        idx = found_idx;
+        next_idx_ = static_cast<std::size_t>(found_idx) + 1;
+      }
+    }
+    if (idx >= 0) {
       const auto u = static_cast<std::size_t>(idx);
       if (!found_[u]) {
         found_[u] = true;
+        ++(*found_count_);
         already_assigned = true;
         desc_->read_fns[u](*r_, _var, desc_->names[u], field_ptrs_[u], set_[u],
                            errors_, desc_->size);
@@ -500,8 +516,12 @@ class TableViewReader {
     if (desc_->pos_extra_fields >= 0) {
       if (!already_assigned) {
         const auto pos = static_cast<std::size_t>(desc_->pos_extra_fields);
+        const bool was_found = found_[pos];
         desc_->read_extra_fn(*r_, _name, _var, field_ptrs_[pos], found_[pos],
                              set_[pos], errors_);
+        if (!was_found && found_[pos]) {
+          ++(*found_count_);
+        }
       }
     } else if constexpr (internal::no_extra_fields_v<ProcessorsType>) {
       if (!already_assigned) {
@@ -521,6 +541,7 @@ class TableViewReader {
       const auto u = static_cast<std::size_t>(_index);
       if (!found_[u]) {
         found_[u] = true;
+        ++(*found_count_);
         already_assigned = true;
         desc_->read_fns[u](*r_, _var, desc_->names[u], field_ptrs_[u], set_[u],
                            errors_, desc_->size);
@@ -547,7 +568,9 @@ class TableViewReader {
   void* const* field_ptrs_;
   bool* found_;
   bool* set_;
+  std::size_t* found_count_;
   FieldErrors<ProcessorsType>* errors_;
+  mutable std::size_t next_idx_;
 };
 
 /// Thin static-size adapter for positional/schemaful/external readers that
@@ -599,12 +622,15 @@ class TableViewReaderWithDefault {
 
   TableViewReaderWithDefault(const R* _r, const Desc* _desc,
                              void* const* _field_ptrs, bool* _found,
+                             std::size_t* _found_count,
                              FieldErrors<ProcessorsType>* _errors) noexcept
       : r_(_r),
         desc_(_desc),
         field_ptrs_(_field_ptrs),
         found_(_found),
-        errors_(_errors) {}
+        found_count_(_found_count),
+        errors_(_errors),
+        next_idx_(0) {}
 
   ~TableViewReaderWithDefault() = default;
 
@@ -612,15 +638,29 @@ class TableViewReaderWithDefault {
     return {desc_->names, desc_->size};
   }
 
-  void read(const std::string_view& _name, const InputVarType& _var) const {
+  RFL_ALWAYS_INLINE void read(const std::string_view& _name,
+                              const InputVarType& _var) const {
     if (should_stop_on_field_error<ProcessorsType>(*errors_)) return;
     bool already_assigned = false;
-    if (const int idx =
-            detail::find_in_table(desc_->lookup, desc_->size, _name);
-        idx >= 0 && idx != desc_->pos_extra_fields) {
+    int idx = -1;
+    if (next_idx_ < desc_->size &&
+        static_cast<int>(next_idx_) != desc_->pos_extra_fields &&
+        desc_->names[next_idx_] == _name) [[likely]] {
+      idx = static_cast<int>(next_idx_);
+      ++next_idx_;
+    } else {
+      const int found_idx =
+          detail::find_in_table(desc_->lookup, desc_->size, _name);
+      if (found_idx >= 0 && found_idx != desc_->pos_extra_fields) {
+        idx = found_idx;
+        next_idx_ = static_cast<std::size_t>(found_idx) + 1;
+      }
+    }
+    if (idx >= 0) {
       const auto u = static_cast<std::size_t>(idx);
       if (!found_[u]) {
         found_[u] = true;
+        ++(*found_count_);
         already_assigned = true;
         desc_->read_fns[u](*r_, _var, desc_->names[u], field_ptrs_[u], errors_);
       }
@@ -650,6 +690,7 @@ class TableViewReaderWithDefault {
       const auto u = static_cast<std::size_t>(_index);
       if (!found_[u]) {
         found_[u] = true;
+        ++(*found_count_);
         already_assigned = true;
         desc_->read_fns[u](*r_, _var, desc_->names[u], field_ptrs_[u], errors_);
       }
@@ -674,7 +715,9 @@ class TableViewReaderWithDefault {
   const Desc* desc_;
   void* const* field_ptrs_;
   bool* found_;
+  std::size_t* found_count_;
   FieldErrors<ProcessorsType>* errors_;
+  mutable std::size_t next_idx_;
 };
 
 template <class R, class W, class ProcessorsType, std::size_t _size,
@@ -711,6 +754,7 @@ class TableViewReaderStripped {
 
   TableViewReaderStripped(const R* _r, const Desc* _desc,
                           void* const* _field_ptrs, bool* _found, bool* _set,
+                          std::size_t* _found_count,
                           FieldErrors<ProcessorsType>* _errors) noexcept
       : i_(0),
         r_(_r),
@@ -718,6 +762,7 @@ class TableViewReaderStripped {
         field_ptrs_(_field_ptrs),
         found_(_found),
         set_(_set),
+        found_count_(_found_count),
         errors_(_errors) {}
 
   ~TableViewReaderStripped() = default;
@@ -733,6 +778,7 @@ class TableViewReaderStripped {
       return Error(stream.str());
     }
     found_[i_] = true;
+    ++(*found_count_);
     desc_->read_fns[i_](*r_, _var, desc_->names[i_], field_ptrs_[i_], set_[i_],
                         errors_, desc_->size);
     ++i_;
@@ -746,6 +792,7 @@ class TableViewReaderStripped {
   void* const* field_ptrs_;
   bool* found_;
   bool* set_;
+  std::size_t* found_count_;
   FieldErrors<ProcessorsType>* errors_;
 };
 
@@ -757,12 +804,14 @@ class TableViewReaderWithDefaultStripped {
 
   TableViewReaderWithDefaultStripped(
       const R* _r, const Desc* _desc, void* const* _field_ptrs, bool* _found,
+      std::size_t* _found_count,
       FieldErrors<ProcessorsType>* _errors) noexcept
       : i_(0),
         r_(_r),
         desc_(_desc),
         field_ptrs_(_field_ptrs),
         found_(_found),
+        found_count_(_found_count),
         errors_(_errors) {}
 
   ~TableViewReaderWithDefaultStripped() = default;
@@ -778,6 +827,7 @@ class TableViewReaderWithDefaultStripped {
       return Error(stream.str());
     }
     found_[i_] = true;
+    ++(*found_count_);
     desc_->read_fns[i_](*r_, _var, desc_->names[i_], field_ptrs_[i_], errors_);
     ++i_;
     return std::nullopt;
@@ -789,6 +839,7 @@ class TableViewReaderWithDefaultStripped {
   const Desc* desc_;
   void* const* field_ptrs_;
   bool* found_;
+  std::size_t* found_count_;
   FieldErrors<ProcessorsType>* errors_;
 };
 
@@ -835,13 +886,14 @@ std::optional<Error> read_table_uninit_common(
                                 FieldErrors<ProcessorsType>*, bool) noexcept,
     void* const* _field_ptrs, bool* _found, bool* _set) {
   FieldErrors<ProcessorsType> errors;
+  std::size_t found_count = 0;
   if constexpr (_no_field_names) {
     auto arr = _r.to_array(_var);
     if (!arr) [[unlikely]] {
       return arr.error();
     }
     const auto reader = TableViewReaderStripped<R, W, ProcessorsType>(
-        &_r, &_desc, _field_ptrs, _found, _set, &errors);
+        &_r, &_desc, _field_ptrs, _found, _set, &found_count, &errors);
     if (auto err = _r.read_array(reader, *arr)) [[unlikely]] {
       return err;
     }
@@ -850,17 +902,20 @@ std::optional<Error> read_table_uninit_common(
     if (!obj) [[unlikely]] {
       return obj.error();
     }
-    const auto reader =
-        ReaderObj(&_r, &_desc, _field_ptrs, _found, _set, &errors);
+    const auto reader = ReaderObj(&_r, &_desc, _field_ptrs, _found, _set,
+                                  &found_count, &errors);
     if (auto err = _r.read_object(reader, *obj)) [[unlikely]] {
       return err;
     }
   }
 
-  if (!should_stop_on_field_error<ProcessorsType>(errors)) {
+  if (found_count < _desc.size &&
+      !should_stop_on_field_error<ProcessorsType>(errors)) {
     for (std::size_t i = 0; i < _desc.size; ++i) {
-      _missing_fns[i](_desc.names[i], _found[i], _field_ptrs[i], &_set[i],
-                      &errors, /*_value_initialize_default_vals=*/false);
+      if (!_found[i]) {
+        _missing_fns[i](_desc.names[i], false, _field_ptrs[i], &_set[i],
+                        &errors, /*_value_initialize_default_vals=*/false);
+      }
     }
   }
 
@@ -884,6 +939,7 @@ std::optional<Error> read_table_with_default_common(
                                 FieldErrors<ProcessorsType>*, bool) noexcept,
     void* const* _field_ptrs, bool* _found) {
   FieldErrors<ProcessorsType> errors;
+  std::size_t found_count = 0;
   if constexpr (_no_field_names) {
     auto arr = _r.to_array(_var);
     if (!arr) [[unlikely]] {
@@ -891,7 +947,7 @@ std::optional<Error> read_table_with_default_common(
     }
     const auto reader =
         TableViewReaderWithDefaultStripped<R, W, ProcessorsType>(
-            &_r, &_desc, _field_ptrs, _found, &errors);
+            &_r, &_desc, _field_ptrs, _found, &found_count, &errors);
     if (auto err = _r.read_array(reader, *arr)) [[unlikely]] {
       return err;
     }
@@ -900,17 +956,20 @@ std::optional<Error> read_table_with_default_common(
     if (!obj) [[unlikely]] {
       return obj.error();
     }
-    const auto reader = ReaderObj(&_r, &_desc, _field_ptrs, _found, &errors);
+    const auto reader =
+        ReaderObj(&_r, &_desc, _field_ptrs, _found, &found_count, &errors);
     if (auto err = _r.read_object(reader, *obj)) [[unlikely]] {
       return err;
     }
   }
 
-  if (_missing_fns != nullptr &&
+  if (_missing_fns != nullptr && found_count < _desc.size &&
       !should_stop_on_field_error<ProcessorsType>(errors)) {
     for (std::size_t i = 0; i < _desc.size; ++i) {
-      _missing_fns[i](_desc.names[i], _found[i], _field_ptrs[i], nullptr,
-                      &errors, /*_value_initialize_default_vals=*/false);
+      if (!_found[i]) {
+        _missing_fns[i](_desc.names[i], false, _field_ptrs[i], nullptr,
+                        &errors, /*_value_initialize_default_vals=*/false);
+      }
     }
   }
 
@@ -1094,6 +1153,14 @@ struct TableStructParser {
   }
 
   template <class... Fields>
+  static consteval bool has_any_non_trivial_dtor(
+      detail::TableFieldTypeList<Fields...>) noexcept {
+    return (false || ... ||
+            !std::is_trivially_destructible_v<
+                std::remove_all_extents_t<Fields>>);
+  }
+
+  template <class... Fields>
   static consteval auto make_destroy_table(
       detail::TableFieldTypeList<Fields...>) noexcept {
     return std::array<DestroyFn, sizeof...(Fields)>{
@@ -1175,7 +1242,8 @@ struct TableStructParser {
 
     static constexpr auto read_fns = make_read_uninit_table(FieldList{});
     static constexpr auto missing_fns = make_missing_table<false>(FieldList{});
-    static constexpr auto destroy_fns = make_destroy_table(FieldList{});
+    static constexpr bool kHasNonTrivialDtor =
+        has_any_non_trivial_dtor(FieldList{});
     static constexpr typename TableViewReader<R, W, ProcessorsType>::Desc desc{
         Names::names_.data(), Names::lookup_.data(), read_fns.data(),
         size_,                pos_extra_fields_,     make_read_extra_uninit_fn()};
@@ -1185,17 +1253,29 @@ struct TableStructParser {
     const auto field_ptrs = detail::collect_flattened_mutable_ptrs(*ptr);
     std::array<bool, size_> found{};
     std::array<bool, size_> set{};
-    const detail::UninitFieldsGuard guard{destroy_fns.data(), set.data(),
-                                          field_ptrs.data(), size_};
 
-    auto err = detail::read_table_uninit_common<R, W, no_field_names_,
-                                                ProcessorsType, UninitReader>(
-        _r, _var, desc, missing_fns.data(), field_ptrs.data(), found.data(),
-        set.data());
-    if (err) [[unlikely]] {
-      return error(std::move(*err));
+    if constexpr (kHasNonTrivialDtor) {
+      static constexpr auto destroy_fns = make_destroy_table(FieldList{});
+      const detail::UninitFieldsGuard guard{destroy_fns.data(), set.data(),
+                                            field_ptrs.data(), size_};
+      auto err = detail::read_table_uninit_common<R, W, no_field_names_,
+                                                  ProcessorsType, UninitReader>(
+          _r, _var, desc, missing_fns.data(), field_ptrs.data(), found.data(),
+          set.data());
+      if (err) [[unlikely]] {
+        return error(std::move(*err));
+      }
+      return Result<T>(std::move(*ptr));
+    } else {
+      auto err = detail::read_table_uninit_common<R, W, no_field_names_,
+                                                  ProcessorsType, UninitReader>(
+          _r, _var, desc, missing_fns.data(), field_ptrs.data(), found.data(),
+          set.data());
+      if (err) [[unlikely]] {
+        return error(std::move(*err));
+      }
+      return Result<T>(std::move(*ptr));
     }
-    return Result<T>(std::move(*ptr));
   }
 
   static std::optional<Error> read_with_default(const R& _r,
