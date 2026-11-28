@@ -19,6 +19,7 @@
 #include "../internal/is_default_val_v.hpp"
 #include "../internal/is_extra_fields.hpp"
 #include "../internal/is_skip.hpp"
+#include "../internal/max_depth.hpp"
 #include "../internal/no_extra_fields_v.hpp"
 #include "../internal/nth_element_t.hpp"
 #include "../internal/ptr_cast.hpp"
@@ -168,16 +169,38 @@ struct NamedTupleParser {
         auto set = std::array<bool, NamedTupleType::size()>{};
         return std::make_pair(set, arr.error());
       }
-      return read_object_or_array(_r, *arr, _view,
-                                  _value_initialize_default_vals);
+      if constexpr (internal::max_depth_v<ProcessorsType> > 0) {
+        const internal::ParseDepthGuard<internal::max_depth_v<ProcessorsType>>
+            depth_guard;
+        if (depth_guard.exceeded()) [[unlikely]] {
+          auto set = std::array<bool, NamedTupleType::size()>{};
+          return std::make_pair(set, depth_guard.make_error());
+        }
+        return read_object_or_array(_r, *arr, _view,
+                                    _value_initialize_default_vals);
+      } else {
+        return read_object_or_array(_r, *arr, _view,
+                                    _value_initialize_default_vals);
+      }
     } else {
       auto obj = _r.to_object(_var);
       if (!obj) [[unlikely]] {
         auto set = std::array<bool, NamedTupleType::size()>{};
         return std::make_pair(set, obj.error());
       }
-      return read_object_or_array(_r, *obj, _view,
-                                  _value_initialize_default_vals);
+      if constexpr (internal::max_depth_v<ProcessorsType> > 0) {
+        const internal::ParseDepthGuard<internal::max_depth_v<ProcessorsType>>
+            depth_guard;
+        if (depth_guard.exceeded()) [[unlikely]] {
+          auto set = std::array<bool, NamedTupleType::size()>{};
+          return std::make_pair(set, depth_guard.make_error());
+        }
+        return read_object_or_array(_r, *obj, _view,
+                                    _value_initialize_default_vals);
+      } else {
+        return read_object_or_array(_r, *obj, _view,
+                                    _value_initialize_default_vals);
+      }
     }
   }
 
@@ -197,13 +220,31 @@ struct NamedTupleParser {
       if (!arr) [[unlikely]] {
         return arr.error();
       }
-      return read_object_or_array_with_default(_r, *arr, _view);
+      if constexpr (internal::max_depth_v<ProcessorsType> > 0) {
+        const internal::ParseDepthGuard<internal::max_depth_v<ProcessorsType>>
+            depth_guard;
+        if (depth_guard.exceeded()) [[unlikely]] {
+          return depth_guard.make_error();
+        }
+        return read_object_or_array_with_default(_r, *arr, _view);
+      } else {
+        return read_object_or_array_with_default(_r, *arr, _view);
+      }
     } else {
       auto obj = _r.to_object(_var);
       if (!obj) [[unlikely]] {
         return obj.error();
       }
-      return read_object_or_array_with_default(_r, *obj, _view);
+      if constexpr (internal::max_depth_v<ProcessorsType> > 0) {
+        const internal::ParseDepthGuard<internal::max_depth_v<ProcessorsType>>
+            depth_guard;
+        if (depth_guard.exceeded()) [[unlikely]] {
+          return depth_guard.make_error();
+        }
+        return read_object_or_array_with_default(_r, *obj, _view);
+      } else {
+        return read_object_or_array_with_default(_r, *obj, _view);
+      }
     }
   }
 

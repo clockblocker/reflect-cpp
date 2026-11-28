@@ -10,6 +10,7 @@
 #include "../Result.hpp"
 #include "../Vectorstring.hpp"
 #include "../always_false.hpp"
+#include "../internal/max_depth.hpp"
 #include "MapParser.hpp"
 #include "Parent.hpp"
 #include "Parser_base.hpp"
@@ -65,14 +66,30 @@ struct VectorParser {
           .transform(to_forward_list);
     } else {
       const auto parse = [&](const InputArrayType& _arr) -> Result<VecType> {
-        VecType vec;
-        auto vector_reader =
-            VectorReader<R, W, VecType, ProcessorsType>(&_r, &vec);
-        auto err = _r.read_array(vector_reader, _arr);
-        if (err) {
-          return error(std::move(*err));
+        if constexpr (internal::max_depth_v<ProcessorsType> > 0) {
+          const internal::ParseDepthGuard<internal::max_depth_v<ProcessorsType>>
+              depth_guard;
+          if (depth_guard.exceeded()) [[unlikely]] {
+            return error(depth_guard.make_error());
+          }
+          VecType vec;
+          auto vector_reader =
+              VectorReader<R, W, VecType, ProcessorsType>(&_r, &vec);
+          auto err = _r.read_array(vector_reader, _arr);
+          if (err) {
+            return error(std::move(*err));
+          }
+          return vec;
+        } else {
+          VecType vec;
+          auto vector_reader =
+              VectorReader<R, W, VecType, ProcessorsType>(&_r, &vec);
+          auto err = _r.read_array(vector_reader, _arr);
+          if (err) {
+            return error(std::move(*err));
+          }
+          return vec;
         }
-        return vec;
       };
       return _r.to_array(_var).and_then(parse);
     }

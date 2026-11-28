@@ -9,6 +9,7 @@
 #include "../Result.hpp"
 #include "../Tuple.hpp"
 #include "../Variant.hpp"
+#include "../internal/max_depth.hpp"
 #include "../internal/no_duplicate_field_names.hpp"
 #include "../internal/to_ptr_field.hpp"
 #include "../make_named_tuple.hpp"
@@ -44,24 +45,41 @@ struct FieldVariantParser {
         "names.");
 
     const auto to_result = [&](const auto _obj) -> ResultType {
-      auto field_variant = std::optional<Result<FieldVariantType>>();
-      const auto reader =
-          FieldVariantReader<R, W, ProcessorsType, FieldTypes...>(
-              &_r, &field_variant);
-      auto err = _r.read_object(reader, _obj);
-      if (err) {
-        return error(std::move(*err));
+      if constexpr (internal::max_depth_v<ProcessorsType> > 0) {
+        const internal::ParseDepthGuard<internal::max_depth_v<ProcessorsType>>
+            depth_guard;
+        if (depth_guard.exceeded()) [[unlikely]] {
+          return error(depth_guard.make_error());
+        }
+        return read_object_impl(_r, _obj);
+      } else {
+        return read_object_impl(_r, _obj);
       }
-      if (!field_variant) {
-        return error(
-            "Could not parse: Expected the object to have "
-            "exactly one field, but found none.");
-      }
-      return std::move(*field_variant);
     };
 
     return _r.to_object(_var).and_then(to_result);
   }
+
+ private:
+  static ResultType read_object_impl(const R& _r,
+                                     const auto& _obj) noexcept {
+    auto field_variant = std::optional<Result<FieldVariantType>>();
+    const auto reader =
+        FieldVariantReader<R, W, ProcessorsType, FieldTypes...>(&_r,
+                                                                &field_variant);
+    auto err = _r.read_object(reader, _obj);
+    if (err) {
+      return error(std::move(*err));
+    }
+    if (!field_variant) {
+      return error(
+          "Could not parse: Expected the object to have "
+          "exactly one field, but found none.");
+    }
+    return std::move(*field_variant);
+  }
+
+ public:
 
   /**
    * @brief Writes a field variant to the output.

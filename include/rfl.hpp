@@ -31,6 +31,7 @@
 #include "rfl/Generic.hpp"
 #include "rfl/Hex.hpp"
 #include "rfl/Literal.hpp"
+#include "rfl/MaxDepth.hpp"
 #include "rfl/NamedTuple.hpp"
 #include "rfl/NoExtraFields.hpp"
 #include "rfl/NoFieldNames.hpp"

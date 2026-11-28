@@ -9,6 +9,7 @@
 #include "../Ref.hpp"
 #include "../Result.hpp"
 #include "../always_false.hpp"
+#include "../internal/max_depth.hpp"
 #include "../internal/ptr_cast.hpp"
 #include "ArrayReader.hpp"
 #include "Parent.hpp"
@@ -55,13 +56,31 @@ struct ParserArray {
       if constexpr (requires {
                       _r.template read_fixed_array<_size>(array_reader, _var);
                     }) {
-        return _r.template read_fixed_array<_size>(array_reader, _var);
+        if constexpr (internal::max_depth_v<ProcessorsType> > 0) {
+          const internal::ParseDepthGuard<internal::max_depth_v<ProcessorsType>>
+              depth_guard;
+          if (depth_guard.exceeded()) [[unlikely]] {
+            return depth_guard.make_error();
+          }
+          return _r.template read_fixed_array<_size>(array_reader, _var);
+        } else {
+          return _r.template read_fixed_array<_size>(array_reader, _var);
+        }
       } else {
         const auto arr = _r.to_array(_var);
         if (!arr) {
           return arr.error();
         }
-        return _r.read_array(array_reader, *arr);
+        if constexpr (internal::max_depth_v<ProcessorsType> > 0) {
+          const internal::ParseDepthGuard<internal::max_depth_v<ProcessorsType>>
+              depth_guard;
+          if (depth_guard.exceeded()) [[unlikely]] {
+            return depth_guard.make_error();
+          }
+          return _r.read_array(array_reader, *arr);
+        } else {
+          return _r.read_array(array_reader, *arr);
+        }
       }
     }();
     if (err) {
