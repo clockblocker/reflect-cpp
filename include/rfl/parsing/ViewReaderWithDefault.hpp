@@ -11,6 +11,7 @@
 #include "../Ref.hpp"
 #include "../Tuple.hpp"
 #include "../internal/is_array.hpp"
+#include "../internal/no_duplicate_keys_v.hpp"
 #include "../internal/no_extra_fields_v.hpp"
 #include "FieldErrors.hpp"
 #include "Parser_base.hpp"
@@ -23,6 +24,12 @@ class ViewReaderWithDefault {
  public:
   using InputVarType = typename R::InputVarType;
   using ViewType = _ViewType;
+
+  static constexpr bool no_duplicate_keys =
+      internal::no_duplicate_keys_v<ProcessorsType>;
+  static_assert(!no_duplicate_keys ||
+                    internal::reader_supports_no_duplicate_keys_v<R>,
+                "rfl::NoDuplicateKeys is not supported by this reader.");
 
   static constexpr size_t size_ = ViewType::size();
 
@@ -58,6 +65,15 @@ class ViewReaderWithDefault {
     if (should_stop_on_field_error<ProcessorsType>(*errors_)) return;
     assign_to_matching_field(*r_, _name, _var, view_, errors_, found_.get(),
                              std::make_integer_sequence<int, size_>());
+  }
+
+  /**
+   * @brief Records a field-level error reported directly by the reader (for
+   * example, a duplicate key).
+   */
+  void add_error(Error&& _err) const {
+    if (should_stop_on_field_error<ProcessorsType>(*errors_)) return;
+    errors_->emplace_back(std::move(_err));
   }
 
   /**

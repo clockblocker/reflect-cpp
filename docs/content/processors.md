@@ -41,6 +41,7 @@ reflect-cpp currently supports the following processors:
 - `rfl::DurationsAsCount`
 - `rfl::EnumNamesOnly`
 - `rfl::FailFast`
+- `rfl::NoDuplicateKeys`
 - `rfl::NoExtraFields`
 - `rfl::NoFieldNames`
 - `rfl::NoOptionals`
@@ -365,6 +366,23 @@ Failed to parse field 'color': Invalid enum value: '2'. Must be one of [red, gre
 
 This processor only affects reading. Enum values that cannot be matched to
 a declared name are still written as their integer representation.
+
+### `rfl::NoDuplicateKeys`
+
+By default, `rfl::json::read` and `rfl::yaml::read` keep their existing behavior
+when an input object or mapping contains repeated keys. Pass
+`rfl::NoDuplicateKeys` to reject duplicate keys and report each repeated key as
+an error. Works across structs, maps, `rfl::Object`, `rfl::Generic`,
+`rfl::FieldVariant`, and `rfl::TaggedUnion`. Passing `rfl::NoDuplicateKeys` to a
+reader that does not support duplicate-key detection fails at compile time
+(`static_assert`):
+
+```cpp
+const auto json_res =
+    rfl::json::read<Config, rfl::NoExtraFields, rfl::NoDuplicateKeys>(json_str);
+const auto yaml_res =
+    rfl::yaml::read<Config, rfl::NoExtraFields, rfl::NoDuplicateKeys>(yaml_str);
+```
 
 ### `rfl::NoExtraFields`
 
