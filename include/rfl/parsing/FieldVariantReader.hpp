@@ -10,6 +10,7 @@
 #include "../Result.hpp"
 #include "../Variant.hpp"
 #include "../internal/is_array.hpp"
+#include "../internal/no_duplicate_keys_v.hpp"
 #include "../internal/nth_element_t.hpp"
 #include "Parser_base.hpp"
 
@@ -23,6 +24,12 @@ class FieldVariantReader {
   using ResultType = Result<FieldVariantType>;
 
  public:
+  static constexpr bool no_duplicate_keys =
+      internal::no_duplicate_keys_v<ProcessorsType>;
+  static_assert(!no_duplicate_keys ||
+                    internal::reader_supports_no_duplicate_keys_v<R>,
+                "rfl::NoDuplicateKeys is not supported by this reader.");
+
   /**
    * @brief Constructor.
    *

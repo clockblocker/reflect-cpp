@@ -32,6 +32,7 @@
 #include "rfl/Hex.hpp"
 #include "rfl/Literal.hpp"
 #include "rfl/NamedTuple.hpp"
+#include "rfl/NoDuplicateKeys.hpp"
 #include "rfl/NoExtraFields.hpp"
 #include "rfl/NoFieldNames.hpp"
 #include "rfl/NoOptionals.hpp"
