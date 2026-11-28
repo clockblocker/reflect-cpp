@@ -6,6 +6,7 @@
 #include <rfl/internal/bind_to_tuple.hpp>
 #include <rfl/internal/has_default_val_v.hpp>
 #include <rfl/json.hpp>
+#include <rfl/parsing/TaggedUnionWrapper.hpp>
 #include <string>
 
 namespace {
@@ -20,6 +21,8 @@ struct AnonDefault {
 }  // namespace
 
 namespace test_has_default_val {
+
+struct Incomplete;
 
 struct Empty {};
 
@@ -42,9 +45,41 @@ struct FieldWrapperDefault {
   rfl::Field<"b", rfl::DefaultVal<int>> b;
 };
 
+struct FieldWrapperRenamedDefault {
+  rfl::Field<"a", rfl::Rename<"val", rfl::DefaultVal<int>>> a;
+};
+
 struct FieldWrapperNoDefault {
   rfl::Field<"a", int> a;
   rfl::Field<"b", std::string> b;
+};
+
+struct RawPointerToDefault {
+  rfl::DefaultVal<int>* p = nullptr;
+};
+
+struct RawPointerToField {
+  rfl::Field<"a", rfl::DefaultVal<int>>* p = nullptr;
+};
+
+struct RawPointerToFlatten {
+  rfl::Flatten<DirectDefault>* p = nullptr;
+};
+
+struct RawPointerToIncompleteFlatten {
+  rfl::Flatten<Incomplete>* p = nullptr;
+};
+
+struct RawPointerToIncompleteField {
+  rfl::Field<"a", Incomplete>* p = nullptr;
+};
+
+struct FieldWrappingFlatten {
+  rfl::Field<"a", rfl::Flatten<DirectDefault>> f;
+};
+
+struct NestedFieldWrapper {
+  rfl::Field<"a", rfl::Field<"b", rfl::DefaultVal<int>>> f;
 };
 
 struct NonFlattenedNested {
@@ -70,6 +105,16 @@ struct FlattenedNoDefault {
 
 struct FlattenedNamedTupleWithDefault {
   rfl::Flatten<rfl::NamedTuple<rfl::Field<"a", rfl::DefaultVal<int>>>> nt;
+};
+
+struct WithExtraFields {
+  int a;
+  rfl::ExtraFields<rfl::Generic> extra;
+};
+
+struct WithExtraFieldsAndDefault {
+  rfl::DefaultVal<int> a = 1;
+  rfl::ExtraFields<rfl::Generic> extra;
 };
 
 struct NonDefaultConstructible {
@@ -106,32 +151,56 @@ union SimpleUnion {
   double b;
 };
 
+struct RvalueOnlyVisitor {
+  int& operator()(int& _a, std::string&) && { return _a; }
+};
+
 TEST(json, test_has_default_val_trait_and_apply_to_fields) {
   using rfl::internal::apply_to_fields;
   using rfl::internal::has_default_val_v;
+
+  struct LocalPlain {
+    int a;
+  };
+  struct LocalDefault {
+    rfl::DefaultVal<int> a = 3;
+  };
 
   static_assert(!has_default_val_v<int>);
   static_assert(!has_default_val_v<Empty>);
   static_assert(!has_default_val_v<Plain>);
   static_assert(!has_default_val_v<AnonPlain>);
-  static_assert(has_default_val_v<AnonDefault>);
+  static_assert(!has_default_val_v<LocalPlain>);
   static_assert(!has_default_val_v<NonAggregate>);
   static_assert(!has_default_val_v<SimpleUnion>);
   static_assert(!has_default_val_v<WithNonDefaultConstructible>);
   static_assert(!has_default_val_v<FieldWrapperNoDefault>);
+  static_assert(!has_default_val_v<RawPointerToDefault>);
+  static_assert(!has_default_val_v<RawPointerToField>);
+  static_assert(!has_default_val_v<RawPointerToFlatten>);
+  static_assert(!has_default_val_v<RawPointerToIncompleteFlatten>);
+  static_assert(!has_default_val_v<RawPointerToIncompleteField>);
+  static_assert(!has_default_val_v<FieldWrappingFlatten>);
+  static_assert(!has_default_val_v<NestedFieldWrapper>);
   static_assert(!has_default_val_v<NonFlattenedNested>);
   static_assert(!has_default_val_v<FlattenedNoDefault>);
+  static_assert(!has_default_val_v<WithExtraFields>);
+  static_assert(!has_default_val_v<rfl::Tuple<int, rfl::DefaultVal<int>>>);
   static_assert(!has_default_val_v<std::array<Plain, 2>>);
   static_assert(!has_default_val_v<Plain[2]>);
 
   static_assert(has_default_val_v<DirectDefault>);
   static_assert(has_default_val_v<const DirectDefault&>);
+  static_assert(has_default_val_v<AnonDefault>);
+  static_assert(has_default_val_v<LocalDefault>);
   static_assert(has_default_val_v<RenamedDefault>);
   static_assert(has_default_val_v<FieldWrapperDefault>);
+  static_assert(has_default_val_v<FieldWrapperRenamedDefault>);
   static_assert(has_default_val_v<FlattenedWithDefault>);
   static_assert(has_default_val_v<DeepFlattenedWithDefault>);
   static_assert(has_default_val_v<FlattenedPtrWithDefault>);
   static_assert(has_default_val_v<FlattenedNamedTupleWithDefault>);
+  static_assert(has_default_val_v<WithExtraFieldsAndDefault>);
   static_assert(has_default_val_v<WithConst>);
   static_assert(has_default_val_v<DerivedEmpty>);
   static_assert(has_default_val_v<std::array<DirectDefault, 2>>);
@@ -141,7 +210,31 @@ TEST(json, test_has_default_val_trait_and_apply_to_fields) {
   static_assert(
       !has_default_val_v<rfl::NamedTuple<rfl::Field<"a", int>>>);
 
-  // Verify apply_to_fields directly on empty, mutable, and const aggregates.
+  // TaggedUnion wrappers (both pointer and value forms).
+  static_assert(
+      has_default_val_v<rfl::parsing::TaggedUnionWrapperWithFields<
+          DirectDefault, rfl::Literal<"kind">, "d", true>>);
+  static_assert(
+      has_default_val_v<rfl::parsing::TaggedUnionWrapperWithFields<
+          DirectDefault, rfl::Literal<"kind">, "d", false>>);
+  static_assert(
+      !has_default_val_v<rfl::parsing::TaggedUnionWrapperWithFields<
+          Plain, rfl::Literal<"kind">, "p", true>>);
+  static_assert(
+      has_default_val_v<rfl::parsing::TaggedUnionWrapperNoFields<
+          DirectDefault, rfl::Literal<"kind">, "d", true>>);
+  static_assert(
+      has_default_val_v<rfl::parsing::TaggedUnionWrapperNoFields<
+          DirectDefault, rfl::Literal<"kind">, "d", false>>);
+  static_assert(
+      !has_default_val_v<rfl::parsing::TaggedUnionWrapperNoFields<
+          Plain, rfl::Literal<"kind">, "p", true>>);
+  static_assert(
+      !has_default_val_v<rfl::parsing::TaggedUnionWrapperNoFields<
+          Plain, rfl::Literal<"kind">, "p", false>>);
+
+  // Verify apply_to_fields directly on empty, mutable, const, reference return,
+  // and rvalue-only callable cases.
   Empty empty{};
   const auto empty_count =
       apply_to_fields(empty, [](auto&... _fs) { return sizeof...(_fs); });
@@ -155,12 +248,16 @@ TEST(json, test_has_default_val_trait_and_apply_to_fields) {
   EXPECT_EQ(plain.a, 10);
   EXPECT_EQ(plain.b, "bye");
 
+  int& a_ref = apply_to_fields(plain, RvalueOnlyVisitor{});
+  a_ref = 25;
+  EXPECT_EQ(plain.a, 25);
+
   const Plain& cplain = plain;
   const auto sum_len = apply_to_fields(
       cplain, [](const int& _a, const std::string& _b) {
         return _a + static_cast<int>(_b.size());
       });
-  EXPECT_EQ(sum_len, 13);
+  EXPECT_EQ(sum_len, 28);
 
   // End-to-end JSON read using FlattenedWithDefault (exercises DefaultVal path).
   const auto parsed =

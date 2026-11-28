@@ -8,6 +8,7 @@
 #include <meta>
 #include <ranges>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 #include "../../Tuple.hpp"
