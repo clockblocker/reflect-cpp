@@ -22,7 +22,7 @@
   {{< card link="expected" title="std::expected" icon="book-open" subtitle="For serializing and deserializing std::expected, the C++-23 result type.">}}
   {{< card link="c_arrays_and_inheritance" title="C arrays and inheritance" icon="book-open" subtitle="How reflect-cpp handles C arrays and inheritance.">}}
   {{< card link="bytestring" title="rfl::Bytestring" icon="book-open" subtitle="How reflect-cpp handles binary strings for formats that support them.">}}
-  {{< card link="number_systems" title="rfl::Binary, rfl::Hex and rfl::Oct" icon="book-open" subtitle="For expressing numbers in different formats.">}}
+  {{< card link="number_systems" title="rfl::Binary, rfl::Hex, rfl::Oct and rfl::Stringified" icon="book-open" subtitle="For expressing numbers as strings in different formats.">}}
   {{< card link="default_val" title="Default values" icon="book-open" subtitle="For defining default values for fields that might be absent.">}}
   {{< card link="atomic" title="Atomic types" icon="book-open" subtitle="For serializing and deserializing atomic types.">}}
 {{< /cards >}}
