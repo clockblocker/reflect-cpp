@@ -845,6 +845,10 @@ struct Parser {
                 Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
                     _definitions, &view);
           } catch (...) {
+            if constexpr (internal::has_unwrapped_default_val_v<U> &&
+                          !internal::default_if_missing_v<ProcessorsType>) {
+              throw;
+            }
             (*_definitions)[name] =
                 Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
                     _definitions);

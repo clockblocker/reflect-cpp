@@ -200,6 +200,153 @@ a `std::optional` or an `rfl::DefaultVal`, so the argument may be omitted:
 with `rfl::Short<"o", rfl::DefaultVal<std::string>> output_dir = "out";`,
 leaving out `-o` gives `"out"`.
 
+## Usage / help
+
+`rfl::cli::usage<T, Ps...>(program_name, detailed = false)` generates the
+help text from the same struct, and with the same processors, as
+`rfl::cli::read<T, Ps...>()`. So the names always match what the parser
+accepts, including kebab-case, `rfl::Rename`, `rfl::Flatten` and nested paths.
+It returns an `rfl::Result<std::string>`.
+
+```cpp
+enum class LogLevel { debug, info, warn };
+
+struct Database {
+  std::string host;
+  int port;
+};
+
+struct Config {
+  rfl::Positional<rfl::Description<"Path to the input file", std::string>>
+      input_file;
+  rfl::Short<"p", rfl::Description<"Port to listen on", int>> port;
+  rfl::Description<"Minimum level to log", std::optional<LogLevel>> log_level;
+  rfl::Description<"Tags to attach", std::vector<std::string>> tags;
+  Database database;
+};
+```
+
+`rfl::cli::usage<Config>("app", true).value()` is the usage line, where
+optional arguments are in brackets, and one line per argument, with its
+description and whether it is required. `rfl::cli::usage<Config>("app")`
+gives only the usage line.
+
+```
+Usage: app <input-file> -p|--port=<value> [--log-level=<debug|info|warn>] --tags=<v1,v2,...> --database.host=<value> --database.port=<value>
+
+Arguments:
+  <input-file>                   Path to the input file. Required.
+  -p, --port=<value>             Port to listen on. Required.
+  --log-level=<debug|info|warn>  Minimum level to log
+  --tags=<v1,v2,...>             Tags to attach. Required.
+  --database.host=<value>        Required.
+  --database.port=<value>        Required.
+```
+
+Fields wrapped in `rfl::DefaultVal` are optional, and so are all fields if you
+pass `rfl::DefaultIfMissing` (to both `read` and `usage`). The parser takes
+the defaults of `rfl::DefaultVal` fields from a default-constructed struct. If
+a struct with `rfl::DefaultVal` cannot be default-constructed (for instance
+because a validator rejects another field's default value), it cannot be read,
+and `usage` returns the error, as it does for two fields with the same short
+name.
+
+Each argument is shown as the option table that `read` parses with (see
+[Architecture](#architecture)) reads it: a `bool`, also inside a nested
+struct, is a flag whose value can be left out (`--verbose[=<bool>]`), and
+every other option takes a value (`--port=<value>`).
+
+`rfl::Positional` and `rfl::Short` are found through the other wrappers, as
+the parser does (see [Combining wrappers](#combining-wrappers)), so
+`rfl::Description<"...", rfl::Positional<std::string>>` is listed as a
+positional argument.
+
+## Help and version
+
+`--help` and `--version` are off by default: `rfl::cli::read` treats them
+as it treats any option that matches no field. To turn them on, pass the
+setting `rfl::cli::App<"name", "version", "description">` (each part is
+optional) and call `rfl::cli::read_app` instead of `read`. It returns either
+the struct or an `rfl::cli::HelpOrVersion` with the text to print:
+
+```cpp
+using CopyApp = rfl::cli::App<"copy", "1.2.0", "Copies a file.">;
+
+struct Copy {
+  rfl::Positional<rfl::Description<"File to copy", std::string>> source;
+  rfl::Short<"o", rfl::Description<"Where to copy it", std::string>> output;
+  rfl::Short<"v", std::optional<bool>> verbose;
+  rfl::DefaultVal<rfl::Short<"j", int>> jobs = 1;
+};
+
+int main(int argc, char* argv[]) {
+  const auto result = rfl::cli::read_app<Copy, CopyApp>(argc, argv);
+  if (!result) {
+    std::cerr << result.error().what() << "\n\n"
+              << rfl::cli::usage<Copy, CopyApp>(argv[0]).value_or("");
+    return 2;
+  }
+  if (const auto* info = std::get_if<rfl::cli::HelpOrVersion>(&*result)) {
+    std::cout << info->text;  // info->kind is help or version
+    return 0;
+  }
+  const Copy& copy = std::get<Copy>(*result);
+  // ...
+}
+```
+
+`./copy --help` prints the detailed usage, with a header from the setting
+and rows for the two options:
+
+```
+copy 1.2.0
+Copies a file.
+
+Usage: ./copy [-h|--help] [--version] <source> -o|--output=<value> [-v|--verbose[=<bool>]] [-j|--jobs=<value>]
+
+Arguments:
+  -h, --help              Show this help
+  --version               Show the version
+  <source>                File to copy. Required.
+  -o, --output=<value>    Where to copy it. Required.
+  -v, --verbose[=<bool>]
+  -j, --jobs=<value>
+```
+
+and `./copy --version` prints `copy 1.2.0`.
+
+- The help is returned before the struct is read, so it works when required
+  fields are missing or other values are invalid. A token before it that
+  cannot be split into options at all, such as `-o` without its value, is
+  still an error. If both are given, the help wins.
+- `-h`, `--help` and `--version` are flags in the same option table as the
+  fields, so `-vh` works, `--` ends them, and `--help=false` does not ask for
+  the help.
+- **A field that takes their names is a compile-time error**, as in
+  argparse (`conflicting option string: -h`): a field with
+  `rfl::Short<"h", ...>`, wherever `rfl::Short` sits among its wrappers, a
+  field named `help`, and, if there is a version, a field named `version`.
+  To use those names, opt out of the built-in option with the fourth
+  parameter, `rfl::cli::BuiltinHelp`:
+
+  ```cpp
+  // -h is the field's, the help is --help only.
+  using Client = rfl::cli::App<"client", "1.0", "", rfl::cli::BuiltinHelp::long_only>;
+  // No help at all, like argparse's add_help=False: a field can be `help`.
+  using Tool = rfl::cli::App<"tool", "1.0", "", rfl::cli::BuiltinHelp::none>;
+  ```
+
+- An empty version leaves out `--version`, so a field can be `version`. An
+  empty name is replaced by the program name (`argv[0]`).
+- Pass the same settings to `usage` as to `read_app`: `usage` shows the
+  header (in the detailed form only) and the rows of the options that
+  `read_app` handles.
+- `read_app` is in `rfl/cli/read_app.hpp`, which `rfl/cli.hpp` includes.
+  It takes `argc` and `argv` (narrow or wide, const or not), since
+  the help and the version show the program name. `rfl::cli::read<T,
+  rfl::cli::App<...>>` does not compile, in any of its forms: its result has
+  no room for a help request. Other formats ignore the setting.
+
 ## Supported types
 
 | Type | CLI format | Notes |
@@ -239,12 +386,15 @@ Parsing proceeds in three stages:
 
 ## Files
 
-- `include/rfl/cli/read.hpp` — public API
+- `include/rfl/cli/read.hpp` — public API: `read`
+- `include/rfl/cli/read_app.hpp` — public API: `read_app`, with `--help` and `--version`
+- `include/rfl/cli/App.hpp` — `App<"name", "version", "description", BuiltinHelp>` setting for `--help` and `--version`
 - `include/rfl/cli/Reader.hpp` — Reader + `parse_value` overloads
 - `include/rfl/cli/Parser.hpp` — Parser type alias
 - `include/rfl/cli/parse_argv.hpp` — `argv` -> `ParsedArgs`
 - `include/rfl/cli/options.hpp` — the internal option table: the long, short and positional options of a struct
 - `include/rfl/cli/resolve_args.hpp` — `ParsedArgs` -> `map<string, string>`
+- `include/rfl/cli/usage.hpp` — `usage()` help text, built on `rfl::parsing::schema` and the internal option table
 - `include/rfl/cli.hpp` — aggregator header
 - `include/rfl/SnakeCaseToKebabCase.hpp` — processor
 - `include/rfl/Positional.hpp` — `Positional<T>` wrapper
