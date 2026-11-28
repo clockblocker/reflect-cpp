@@ -267,17 +267,17 @@ TEST(yaml, test_error_details_tagged_union_and_variant) {
   ASSERT_EQ(details.size(), 6) << result.error().what();
 
   // Missing discriminator points at parent mapping with exact=false.
-  EXPECT_EQ(details[0].path, (Path{"missing_tag"}));
+  EXPECT_EQ(details[0].path, (Path{"missing_tag", "shape"}));
   EXPECT_EQ(details[0].location,
             (rfl::SourceLocation{.line = 2, .column = 3, .exact = false}));
 
   // Non-string discriminator points at the discriminator value with exact=true.
-  EXPECT_EQ(details[1].path, (Path{"bad_tag_type"}));
+  EXPECT_EQ(details[1].path, (Path{"bad_tag_type", "shape"}));
   EXPECT_EQ(details[1].location,
             (rfl::SourceLocation{.line = 4, .column = 10, .exact = true}));
 
   // Unknown discriminator points at the tag value with exact=true.
-  EXPECT_EQ(details[2].path, (Path{"unknown_tag"}));
+  EXPECT_EQ(details[2].path, (Path{"unknown_tag", "shape"}));
   EXPECT_EQ(details[2].location,
             (rfl::SourceLocation{.line = 6, .column = 10, .exact = true}));
 
