@@ -25,7 +25,8 @@ struct EqualTo {
       std::stringstream stream;
       stream << "Value expected to be equal to " << threshold << ", but got "
              << _value << ".";
-      return error(stream.str());
+      return error(Error(stream.str(), ErrorKind::constraint_violation,
+                         internal::BuiltinErrorCode::equal_to));
     }
     return _value;
   }
@@ -64,7 +65,8 @@ struct Minimum {
       std::stringstream stream;
       stream << "Value expected to be greater than or equal to " << threshold
              << ", but got " << _value << ".";
-      return error(stream.str());
+      return error(Error(stream.str(), ErrorKind::constraint_violation,
+                         internal::BuiltinErrorCode::minimum));
     }
     return _value;
   }
@@ -103,7 +105,8 @@ struct ExclusiveMinimum {
       std::stringstream stream;
       stream << "Value expected to be greater than " << threshold
              << ", but got " << _value << ".";
-      return error(stream.str());
+      return error(Error(stream.str(), ErrorKind::constraint_violation,
+                         internal::BuiltinErrorCode::exclusive_minimum));
     }
     return _value;
   }
@@ -142,7 +145,8 @@ struct Maximum {
       std::stringstream stream;
       stream << "Value expected to be less than or equal to " << threshold
              << ", but got " << _value << ".";
-      return error(stream.str());
+      return error(Error(stream.str(), ErrorKind::constraint_violation,
+                         internal::BuiltinErrorCode::maximum));
     }
     return _value;
   }
@@ -180,7 +184,8 @@ struct ExclusiveMaximum {
       std::stringstream stream;
       stream << "Value expected to be less than " << threshold << ", but got "
              << _value << ".";
-      return error(stream.str());
+      return error(Error(stream.str(), ErrorKind::constraint_violation,
+                         internal::BuiltinErrorCode::exclusive_maximum));
     }
     return _value;
   }
@@ -218,7 +223,8 @@ struct NotEqualTo {
       std::stringstream stream;
       stream << "Value expected not to be equal to " << threshold
              << ", but got " << _value << ".";
-      return error(stream.str());
+      return error(Error(stream.str(), ErrorKind::constraint_violation,
+                         internal::BuiltinErrorCode::not_equal_to));
     }
     return _value;
   }

@@ -107,7 +107,8 @@ Result<internal::wrap_in_rfl_array_t<T>> read(
   yyjson_doc* doc = yyjson_read_opts(const_cast<char*>(_json_str.data()),
                                      _json_str.size(), _flag, NULL, &err);
   if (!doc) {
-    return error("Could not parse document: " + std::string(err.msg));
+    return error("Could not parse document: " + std::string(err.msg),
+                 ErrorKind::syntax_error);
   }
   yyjson_val* root = yyjson_doc_get_root(doc);
   const auto r = Reader();

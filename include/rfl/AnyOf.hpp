@@ -52,7 +52,9 @@ struct AnyOf {
     const auto handle_err = [&](Error&& _err) -> rfl::Result<T> {
       _errors.push_back(std::forward<Error>(_err));
       if constexpr (sizeof...(Tail) == 0) {
-        return error(make_error_message(_errors));
+        return error(Error(make_error_message(_errors),
+                           ErrorKind::constraint_violation,
+                           internal::BuiltinErrorCode::any_of));
       } else {
         return validate_impl<T, Tail...>(
             _value, std::forward<std::vector<Error>>(_errors));

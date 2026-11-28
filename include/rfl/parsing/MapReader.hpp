@@ -10,6 +10,7 @@
 #include "../Result.hpp"
 #include "../always_false.hpp"
 #include "../internal/has_reflection_type_v.hpp"
+#include "../internal/is_validator.hpp"
 #include "Parser_base.hpp"
 #include "wrap_error.hpp"
 
@@ -66,7 +67,7 @@ class MapReader {
         static_assert(always_false_v<T>, "Unsupported type");
       }
     } catch (std::exception& e) {
-      return error(e.what());
+      return error(e.what(), ErrorKind::invalid_value);
     }
   }
 
@@ -75,12 +76,24 @@ class MapReader {
                   "Expected an rvalue");
     const auto to_pair =
         [&](auto&& _key) -> Result<std::pair<KeyType, ValueType>> {
-      try {
-        using K = decltype(_key);
-        return std::make_pair(KeyType(std::forward<K>(_key)),
-                              std::move(_pair.second));
-      } catch (std::exception& e) {
-        return error(e.what());
+      using K = decltype(_key);
+      if constexpr (internal::is_validator_v<KeyType>) {
+        try {
+          return KeyType::from_value(std::forward<K>(_key))
+              .transform([&](KeyType&& _validated) {
+                return std::make_pair(std::move(_validated),
+                                      std::move(_pair.second));
+              });
+        } catch (std::exception& e) {
+          return error(e.what(), ErrorKind::invalid_value);
+        }
+      } else {
+        try {
+          return std::make_pair(KeyType(std::forward<K>(_key)),
+                                std::move(_pair.second));
+        } catch (std::exception& e) {
+          return error(e.what(), ErrorKind::invalid_value);
+        }
       }
     };
 

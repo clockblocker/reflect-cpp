@@ -7,6 +7,7 @@
 
 #include "Result.hpp"
 #include "Size.hpp"
+#include "internal/validator_code.hpp"
 #include "parsing/schema/ValidationType.hpp"
 
 namespace rfl {
@@ -41,8 +42,11 @@ struct CodePoints {
     }
     auto res = V::validate(n);
     if (!res) {
-      return error("Code point count validation failed: " +
-                   res.error().what());
+      return error(internal::compose_prefixed_validator_error<V>(
+          std::move(res).error(),
+          "Code point count validation failed: ", "code_points.",
+          internal::BuiltinErrorCode::code_points,
+          internal::compose_code_points_code));
     }
     return std::move(_t);
   }

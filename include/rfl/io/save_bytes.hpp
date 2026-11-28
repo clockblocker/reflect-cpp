@@ -15,15 +15,17 @@ Result<Nothing> save_bytes(const std::string& _fname, const T& _obj,
   try {
     std::ofstream output(_fname, std::ios::out | std::ios::binary);
     if (!output.is_open()) {
-      return error("Unable to open file '" + _fname + "' for writing.");
+      return error("Unable to open file '" + _fname + "' for writing.",
+                   ErrorKind::io_error);
     }
     _write(_obj, output);
     output.close();
     if (!output) {
-      return error("Unable to write or close file '" + _fname + "'.");
+      return error("Unable to write or close file '" + _fname + "'.",
+                   ErrorKind::io_error);
     }
   } catch (const std::exception& e) {
-    return error(e.what());
+    return error(e.what(), ErrorKind::io_error);
   }
   return Nothing{};
 }

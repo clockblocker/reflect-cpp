@@ -101,7 +101,7 @@ Result<EnumType> string_to_enum(const std::string& _str) {
       sep = ", ";
     }
     msg += "].";
-    return error(msg);
+    return error(std::move(msg), ErrorKind::invalid_value);
   };
 
   const auto cast_numbers_or_names =
