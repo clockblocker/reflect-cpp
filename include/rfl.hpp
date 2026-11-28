@@ -92,6 +92,7 @@
 #include "rfl/to_named_tuple.hpp"
 #include "rfl/to_view.hpp"
 #include "rfl/tuple_cat.hpp"
+#include "rfl/type_name.hpp"
 #include "rfl/type_name_t.hpp"
 #include "rfl/view_t.hpp"
 #include "rfl/visit.hpp"
