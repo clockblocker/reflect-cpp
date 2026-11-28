@@ -9,6 +9,7 @@
 #include "../Result.hpp"
 #include "../Tuple.hpp"
 #include "../always_false.hpp"
+#include "../internal/max_depth.hpp"
 #include "../internal/nth_element_t.hpp"
 #include "../internal/ptr_cast.hpp"
 #include "Parent.hpp"
@@ -53,31 +54,46 @@ struct TupleParser {
 
     } else {
       const auto parse = [&](const InputArrayType& _arr) -> Result<TupleType> {
-        alignas(TupleType) unsigned char buf[sizeof(TupleType)]{};
-        auto ptr = internal::ptr_cast<TupleType*>(&buf);
-        const auto tuple_reader =
-            TupleReader<R, W, TupleType, _ignore_empty_containers,
-                        _all_required, ProcessorsType>(&_r, ptr);
-        auto err = _r.read_array(tuple_reader, _arr);
-        if (err) {
-          call_destructors_on_tuple_where_necessary(tuple_reader.num_set(),
-                                                    ptr);
-          return error(std::move(*err));
+        if constexpr (internal::max_depth_v<ProcessorsType> > 0) {
+          const internal::ParseDepthGuard<internal::max_depth_v<ProcessorsType>>
+              depth_guard;
+          if (depth_guard.exceeded()) [[unlikely]] {
+            return error(depth_guard.make_error());
+          }
+          return parse_impl(_r, _arr);
+        } else {
+          return parse_impl(_r, _arr);
         }
-        err = tuple_reader.handle_missing_fields();
-        if (err) {
-          call_destructors_on_tuple_where_necessary(tuple_reader.num_set(),
-                                                    ptr);
-          return error(std::move(*err));
-        }
-        auto res = Result<TupleType>(std::move(*ptr));
-        call_destructors_on_tuple_where_necessary(tuple_reader.num_set(), ptr);
-        return res;
       };
 
       return _r.to_array(_var).and_then(parse);
     }
   }
+
+ private:
+  static Result<TupleType> parse_impl(const R& _r,
+                                      const InputArrayType& _arr) noexcept {
+    alignas(TupleType) unsigned char buf[sizeof(TupleType)]{};
+    auto ptr = internal::ptr_cast<TupleType*>(&buf);
+    const auto tuple_reader =
+        TupleReader<R, W, TupleType, _ignore_empty_containers, _all_required,
+                    ProcessorsType>(&_r, ptr);
+    auto err = _r.read_array(tuple_reader, _arr);
+    if (err) {
+      call_destructors_on_tuple_where_necessary(tuple_reader.num_set(), ptr);
+      return error(std::move(*err));
+    }
+    err = tuple_reader.handle_missing_fields();
+    if (err) {
+      call_destructors_on_tuple_where_necessary(tuple_reader.num_set(), ptr);
+      return error(std::move(*err));
+    }
+    auto res = Result<TupleType>(std::move(*ptr));
+    call_destructors_on_tuple_where_necessary(tuple_reader.num_set(), ptr);
+    return res;
+  }
+
+ public:
 
   /**
    * @brief Writes a tuple to the output.

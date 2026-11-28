@@ -41,6 +41,7 @@ reflect-cpp currently supports the following processors:
 - `rfl::DurationsAsCount`
 - `rfl::EnumNamesOnly`
 - `rfl::FailFast`
+- `rfl::MaxDepth`
 - `rfl::NoExtraFields`
 - `rfl::NoFieldNames`
 - `rfl::NoOptionals`
@@ -365,6 +366,20 @@ Failed to parse field 'color': Invalid enum value: '2'. Must be one of [red, gre
 
 This processor only affects reading. Enum values that cannot be matched to
 a declared name are still written as their integer representation.
+
+### `rfl::MaxDepth`
+
+By default, deserialization does not enforce a nesting depth limit. Pass
+`rfl::MaxDepth<N>` to bound container and struct nesting depth and return an
+`rfl::Error` instead of overflowing the C++ call stack on deeply nested
+untrusted inputs (such as `rfl::Generic` or recursive `rfl::Box<Node>` structs):
+
+```cpp
+const auto result =
+    rfl::json::read<rfl::Generic, rfl::MaxDepth<64>>(untrusted_json);
+```
+
+When `rfl::MaxDepth` is not passed, there is zero runtime overhead.
 
 ### `rfl::NoExtraFields`
 

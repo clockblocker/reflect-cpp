@@ -8,6 +8,7 @@
 #include "../Ref.hpp"
 #include "../Result.hpp"
 #include "../always_false.hpp"
+#include "../internal/max_depth.hpp"
 #include "MapReader.hpp"
 #include "Parent.hpp"
 #include "Parser_base.hpp"
@@ -86,6 +87,19 @@ struct MapParser {
 
  private:
   static Result<MapType> make_map(const R& _r, const auto& _obj_or_map) {
+    if constexpr (internal::max_depth_v<ProcessorsType> > 0) {
+      const internal::ParseDepthGuard<internal::max_depth_v<ProcessorsType>>
+          depth_guard;
+      if (depth_guard.exceeded()) [[unlikely]] {
+        return error(depth_guard.make_error());
+      }
+      return make_map_impl(_r, _obj_or_map);
+    } else {
+      return make_map_impl(_r, _obj_or_map);
+    }
+  }
+
+  static Result<MapType> make_map_impl(const R& _r, const auto& _obj_or_map) {
     MapType map;
     if constexpr (SupportsTypedMapReader<
                       R, std::remove_cvref_t<decltype(_obj_or_map)>>) {
