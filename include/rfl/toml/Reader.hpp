@@ -19,6 +19,7 @@
 
 namespace rfl::toml {
 struct Reader {
+  using UnsizedObjectReader = void;
   using InputArrayType = ::toml::array*;
   using InputObjectType = ::toml::table*;
   using InputVarType = ::toml::node*;

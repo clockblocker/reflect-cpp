@@ -135,6 +135,7 @@ rfl::Result<T> parse_value(const std::string& _str,
 /// arrays and objects, check for empty variables, and convert string values to
 /// basic C++ types.
 struct Reader {
+  using UnsizedObjectReader = void;
   using InputArrayType = InputEnvArrayType;
   using InputObjectType = InputEnvObjectType;
   using InputVarType = InputEnvVarType;
@@ -233,6 +234,16 @@ struct Reader {
       using NamesType = typename ViewType::Names;
       const auto names = NamesType::names();
       for (const auto& name : names) {
+        const auto child_path = _obj.prefix.empty() ? name : _obj.prefix + name;
+        const auto var = InputVarType{.path = child_path};
+        if (!is_empty(var)) {
+          _object_reader.read(std::string_view(name), var);
+        }
+      }
+
+    } else if constexpr (requires { _object_reader.field_names(); }) {
+      for (const auto name_sv : _object_reader.field_names()) {
+        const std::string name(name_sv);
         const auto child_path = _obj.prefix.empty() ? name : _obj.prefix + name;
         const auto var = InputVarType{.path = child_path};
         if (!is_empty(var)) {

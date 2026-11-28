@@ -36,6 +36,7 @@ namespace rfl::cbor {
 /// than JSON while maintaining similar data model capabilities.
 class Reader {
  public:
+  using UnsizedObjectReader = void;
   /// Represents a CBOR array during deserialization.
   /// Wraps a pointer to the underlying jsoncons JSON value representing the
   /// array.

@@ -3,6 +3,7 @@
 
 #ifndef REFLECTCPP_USE_CPP26_REFLECTION
 
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -66,6 +67,36 @@ consteval auto get_field_name_str_view() {
                 "You are using an unsupported compiler. Please use GCC, Clang "
                 "or MSVC or switch to the rfl::Field-syntax.");
 #endif
+}
+
+template <class Lit>
+struct single_literal_name_view;
+
+template <StringLiteral _name>
+struct single_literal_name_view<rfl::Literal<_name>> {
+  static constexpr std::string_view value = _name.string_view();
+};
+
+/// Returns a single non-flattened field's raw wire name and whether it was
+/// explicitly renamed with rfl::Rename, without wrapping in rfl::Literal.
+struct DirectFieldNameInfo {
+  std::string_view name;
+  bool is_renamed;
+};
+
+template <class T, auto ptr>
+consteval DirectFieldNameInfo get_direct_field_name_info() {
+#if defined(__clang__)
+  using FieldType = std::remove_cvref_t<std::remove_pointer_t<
+      typename std::remove_pointer_t<decltype(ptr)>::Type>>;
+#else
+  using FieldType = std::remove_cvref_t<std::remove_pointer_t<decltype(ptr)>>;
+#endif
+  if constexpr (is_rename_v<FieldType>) {
+    return {single_literal_name_view<typename FieldType::Name>::value, true};
+  } else {
+    return {get_field_name_str_view<T, ptr>(), false};
+  }
 }
 
 template <class T, auto ptr>

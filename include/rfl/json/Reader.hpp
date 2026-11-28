@@ -27,6 +27,7 @@ namespace json {
 /// This class provides the interface for parsing JSON format into C++ objects.
 /// Uses the yyjson library for high-performance JSON parsing.
 struct Reader {
+  using UnsizedObjectReader = void;
   /// Represents a JSON array during deserialization.
   /// Wraps a pointer to the underlying yyjson value representing the array.
   struct YYJSONInputArray {
