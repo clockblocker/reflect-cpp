@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <cstddef>
+#include <type_traits>
 #include <utility>
 
 #include "../../Tuple.hpp"
@@ -4386,7 +4387,8 @@ decltype(auto) apply_to_fields_impl(T& _t, F&& _f) {
 
 template <class T, class F>
 decltype(auto) apply_to_fields(T& _t, F&& _f) {
-  return apply_to_fields_impl<T, num_fields<T>>(_t, std::forward<F>(_f));
+  return apply_to_fields_impl<T, num_fields<std::remove_cvref_t<T>>>(
+      _t, std::forward<F>(_f));
 }
 
 template <class T>

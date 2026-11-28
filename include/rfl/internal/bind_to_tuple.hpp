@@ -22,8 +22,11 @@ decltype(auto) apply_to_fields(T& _t, F&& _f) {
 
 template <class T>
 auto bind_to_tuple(T& _t) {
-  return apply_to_fields(
-      _t, [](auto&... _refs) { return rfl::make_tuple(&_refs...); });
+#ifndef REFLECTCPP_USE_CPP26_REFLECTION
+  return cpp20::bind_to_tuple(_t);
+#else
+  return cpp26::bind_to_tuple(_t);
+#endif
 }
 
 template <class T, typename F>

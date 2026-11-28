@@ -1,5 +1,5 @@
 """
-Creates the boilerplate code in rfl/internal/bind_to_tuple.hpp
+Creates the boilerplate code in rfl/internal/cpp20/bind_to_tuple.hpp
 """
 
 
