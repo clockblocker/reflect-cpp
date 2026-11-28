@@ -1,5 +1,5 @@
 """
-Creates the boilerplate code in rfl/internal/bind_to_tuple.hpp
+Creates the boilerplate code in rfl/internal/cpp20/bind_to_tuple.hpp
 """
 
 
@@ -35,10 +35,10 @@ def _generate_bind_to_tuple_impl(maximum: int) -> str:
     macros = _generate_macros(1, maximum)
     return (
         """
-template<class T, std::size_t _num_fields>
-auto bind_to_tuple_impl(auto& _t) {
+template<class T, std::size_t _num_fields, class F>
+decltype(auto) apply_to_fields_impl(T& _t, F&& _f) {
     if constexpr(_num_fields == 0) {
-        return rfl::make_tuple();
+        return std::forward<F>(_f)();
     } else {
 """
         + macros

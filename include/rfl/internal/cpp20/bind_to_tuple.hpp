@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <cstddef>
+#include <type_traits>
 #include <utility>
 
 #include "../../Tuple.hpp"
@@ -16,14 +17,14 @@ namespace rfl::internal::cpp20 {
 #define RFL_INTERNAL_TUPLE_VIEW_IF_YOU_SEE_AN_ERROR_REFER_TO_DOCUMENTATION_ON_C_ARRAYS( \
     n, ...)                                                                             \
   auto& [__VA_ARGS__] = _t;                                                             \
-  return [](auto&... _refs) { return rfl::make_tuple(&_refs...); }(__VA_ARGS__);
+  return std::forward<F>(_f)(__VA_ARGS__);
 
 // The following boilerplate code has been generated with
-// scripts/bind_to_tuple_impl.py
-template <class T, std::size_t _num_fields>
-auto bind_to_tuple_impl(auto& _t) {
+// scripts/bind_to_tuple.py
+template <class T, std::size_t _num_fields, class F>
+decltype(auto) apply_to_fields_impl(T& _t, F&& _f) {
   if constexpr (_num_fields == 0) {
-    return rfl::make_tuple();
+    return std::forward<F>(_f)();
   } else {
     if constexpr (_num_fields < 129) {
       if constexpr (_num_fields < 65) {
@@ -4384,9 +4385,16 @@ auto bind_to_tuple_impl(auto& _t) {
 
 #undef RFL_INTERNAL_TUPLE_VIEW_IF_YOU_SEE_AN_ERROR_REFER_TO_DOCUMENTATION_ON_C_ARRAYS
 
+template <class T, class F>
+decltype(auto) apply_to_fields(T& _t, F&& _f) {
+  return apply_to_fields_impl<T, num_fields<std::remove_cvref_t<T>>>(
+      _t, std::forward<F>(_f));
+}
+
 template <class T>
 auto bind_to_tuple(T& _t) {
-  return bind_to_tuple_impl<T, num_fields<T>>(_t);
+  return apply_to_fields(
+      _t, [](auto&... _refs) { return rfl::make_tuple(&_refs...); });
 }
 
 }  // namespace rfl::internal::cpp20
