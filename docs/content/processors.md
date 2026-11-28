@@ -41,6 +41,11 @@ reflect-cpp currently supports the following processors:
 - `rfl::DefaultIfNull`
 - `rfl::DurationsAsCount`
 - `rfl::EnumNamesOnly`
+- `rfl::EnumSnakeCaseToCamelCase`
+- `rfl::EnumSnakeCaseToKebabCase`
+- `rfl::EnumSnakeCaseToPascalCase`
+- `rfl::EnumToLowerCase`
+- `rfl::EnumToUpperCase`
 - `rfl::FailFast`
 - `rfl::NoExtraFields`
 - `rfl::NoFieldNames`

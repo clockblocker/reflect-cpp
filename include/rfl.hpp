@@ -26,6 +26,7 @@
 #include "rfl/DefaultVal.hpp"
 #include "rfl/Description.hpp"
 #include "rfl/DurationsAsCount.hpp"
+#include "rfl/EnumNames.hpp"
 #include "rfl/EnumNamesOnly.hpp"
 #include "rfl/ExtraFields.hpp"
 #include "rfl/FailFast.hpp"
