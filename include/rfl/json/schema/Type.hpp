@@ -43,6 +43,7 @@ struct Type {
   struct String {
     Literal<"string"> type{};
     rfl::Flatten<Annotations> annotations{};
+    std::optional<std::string> format{};
     rfl::Rename<"minLength", std::optional<size_t>> minSize{};
     rfl::Rename<"maxLength", std::optional<size_t>> maxSize{};
     std::optional<std::string> contentEncoding{};

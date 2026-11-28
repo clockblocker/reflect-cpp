@@ -37,7 +37,9 @@ struct RFL_API Type {
 
   struct Double {};
 
-  struct String {};
+  struct String {
+    std::optional<std::string> format_{};
+  };
 
   struct AnyOf {
     std::vector<Type> types_;
