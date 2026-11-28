@@ -21,6 +21,8 @@ class Skip {
   using Type = T;
   using ReflectionType = std::optional<T>;
 
+  template <class U = Type>
+    requires std::is_default_constructible_v<U>
   Skip() : value_(Type()) {}
 
   Skip(const Type& _value) : value_(_value) {}
