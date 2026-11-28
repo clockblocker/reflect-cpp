@@ -66,7 +66,7 @@ if (!res) {
 ## Limitations and notes
 
 - Structs containing atomic fields must be default-constructible.
-- Atomic types cannot be mixed with `rfl::DefaultVal` or the `rfl::DefaultIfMissing` processor; attempting to do so triggers a static assertion at compile-time (see parser implementations).
+- Atomic types cannot be mixed with `rfl::DefaultVal`, `rfl::DefaultIfMissing`, or `rfl::DefaultIfNull`; attempting to do so triggers a static assertion at compile-time (see parser implementations).
 - The semantics used for setting atomic values use relaxed memory order (`std::memory_order_relaxed`).
 - For complex aggregates, `rfl::atomic` will recurse into nested fields and arrays to set atomic members.
 
