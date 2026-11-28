@@ -7,6 +7,7 @@
 #pragma warning(disable : 4101)
 #endif
 
+#include "rfl/AddNullFields.hpp"
 #include "rfl/AddStructName.hpp"
 #include "rfl/AddTagsToVariants.hpp"
 #include "rfl/AllOf.hpp"
@@ -36,6 +37,7 @@
 #include "rfl/NoExtraFields.hpp"
 #include "rfl/NoFieldNames.hpp"
 #include "rfl/NoOptionals.hpp"
+#include "rfl/Nullable.hpp"
 #include "rfl/Object.hpp"
 #include "rfl/Oct.hpp"
 #include "rfl/OneOf.hpp"
@@ -55,6 +57,7 @@
 #include "rfl/TaggedUnion.hpp"
 #include "rfl/Timestamp.hpp"
 #include "rfl/ToAllCaps.hpp"
+#include "rfl/TriState.hpp"
 #include "rfl/UnderlyingEnums.hpp"
 #include "rfl/Validator.hpp"
 #include "rfl/Variant.hpp"

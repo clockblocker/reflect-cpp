@@ -9,7 +9,9 @@
 #include "../Box.hpp"
 #include "../Commented.hpp"
 #include "../DefaultVal.hpp"
+#include "../Nullable.hpp"
 #include "../Ref.hpp"
+#include "../TriState.hpp"
 #include "../Variant.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/has_reflector.hpp"
@@ -112,6 +114,8 @@ consteval bool is_nullable() {
   } else if constexpr (internal_nullable::is_optional<U>::value ||
                        internal_nullable::is_unique_ptr<U>::value ||
                        internal_nullable::is_shared_ptr<U>::value ||
+                       internal::is_nullable_wrapper_v<U> ||
+                       internal::is_tri_state_v<U> ||
                        std::is_pointer_v<U>) {
     return true;
   } else if constexpr (internal_nullable::is_variant<U>::value ||
