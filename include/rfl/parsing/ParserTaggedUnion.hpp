@@ -9,6 +9,7 @@
 #include "../Result.hpp"
 #include "../TaggedUnion.hpp"
 #include "../always_false.hpp"
+#include "../internal/default_tag.hpp"
 #include "../internal/no_field_names_v.hpp"
 #include "../internal/strings/strings.hpp"
 #include "../named_tuple_t.hpp"
@@ -75,14 +76,14 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
 
     } else {
       const auto get_disc =
-          [&_r](InputObjectOrArrayType _obj_or_arr) -> Result<std::string> {
+          [&_r](InputObjectOrArrayType _obj_or_arr) -> Result<Discriminator> {
         return get_discriminator(_r, _obj_or_arr);
       };
 
       const auto to_result =
-          [&_r, _var](const std::string& _disc_value) -> ResultType {
+          [&_r, _var](const Discriminator& _disc) -> ResultType {
         return find_matching_alternative(
-            _r, _disc_value, _var,
+            _r, _disc, _var,
             std::make_integer_sequence<int, sizeof...(AlternativeTypes)>());
       };
 
@@ -137,25 +138,42 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
   }
 
  private:
+  struct Discriminator {
+    std::string value;
+    bool defaulted = false;
+  };
+
   template <int... _is>
   static ResultType find_matching_alternative(
-      const R& _r, const std::string& _disc_value, const InputVarType& _var,
+      const R& _r, const Discriminator& _disc, const InputVarType& _var,
       std::integer_sequence<int, _is...>) noexcept {
     using PossibleTags =
         possible_tags_t<TaggedUnion<_discriminator, AlternativeTypes...>>;
     static_assert(!PossibleTags::has_duplicates(),
                   "Duplicate tags are not allowed inside tagged unions.");
+    if constexpr (internal::has_default_tag_v<ProcessorsType, _discriminator>) {
+      static_assert(!no_field_names_,
+                    "rfl::DefaultTag cannot be used with rfl::NoFieldNames.");
+      static_assert(
+          internal::default_tag_count_v<ProcessorsType, _discriminator> <= 1,
+          "Multiple rfl::DefaultTag processors for the same discriminator are "
+          "not allowed.");
+      static_assert(
+          PossibleTags::template contains<internal::default_tag_literal_v<
+              ProcessorsType, _discriminator>>(),
+          "rfl::DefaultTag default value must match one of the TaggedUnion "
+          "alternatives' tags.");
+    }
     ResultType res = error("");
     bool match_found = false;
-    (set_if_disc_value_matches<_is>(_r, _disc_value, _var, &res, &match_found),
-     ...);
+    (set_if_disc_value_matches<_is>(_r, _disc, _var, &res, &match_found), ...);
     if (match_found) [[likely]] {
       return res;
     } else {
       const auto names = PossibleTags::names();
       std::stringstream stream;
       stream << "Could not parse tagged union, could not match "
-             << _discriminator.str() << " '" << _disc_value
+             << _discriminator.str() << " '" << _disc.value
              << "'. The following tags are allowed: "
              << internal::strings::join(", ", names);
       return error(stream.str());
@@ -163,15 +181,14 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
   }
 
   template <int _i>
-  static void set_if_disc_value_matches(const R& _r,
-                                        const std::string& _disc_value,
+  static void set_if_disc_value_matches(const R& _r, const Discriminator& _disc,
                                         const InputVarType& _var,
                                         ResultType* _result,
                                         bool* _match_found) {
     using AlternativeType = std::remove_cvref_t<
         std::variant_alternative_t<_i, std::variant<AlternativeTypes...>>>;
 
-    if (!*_match_found && contains_disc_value<AlternativeType>(_disc_value)) {
+    if (!*_match_found && contains_disc_value<AlternativeType>(_disc.value)) {
       const auto get_fields = [](auto&& _val) -> AlternativeType {
         if constexpr (is_tagged_union_wrapper_v<decltype(_val)>) {
           return std::move(_val.fields());
@@ -189,9 +206,24 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
         std::stringstream stream;
         stream << "Could not parse tagged union with "
                   "discriminator "
-               << _discriminator.str() << " '" << _disc_value << "': ";
+               << _discriminator.str() << " '" << _disc.value << "': ";
         return wrap_error(stream.str(), std::move(_e));
       };
+
+      if constexpr (!no_field_names_ &&
+                    internal::has_default_tag_v<ProcessorsType,
+                                                _discriminator> &&
+                    !named_tuple_t<AlternativeType>::Names::template contains<
+                        _discriminator>()) {
+        if (_disc.defaulted) {
+          *_result = Parser<R, W, AlternativeType, ProcessorsType>::read(_r,
+                                                                         _var)
+                         .transform(to_tagged_union)
+                         .transform_error(embellish_error);
+          *_match_found = true;
+          return;
+        }
+      }
 
       using T = tagged_union_wrapper_no_ptr_t<decltype(
           wrap_if_necessary<AlternativeType>(std::declval<AlternativeType>()
@@ -207,10 +239,13 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
   }
 
   /// Retrieves the discriminator from an object
-  static Result<std::string> get_discriminator(
+  static Result<Discriminator> get_discriminator(
       const R& _r, const InputObjectOrArrayType& _obj_or_arr) noexcept {
-    const auto to_type = [&_r](auto _var) {
-      return _r.template to_basic_type<std::string>(_var);
+    const auto to_type = [&_r](auto _var) -> Result<Discriminator> {
+      return _r.template to_basic_type<std::string>(_var).transform(
+          [](std::string&& _s) {
+            return Discriminator{.value = std::move(_s), .defaulted = false};
+          });
     };
 
     const auto embellish_error = [](const auto&) {
@@ -221,9 +256,26 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
     };
 
     if constexpr (no_field_names_) {
+      static_assert(!internal::has_default_tag_v<ProcessorsType, _discriminator>,
+                    "rfl::DefaultTag cannot be used with rfl::NoFieldNames.");
       return _r.get_field_from_array(0, _obj_or_arr)
           .and_then(to_type)
           .transform_error(embellish_error);
+    } else if constexpr (internal::has_default_tag_v<ProcessorsType,
+                                                     _discriminator>) {
+      static_assert(
+          internal::default_tag_count_v<ProcessorsType, _discriminator> <= 1,
+          "Multiple rfl::DefaultTag processors for the same discriminator are "
+          "not allowed.");
+      auto field = _r.get_field_from_object(_discriminator.str(), _obj_or_arr);
+      if (!field) {
+        return Discriminator{
+            .value = internal::default_tag_literal_v<ProcessorsType,
+                                                     _discriminator>
+                         .str(),
+            .defaulted = true};
+      }
+      return to_type(*field).transform_error(embellish_error);
     } else {
       return _r.get_field_from_object(_discriminator.str(), _obj_or_arr)
           .and_then(to_type)

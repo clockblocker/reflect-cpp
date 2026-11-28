@@ -38,6 +38,7 @@ reflect-cpp currently supports the following processors:
 - `rfl::AddNamespacedTagsToVariants`
 - `rfl::AllowRawPtrs`
 - `rfl::DefaultIfMissing`
+- `rfl::DefaultTag`
 - `rfl::DurationsAsCount`
 - `rfl::EnumNamesOnly`
 - `rfl::FailFast`
@@ -365,6 +366,26 @@ Failed to parse field 'color': Invalid enum value: '2'. Must be one of [red, gre
 
 This processor only affects reading. Enum values that cannot be matched to
 a declared name are still written as their integer representation.
+
+### `rfl::DefaultTag`
+
+By default, reading an `rfl::TaggedUnion` fails if the discriminator field is
+missing from the input object. Pass `rfl::DefaultTag<"_discriminator", "_tag">`
+to fall back to a specific tag when that discriminator field is absent:
+
+```cpp
+using Schema = rfl::TaggedUnion<"version", ConfigV1, ConfigV2>;
+
+// Unversioned input defaults to ConfigV1 ("1"); explicit "version" still
+// dispatches (and rejects invalid/non-string values).
+const auto cfg =
+    rfl::yaml::read<Schema, rfl::DefaultTag<"version", "1">>(yaml_str);
+```
+
+The default tag is validated at compile time against the union's allowed tags.
+Writing always emits the explicit discriminator field. Multiple
+`rfl::DefaultTag` processors with distinct discriminators may be combined in one
+`rfl::Processors<...>` bundle.
 
 ### `rfl::NoExtraFields`
 
