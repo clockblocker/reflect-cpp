@@ -312,7 +312,8 @@ struct Reader {
         const auto key_loc = node_location(p.first);
         if (!seen_keys.insert(k).second) {
           auto dup_err = parsing::make_nested_error(
-              k, "Duplicate key '" + k + "'.", key_loc);
+              k, "Duplicate key '" + k + "'.", ErrorKind::duplicate_field,
+              key_loc);
           if constexpr (requires {
                           _object_reader.add_error(std::move(dup_err));
                         }) {

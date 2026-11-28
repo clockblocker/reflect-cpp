@@ -14,11 +14,16 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include "../Bytestring.hpp"
 #include "../Result.hpp"
 #include "../always_false.hpp"
 #include "../internal/base64.hpp"
+#include "../parsing/to_single_error_message.hpp"
+#include "../parsing/wrap_error.hpp"
 
 namespace rfl {
 namespace json {
@@ -59,6 +64,9 @@ struct Reader {
   template <class T>
   static constexpr bool has_custom_constructor =
       (requires(InputVarType var) { T::from_json_obj(var); });
+
+  /// Advertises support for the opt-in rfl::NoDuplicateKeys processor.
+  static constexpr bool supports_no_duplicate_keys = true;
 
   /// Retrieves an element from a JSON array by index.
   /// @param _idx The zero-based index of the element to retrieve
@@ -134,12 +142,40 @@ struct Reader {
     yyjson_obj_iter iter;
     yyjson_obj_iter_init(_obj.val_, &iter);
     yyjson_val* key;
-    while ((key = yyjson_obj_iter_next(&iter))) {
-      const auto name =
-          std::string_view(yyjson_get_str(key), yyjson_get_len(key));
-      _object_reader.read(name, InputVarType(yyjson_obj_iter_get_val(key)));
+    if constexpr (is_no_duplicate_keys<ObjectReader>()) {
+      std::unordered_set<std::string_view> seen_keys;
+      seen_keys.reserve(yyjson_obj_size(_obj.val_));
+      std::vector<Error> duplicate_errors;
+      while ((key = yyjson_obj_iter_next(&iter))) {
+        const auto name =
+            std::string_view(yyjson_get_str(key), yyjson_get_len(key));
+        if (!seen_keys.insert(name).second) {
+          auto dup_err = parsing::make_nested_error(
+              std::string(name), "Duplicate key '" + std::string(name) + "'.",
+              ErrorKind::duplicate_field);
+          if constexpr (requires {
+                          _object_reader.add_error(std::move(dup_err));
+                        }) {
+            _object_reader.add_error(std::move(dup_err));
+          } else {
+            duplicate_errors.emplace_back(std::move(dup_err));
+          }
+          continue;
+        }
+        _object_reader.read(name, InputVarType(yyjson_obj_iter_get_val(key)));
+      }
+      if (!duplicate_errors.empty()) {
+        return parsing::to_single_error(std::move(duplicate_errors));
+      }
+      return std::nullopt;
+    } else {
+      while ((key = yyjson_obj_iter_next(&iter))) {
+        const auto name =
+            std::string_view(yyjson_get_str(key), yyjson_get_len(key));
+        _object_reader.read(name, InputVarType(yyjson_obj_iter_get_val(key)));
+      }
+      return std::nullopt;
     }
-    return std::nullopt;
   }
 
   /// Converts a JSON value to a basic C++ type.
@@ -250,6 +286,16 @@ struct Reader {
       return T::from_json_obj(_var);
     } catch (std::exception& e) {
       return error(e.what());
+    }
+  }
+
+ private:
+  template <class ObjectReader>
+  static constexpr bool is_no_duplicate_keys() noexcept {
+    if constexpr (requires { ObjectReader::no_duplicate_keys; }) {
+      return ObjectReader::no_duplicate_keys;
+    } else {
+      return false;
     }
   }
 };

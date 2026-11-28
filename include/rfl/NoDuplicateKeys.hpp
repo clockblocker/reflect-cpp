@@ -6,11 +6,12 @@
 namespace rfl {
 
 /// Reject duplicate keys in input mappings/objects for readers that support
-/// duplicate-key detection (such as YAML).
+/// duplicate-key detection (such as JSON and YAML).
 ///
-/// By default, duplicate mapping keys keep existing reader behavior for
-/// backwards compatibility. Pass rfl::NoDuplicateKeys to report each repeated
-/// key as an error:
+/// By default, duplicate keys keep existing reader behavior for backwards
+/// compatibility. Pass rfl::NoDuplicateKeys to report each repeated key as an
+/// error with ErrorKind::duplicate_field:
+///   rfl::json::read<MyStruct, rfl::NoExtraFields, rfl::NoDuplicateKeys>(json)
 ///   rfl::yaml::read<MyStruct, rfl::NoExtraFields, rfl::NoDuplicateKeys>(yaml)
 struct NoDuplicateKeys {
   template <class StructType>

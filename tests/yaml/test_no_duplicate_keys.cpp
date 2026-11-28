@@ -59,6 +59,7 @@ TEST(yaml, test_no_duplicate_keys_processor_rejects_repeated_keys) {
   ASSERT_EQ(details1.size(), 1) << res1.error().what();
   EXPECT_EQ(details1[0].path, (Path{size_t{0}, "code"}));
   EXPECT_EQ(details1[0].message, "Duplicate key 'code'.");
+  EXPECT_EQ(details1[0].kind, rfl::ErrorKind::duplicate_field);
   EXPECT_EQ(details1[0].location,
             (rfl::SourceLocation{.line = 3, .column = 3, .exact = true}));
 
@@ -72,6 +73,7 @@ TEST(yaml, test_no_duplicate_keys_processor_rejects_repeated_keys) {
   ASSERT_EQ(details2.size(), 1) << res2.error().what();
   EXPECT_EQ(details2[0].path, (Path{size_t{0}, "code"}));
   EXPECT_EQ(details2[0].message, "Duplicate key 'code'.");
+  EXPECT_EQ(details2[0].kind, rfl::ErrorKind::duplicate_field);
   EXPECT_EQ(details2[0].location,
             (rfl::SourceLocation{.line = 3, .column = 3, .exact = true}));
 }
