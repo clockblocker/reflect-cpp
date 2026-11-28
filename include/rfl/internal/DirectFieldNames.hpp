@@ -183,15 +183,22 @@ consteval void append_member_names(DirectNameInfo* _out, std::size_t& _pos) {
   }
 }
 
+template <class T, std::size_t... Is>
+consteval void append_all_member_names(DirectNameInfo* _out, std::size_t& _pos,
+                                       std::index_sequence<Is...>) {
+  (void)_out;
+  (void)_pos;
+  (append_member_names<T, Is>(_out, _pos), ...);
+}
+
 template <class T>
 consteval std::array<DirectNameInfo, direct_flattened_field_count_v<T>>
 extract_flattened_raw_names() {
   using Type = std::remove_cvref_t<T>;
   std::array<DirectNameInfo, direct_flattened_field_count_v<Type>> out{};
   std::size_t pos = 0;
-  [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-    (append_member_names<Type, Is>(out.data(), pos), ...);
-  }(std::make_index_sequence<num_fields<Type>>{});
+  append_all_member_names<Type>(out.data(), pos,
+                                std::make_index_sequence<num_fields<Type>>{});
   return out;
 }
 
