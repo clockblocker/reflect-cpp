@@ -19,6 +19,11 @@ template <class T>
 constexpr std::size_t num_fields = internal::cpp26::num_fields<T>;
 #endif
 
+/// Variable-template alias for rfl::num_fields<T> following the standard _v
+/// naming convention.
+template <class T>
+inline constexpr std::size_t num_fields_v = num_fields<T>;
+
 }  // namespace rfl
 
 #endif
