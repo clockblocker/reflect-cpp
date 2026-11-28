@@ -514,6 +514,26 @@ The resulting JSON string looks like this:
 {"FirstName":"Homer","LastName":"Simpson","Age":45}
 ```
 
+## `rfl::Int64AsString`
+
+Passing `rfl::Int64AsString` serializes and deserializes 64-bit (and wider) integer fields (`int64_t`, `uint64_t`, etc.) as base-10 strings while keeping narrower integers (`int32_t`, `uint32_t`, etc.) as numbers. This lets you share one plain C++ struct across binary/columnar formats (CBOR, MsgPack, Parquet, Arrow) and JavaScript/Protobuf-JSON APIs that lose integer precision above `2^53 - 1`.
+
+```cpp
+struct Trade {
+  int64_t trade_id;
+  uint64_t sequence;
+  int32_t quantity;
+};
+
+const auto json_string = rfl::json::write<rfl::Int64AsString>(
+    Trade{.trade_id = 9007199254740993LL, .sequence = 18446744073709551615ULL, .quantity = 5});
+// {"trade_id":"9007199254740993","sequence":"18446744073709551615","quantity":5}
+
+const auto trade = rfl::json::read<Trade, rfl::Int64AsString>(json_string).value();
+```
+
+`rfl::json::to_schema<Trade, rfl::Int64AsString>()` emits `"type":"string"` for 64-bit integer fields and `"type":"integer"` for narrower integers.
+
 ## Combining several processors
 
 You can combine several processors:
