@@ -21,6 +21,7 @@
 #include "../get.hpp"
 #include "../internal/concat_literals.hpp"
 #include "../internal/default_if_missing_v.hpp"
+#include "../internal/default_tag.hpp"
 #include "../internal/has_default_val_v.hpp"
 #include "../internal/has_fields.hpp"
 #include "../internal/has_flattened_tagged_union.hpp"
@@ -353,12 +354,21 @@ struct FlattenedTaggedUnionParser {
   // Reading helpers (CPS combined-view resolution)
   // =========================================================================
 
+  struct DiscriminatorResult {
+    std::string value;
+    bool defaulted = false;
+  };
+
   template <internal::StringLiteral _discriminator>
-  static Result<std::string> get_discriminator(
+  static Result<DiscriminatorResult> get_discriminator(
       const R& _r, const InputObjectOrArrayType& _obj_or_arr,
       const size_t _array_offset) noexcept {
-    const auto to_type = [&_r](auto _v) {
-      return _r.template to_basic_type<std::string>(_v);
+    const auto to_type = [&_r](auto _v) -> Result<DiscriminatorResult> {
+      return _r.template to_basic_type<std::string>(_v).transform(
+          [](std::string&& _s) {
+            return DiscriminatorResult{.value = std::move(_s),
+                                       .defaulted = false};
+          });
     };
     const auto embellish_error = [](const auto&) {
       std::stringstream stream;
@@ -367,9 +377,26 @@ struct FlattenedTaggedUnionParser {
       return Error(stream.str());
     };
     if constexpr (no_field_names_) {
+      static_assert(!internal::has_default_tag_v<ProcessorsType, _discriminator>,
+                    "rfl::DefaultTag cannot be used with rfl::NoFieldNames.");
       return _r.get_field_from_array(_array_offset, _obj_or_arr)
           .and_then(to_type)
           .transform_error(embellish_error);
+    } else if constexpr (internal::has_default_tag_v<ProcessorsType,
+                                                     _discriminator>) {
+      static_assert(
+          internal::default_tag_count_v<ProcessorsType, _discriminator> <= 1,
+          "Multiple rfl::DefaultTag processors for the same discriminator are "
+          "not allowed.");
+      auto field = _r.get_field_from_object(_discriminator.str(), _obj_or_arr);
+      if (!field) {
+        return DiscriminatorResult{
+            .value = internal::default_tag_literal_v<ProcessorsType,
+                                                     _discriminator>
+                         .str(),
+            .defaulted = true};
+      }
+      return to_type(*field).transform_error(embellish_error);
     } else {
       return _r.get_field_from_object(_discriminator.str(), _obj_or_arr)
           .and_then(to_type)
@@ -470,20 +497,33 @@ struct FlattenedTaggedUnionParser {
   static std::optional<Error> dispatch_tu_alternatives(
       const R& _r, const InputVarType& _var,
       const InputObjectOrArrayType& _obj_or_arr, const size_t _array_offset,
-      TUType* _tu_ptr, const std::string& _disc_value, const AccView& _acc_view,
-      const Cont& _cont,
+      TUType* _tu_ptr, const DiscriminatorResult& _disc,
+      const AccView& _acc_view, const Cont& _cont,
       const TaggedUnion<_discriminator, Alts...>*) noexcept {
     using BaseTU = TaggedUnion<_discriminator, Alts...>;
     using PossibleTags = possible_tags_t<BaseTU>;
     static_assert(!PossibleTags::has_duplicates(),
                   "Duplicate tags are not allowed inside tagged unions.");
+    if constexpr (internal::has_default_tag_v<ProcessorsType, _discriminator>) {
+      static_assert(!no_field_names_,
+                    "rfl::DefaultTag cannot be used with rfl::NoFieldNames.");
+      static_assert(
+          internal::default_tag_count_v<ProcessorsType, _discriminator> <= 1,
+          "Multiple rfl::DefaultTag processors for the same discriminator are "
+          "not allowed.");
+      static_assert(
+          PossibleTags::template contains<internal::default_tag_literal_v<
+              ProcessorsType, _discriminator>>(),
+          "rfl::DefaultTag default value must match one of the TaggedUnion "
+          "alternatives' tags.");
+    }
 
     std::optional<Error> res;
     bool match_found = false;
     [&]<int... _is>(std::integer_sequence<int, _is...>) {
       (try_one_tu_alt<_use_default, _is, BaseTU>(
-           _r, _var, _obj_or_arr, _array_offset, _tu_ptr, _disc_value,
-           _acc_view, _cont, &res, &match_found),
+           _r, _var, _obj_or_arr, _array_offset, _tu_ptr, _disc, _acc_view,
+           _cont, &res, &match_found),
        ...);
     }(std::make_integer_sequence<int, sizeof...(Alts)>());
 
@@ -493,7 +533,7 @@ struct FlattenedTaggedUnionParser {
     const auto names = PossibleTags::names();
     std::stringstream stream;
     stream << "Could not parse tagged union, could not match "
-           << _discriminator.str() << " '" << _disc_value
+           << _discriminator.str() << " '" << _disc.value
            << "'. The following tags are allowed: "
            << internal::strings::join(", ", names);
     return Error(stream.str());
@@ -504,7 +544,7 @@ struct FlattenedTaggedUnionParser {
   static void try_one_tu_alt(const R& _r, const InputVarType& _var,
                              const InputObjectOrArrayType& _obj_or_arr,
                              const size_t _array_offset, TUType* _tu_ptr,
-                             const std::string& _disc_value,
+                             const DiscriminatorResult& _disc,
                              const AccView& _acc_view, const Cont& _cont,
                              std::optional<Error>* _result,
                              bool* _match_found) noexcept {
@@ -512,8 +552,49 @@ struct FlattenedTaggedUnionParser {
         rfl::variant_alternative_t<_i, typename BaseTU::VariantType>>;
     constexpr auto disc = BaseTU::discriminator_;
 
-    if (!*_match_found && internal::tag_t<disc, AltType>::contains(_disc_value)) {
+    if (!*_match_found && internal::tag_t<disc, AltType>::contains(_disc.value)) {
       *_match_found = true;
+
+      const auto embellish = [&](Error _e) {
+        std::stringstream stream;
+        stream << "Could not parse tagged union with discriminator "
+               << disc.str() << " '" << _disc.value << "': ";
+        return wrap_error(stream.str(), std::move(_e));
+      };
+
+      if constexpr (!no_field_names_ &&
+                    internal::has_default_tag_v<ProcessorsType, disc> &&
+                    !internal::contains_discriminator_v<AltType, disc>) {
+        if (_disc.defaulted) {
+          auto acc_copy = _acc_view;
+          if constexpr (_use_default) {
+            AltType alt{};
+            auto err = resolve_struct_and_read<true>(
+                _r, _var, _obj_or_arr, _array_offset, alt, std::move(acc_copy),
+                _cont);
+            if (err) [[unlikely]] {
+              *_result = embellish(std::move(*err));
+              return;
+            }
+            *_tu_ptr = internal::from_tagged_union_base<TUType>(
+                BaseTU(std::move(alt)));
+          } else {
+            alignas(AltType) unsigned char alt_buf[sizeof(AltType)]{};
+            auto* alt_ptr = internal::ptr_cast<AltType*>(&alt_buf);
+            auto err = resolve_struct_and_read<false>(
+                _r, _var, _obj_or_arr, _array_offset, *alt_ptr,
+                std::move(acc_copy), _cont);
+            if (err) [[unlikely]] {
+              *_result = embellish(std::move(*err));
+              return;
+            }
+            ::new (_tu_ptr) TUType(internal::from_tagged_union_base<TUType>(
+                BaseTU(std::move(*alt_ptr))));
+            alt_ptr->~AltType();
+          }
+          return;
+        }
+      }
 
       using WrappedAlt = flattened_tu_detail::wrapped_alt_t<disc, AltType, false>;
 
@@ -523,13 +604,6 @@ struct FlattenedTaggedUnionParser {
         } else {
           return std::move(_w);
         }
-      };
-
-      const auto embellish = [&](Error _e) {
-        std::stringstream stream;
-        stream << "Could not parse tagged union with discriminator "
-               << disc.str() << " '" << _disc_value << "': ";
-        return wrap_error(stream.str(), std::move(_e));
       };
 
       auto acc_copy = _acc_view;

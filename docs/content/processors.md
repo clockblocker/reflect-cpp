@@ -39,6 +39,7 @@ reflect-cpp currently supports the following processors:
 - `rfl::AllowRawPtrs`
 - `rfl::DefaultIfMissing`
 - `rfl::DefaultIfNull`
+- `rfl::DefaultTag`
 - `rfl::DurationsAsCount`
 - `rfl::EnumNamesOnly`
 - `rfl::FailFast`
@@ -422,16 +423,41 @@ Failed to parse field 'color': Invalid enum value: '2'. Must be one of [red, gre
 This processor only affects reading. Enum values that cannot be matched to
 a declared name are still written as their integer representation.
 
-### `rfl::NoDuplicateKeys`
+### `rfl::DefaultTag`
 
-By default, `rfl::yaml::read` keeps its existing behavior when an input mapping
-contains repeated keys. Pass `rfl::NoDuplicateKeys` to reject duplicate mapping
-keys and report each repeated key as an error (with its key source location in
-YAML). Passing `rfl::NoDuplicateKeys` to a reader that does not support
-duplicate-key detection fails at compile time (`static_assert`):
+By default, reading an `rfl::TaggedUnion` fails if the discriminator field is
+missing from the input object. Pass `rfl::DefaultTag<"_discriminator", "_tag">`
+to fall back to a specific tag when that discriminator field is absent:
 
 ```cpp
-const auto result =
+using Schema = rfl::TaggedUnion<"version", ConfigV1, ConfigV2>;
+
+// Unversioned input defaults to ConfigV1 ("1"); explicit "version" still
+// dispatches (and rejects invalid/non-string values).
+const auto cfg =
+    rfl::yaml::read<Schema, rfl::DefaultTag<"version", "1">>(yaml_str);
+```
+
+The default tag is validated at compile time against the union's allowed tags.
+Writing always emits the explicit discriminator field. Multiple
+`rfl::DefaultTag` processors with distinct discriminators may be combined in one
+`rfl::Processors<...>` bundle.
+
+### `rfl::NoDuplicateKeys`
+
+By default, `rfl::json::read` and `rfl::yaml::read` keep their existing behavior
+when an input object or mapping contains repeated keys. Pass
+`rfl::NoDuplicateKeys` to reject duplicate keys and report each repeated key as
+an error with `rfl::ErrorKind::duplicate_field` (and its key source location in
+YAML). Works across structs, maps, `rfl::Object`, `rfl::Generic`,
+`rfl::FieldVariant`, and `rfl::TaggedUnion`. Passing `rfl::NoDuplicateKeys` to a
+reader that does not support duplicate-key detection fails at compile time
+(`static_assert`):
+
+```cpp
+const auto json_res =
+    rfl::json::read<Config, rfl::NoExtraFields, rfl::NoDuplicateKeys>(json_str);
+const auto yaml_res =
     rfl::yaml::read<Config, rfl::NoExtraFields, rfl::NoDuplicateKeys>(yaml_str);
 ```
 

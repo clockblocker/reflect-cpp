@@ -13,6 +13,7 @@
 #include "../always_false.hpp"
 #include "../internal/add_tags_to_variants_v.hpp"
 #include "../internal/default_if_null_v.hpp"
+#include "../internal/default_tag.hpp"
 #include "../internal/is_safe_default_constructible.hpp"
 #include "../internal/make_tag.hpp"
 #include "../internal/no_field_names_v.hpp"
@@ -224,6 +225,7 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
   struct Discriminator {
     std::string value;
     std::optional<SourceLocation> location;
+    bool defaulted = false;
   };
 
   template <int... _is>
@@ -234,10 +236,22 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
         possible_tags_t<TaggedUnion<_discriminator, AlternativeTypes...>>;
     static_assert(!PossibleTags::has_duplicates(),
                   "Duplicate tags are not allowed inside tagged unions.");
+    if constexpr (internal::has_default_tag_v<ProcessorsType, _discriminator>) {
+      static_assert(!no_field_names_,
+                    "rfl::DefaultTag cannot be used with rfl::NoFieldNames.");
+      static_assert(
+          internal::default_tag_count_v<ProcessorsType, _discriminator> <= 1,
+          "Multiple rfl::DefaultTag processors for the same discriminator are "
+          "not allowed.");
+      static_assert(
+          PossibleTags::template contains<internal::default_tag_literal_v<
+              ProcessorsType, _discriminator>>(),
+          "rfl::DefaultTag default value must match one of the TaggedUnion "
+          "alternatives' tags.");
+    }
     ResultType res = error("");
     bool match_found = false;
-    (set_if_disc_value_matches<_is>(_r, _disc.value, _var, &res, &match_found),
-     ...);
+    (set_if_disc_value_matches<_is>(_r, _disc, _var, &res, &match_found), ...);
     if (match_found) [[likely]] {
       return res;
     } else {
@@ -256,15 +270,14 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
   }
 
   template <int _i>
-  static void set_if_disc_value_matches(const R& _r,
-                                        const std::string& _disc_value,
+  static void set_if_disc_value_matches(const R& _r, const Discriminator& _disc,
                                         const InputVarType& _var,
                                         ResultType* _result,
                                         bool* _match_found) {
     using AlternativeType = std::remove_cvref_t<
         std::variant_alternative_t<_i, std::variant<AlternativeTypes...>>>;
 
-    if (!*_match_found && contains_disc_value<AlternativeType>(_disc_value)) {
+    if (!*_match_found && contains_disc_value<AlternativeType>(_disc.value)) {
       const auto get_fields = [](auto&& _val) -> AlternativeType {
         if constexpr (is_tagged_union_wrapper_v<decltype(_val)>) {
           return std::move(_val.fields());
@@ -282,9 +295,24 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
         std::stringstream stream;
         stream << "Could not parse tagged union with "
                   "discriminator "
-               << _discriminator.str() << " '" << _disc_value << "': ";
+               << _discriminator.str() << " '" << _disc.value << "': ";
         return wrap_error(stream.str(), std::move(_e));
       };
+
+      if constexpr (!no_field_names_ &&
+                    internal::has_default_tag_v<ProcessorsType,
+                                                _discriminator> &&
+                    !internal::contains_discriminator_v<AlternativeType,
+                                                        _discriminator>) {
+        if (_disc.defaulted) {
+          *_result = Parser<R, W, AlternativeType, ProcessorsType>::read(_r,
+                                                                         _var)
+                         .transform(to_tagged_union)
+                         .transform_error(embellish_error);
+          *_match_found = true;
+          return;
+        }
+      }
 
       using T = tagged_union_wrapper_no_ptr_t<std::remove_cvref_t<decltype(
           wrap_if_necessary<AlternativeType>(
@@ -329,9 +357,27 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
     };
 
     if constexpr (no_field_names_) {
+      static_assert(!internal::has_default_tag_v<ProcessorsType, _discriminator>,
+                    "rfl::DefaultTag cannot be used with rfl::NoFieldNames.");
       return _r.get_field_from_array(0, _obj_or_arr)
           .transform_error(missing_error)
           .and_then(to_type);
+    } else if constexpr (internal::has_default_tag_v<ProcessorsType,
+                                                     _discriminator>) {
+      static_assert(
+          internal::default_tag_count_v<ProcessorsType, _discriminator> <= 1,
+          "Multiple rfl::DefaultTag processors for the same discriminator are "
+          "not allowed.");
+      auto field = _r.get_field_from_object(_discriminator.str(), _obj_or_arr);
+      if (!field) {
+        return Discriminator{
+            .value = internal::default_tag_literal_v<ProcessorsType,
+                                                     _discriminator>
+                         .str(),
+            .location = std::nullopt,
+            .defaulted = true};
+      }
+      return to_type(*field);
     } else {
       return _r.get_field_from_object(_discriminator.str(), _obj_or_arr)
           .transform_error(missing_error)

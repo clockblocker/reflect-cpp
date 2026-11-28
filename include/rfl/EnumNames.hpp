@@ -178,20 +178,30 @@ struct enum_name_transform_from_processors {
   static constexpr EnumNameTransform value = EnumNameTransform::none;
 };
 
+template <EnumNameTransform _t>
+struct enum_name_transform_from_processors<TransformEnumNames<_t>> {
+  static constexpr EnumNameTransform value = _t;
+};
+
 template <>
 struct enum_name_transform_from_processors<Processors<>> {
   static constexpr EnumNameTransform value = EnumNameTransform::none;
 };
 
-template <EnumNameTransform _t, class... Tail>
-struct enum_name_transform_from_processors<
-    Processors<TransformEnumNames<_t>, Tail...>> {
-  static constexpr EnumNameTransform value = _t;
-};
-
 template <class Head, class... Tail>
-struct enum_name_transform_from_processors<Processors<Head, Tail...>>
-    : enum_name_transform_from_processors<Processors<Tail...>> {};
+struct enum_name_transform_from_processors<Processors<Head, Tail...>> {
+  static constexpr EnumNameTransform head_val =
+      enum_name_transform_from_processors<std::remove_cvref_t<Head>>::value;
+  static constexpr EnumNameTransform tail_val =
+      enum_name_transform_from_processors<Processors<Tail...>>::value;
+  static_assert(head_val == EnumNameTransform::none ||
+                    tail_val == EnumNameTransform::none ||
+                    head_val == tail_val,
+                "Conflicting rfl::TransformEnumNames processors cannot be "
+                "combined.");
+  static constexpr EnumNameTransform value =
+      head_val != EnumNameTransform::none ? head_val : tail_val;
+};
 
 template <class ProcessorsType>
 constexpr EnumNameTransform enum_name_transform_v =
