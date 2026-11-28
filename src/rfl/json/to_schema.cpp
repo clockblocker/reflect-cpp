@@ -215,8 +215,10 @@ schema::Type type_to_json_schema_type(const parsing::schema::Type& _type,
                          std::is_same<T, Type::Double>()) {
       return schema::Type{.value = schema::Type::Number{}};
 
-    } else if constexpr (std::is_same<T, Type::String>() ||
-                         std::is_same<T, Type::Vectorstring>()) {
+    } else if constexpr (std::is_same<T, Type::String>()) {
+      return schema::Type{.value = schema::Type::String{.format = _t.format_}};
+
+    } else if constexpr (std::is_same<T, Type::Vectorstring>()) {
       return schema::Type{.value = schema::Type::String{}};
 
     } else if constexpr (std::is_same<T, Type::Bytestring>()) {

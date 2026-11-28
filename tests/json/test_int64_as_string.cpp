@@ -92,10 +92,13 @@ TEST(json, test_int64_as_string_errors_and_schema) {
   EXPECT_FALSE((rfl::json::read<SingleUnsigned, rfl::Int64AsString>(
       R"({"v":"-1"})")));
 
-  // JSON schema reflects "string" for 64-bit ints and "integer" for int32_t.
+  // JSON schema emits OpenAPI/Protobuf-JSON string+format hints for 64-bit
+  // integers and leaves narrower integers as plain "integer".
   const auto schema = rfl::json::to_schema<Trade, rfl::Int64AsString>();
-  EXPECT_NE(schema.find(R"("trade_id":{"type":"string"})"), std::string::npos);
-  EXPECT_NE(schema.find(R"("sequence":{"type":"string"})"), std::string::npos);
+  EXPECT_NE(schema.find(R"("trade_id":{"type":"string","format":"int64"})"),
+            std::string::npos);
+  EXPECT_NE(schema.find(R"("sequence":{"type":"string","format":"uint64"})"),
+            std::string::npos);
   EXPECT_NE(schema.find(R"("quantity":{"type":"integer"})"), std::string::npos);
 }
 

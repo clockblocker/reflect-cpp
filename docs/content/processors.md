@@ -532,7 +532,7 @@ const auto json_string = rfl::json::write<rfl::Int64AsString>(
 const auto trade = rfl::json::read<Trade, rfl::Int64AsString>(json_string).value();
 ```
 
-`rfl::json::to_schema<Trade, rfl::Int64AsString>()` emits `"type":"string"` for 64-bit integer fields and `"type":"integer"` for narrower integers.
+`rfl::json::to_schema<Trade, rfl::Int64AsString>()` emits `{"type":"string","format":"int64"}` / `{"type":"string","format":"uint64"}` for 64-bit integer fields and `{"type":"integer"}` for narrower integers.
 
 ## Combining several processors
 

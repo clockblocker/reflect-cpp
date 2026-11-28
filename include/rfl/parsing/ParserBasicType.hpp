@@ -124,7 +124,8 @@ struct ParserBasicType {
     if constexpr (internal::int64_as_string_v<ProcessorsType> &&
                   std::is_integral_v<U> && !std::is_same_v<U, bool> &&
                   sizeof(U) >= 8) {
-      return Type{Type::String{}};
+      return Type{Type::String{
+          .format_ = std::is_unsigned_v<U> ? "uint64" : "int64"}};
 
     } else if constexpr (std::is_same<U, bool>()) {
       return Type{Type::Boolean{}};
