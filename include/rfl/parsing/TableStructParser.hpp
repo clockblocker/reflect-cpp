@@ -21,6 +21,7 @@
 #include "../EnumNamesOnly.hpp"
 #include "../FailFast.hpp"
 #include "../Flatten.hpp"
+#include "../Metadata.hpp"
 #include "../NamedTuple.hpp"
 #include "../NoExtraFields.hpp"
 #include "../NoFieldNames.hpp"
@@ -397,11 +398,14 @@ template <class R, class W, bool _no_field_names, class ProcessorsType,
           class FieldT, class SchemaType>
 void build_schema_field_erased(
     std::map<std::string, schema::Type>* _definitions, SchemaType* _schema,
-    const std::string_view _name, const void* _default_field_ptr) {
+    const std::string_view _wire_name, const std::string_view _raw_name,
+    const void* _default_field_ptr,
+    const std::span<const FieldMeta> _field_meta) {
   using U = std::remove_cvref_t<FieldT>;
   const U* ptr = static_cast<const U*>(_default_field_ptr);
   detail::build_named_tuple_field_schema<R, W, _no_field_names, ProcessorsType,
-                                         U>(_definitions, _schema, _name, ptr);
+                                         U>(_definitions, _schema, _wire_name,
+                                            _raw_name, ptr, _field_meta);
 }
 
 template <class R, class W, class ExtraFieldsT, class ProcessorsType>
@@ -1016,15 +1020,19 @@ void write_table_common(
 template <bool _no_field_names, class ProcessorsType, class SchemaType>
 schema::Type to_schema_table_common(
     std::map<std::string, schema::Type>* _definitions,
-    const std::string_view* _names,
+    const std::string_view* _wire_names, const std::string_view* _raw_names,
     void (*const* _schema_fns)(std::map<std::string, schema::Type>*,
-                               SchemaType*, std::string_view, const void*),
+                               SchemaType*, std::string_view, std::string_view,
+                               const void*, std::span<const FieldMeta>),
     const void* const* _default_ptrs, const std::size_t _size,
+    const std::span<const FieldMeta> _field_meta,
     schema::Type (*_extra_schema_fn)(std::map<std::string, schema::Type>*)) {
   SchemaType schema;
   for (std::size_t i = 0; i < _size; ++i) {
-    _schema_fns[i](_definitions, &schema, _names[i],
-                   _default_ptrs ? _default_ptrs[i] : nullptr);
+    const std::string_view raw =
+        _raw_names != nullptr ? _raw_names[i] : _wire_names[i];
+    _schema_fns[i](_definitions, &schema, _wire_names[i], raw,
+                   _default_ptrs ? _default_ptrs[i] : nullptr, _field_meta);
   }
   if constexpr (!_no_field_names) {
     if (_extra_schema_fn != nullptr) {
@@ -1098,7 +1106,8 @@ struct TableStructParser {
   using WriteFn = void (*)(const W&, std::string_view, const void*,
                            OutputObjectOrArrayType*);
   using SchemaFn = void (*)(std::map<std::string, schema::Type>*, SchemaType*,
-                            std::string_view, const void*);
+                            std::string_view, std::string_view, const void*,
+                            std::span<const FieldMeta>);
 
  private:
   template <class FieldT>
@@ -1324,19 +1333,29 @@ struct TableStructParser {
 
   static schema::Type to_schema(
       std::map<std::string, schema::Type>* _definitions,
-      const T* _defaults = nullptr) {
+      const T* _defaults = nullptr,
+      const std::span<const FieldMeta> _field_meta = {}) {
     static constexpr auto schema_fns = make_schema_table(FieldList{});
+    const std::string_view* raw_names_ptr = nullptr;
+    if (!_field_meta.empty()) {
+      if constexpr (!std::is_same_v<CasePipeline,
+                                    internal::DirectCasePipeline<>>) {
+        using RawNames =
+            internal::DirectFieldNames<T, internal::DirectCasePipeline<>>;
+        raw_names_ptr = RawNames::names_.data();
+      }
+    }
     if (_defaults != nullptr) {
       const auto default_ptrs = detail::collect_flattened_const_ptrs(*_defaults);
       return detail::to_schema_table_common<no_field_names_, ProcessorsType,
                                             SchemaType>(
-          _definitions, Names::names_.data(), schema_fns.data(),
-          default_ptrs.data(), size_, make_extra_schema_fn());
+          _definitions, Names::names_.data(), raw_names_ptr, schema_fns.data(),
+          default_ptrs.data(), size_, _field_meta, make_extra_schema_fn());
     }
     return detail::to_schema_table_common<no_field_names_, ProcessorsType,
                                           SchemaType>(
-        _definitions, Names::names_.data(), schema_fns.data(), nullptr, size_,
-        make_extra_schema_fn());
+        _definitions, Names::names_.data(), raw_names_ptr, schema_fns.data(),
+        nullptr, size_, _field_meta, make_extra_schema_fn());
   }
 };
 
