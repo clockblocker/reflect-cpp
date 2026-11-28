@@ -4,6 +4,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "../Alias.hpp"
 #include "../DefaultVal.hpp"
 #include "../Deprecated.hpp"
 #include "../Description.hpp"
@@ -30,6 +31,10 @@ template <internal::StringLiteral _new_name, class T>
 class is_default_val<Rename<_new_name, T>>
     : public is_default_val<std::remove_cvref_t<T>> {};
 
+template <internal::StringLiteral _alias_name, class T>
+class is_default_val<Alias<_alias_name, T>>
+    : public is_default_val<std::remove_cvref_t<T>> {};
+
 template <internal::StringLiteral _short_name, class T>
 class is_default_val<Short<_short_name, T>>
     : public is_default_val<std::remove_cvref_t<T>> {};
@@ -51,8 +56,9 @@ template <class T>
 constexpr bool is_default_val_v =
     is_default_val<std::remove_cvref_t<std::remove_pointer_t<T>>>::value;
 
-/// Whether T is an rfl::DefaultVal itself or inside rfl::Rename, but not
-/// inside rfl::Short, rfl::Positional, rfl::Description or rfl::Deprecated.
+/// Whether T is an rfl::DefaultVal itself or inside rfl::Rename / rfl::Alias,
+/// but not inside rfl::Short, rfl::Positional, rfl::Description or
+/// rfl::Deprecated.
 template <class T>
 class is_unwrapped_default_val : public std::false_type {};
 
@@ -61,6 +67,10 @@ class is_unwrapped_default_val<DefaultVal<T>> : public std::true_type {};
 
 template <internal::StringLiteral _new_name, class T>
 class is_unwrapped_default_val<Rename<_new_name, T>>
+    : public is_unwrapped_default_val<std::remove_cvref_t<T>> {};
+
+template <internal::StringLiteral _alias_name, class T>
+class is_unwrapped_default_val<Alias<_alias_name, T>>
     : public is_unwrapped_default_val<std::remove_cvref_t<T>> {};
 
 template <class T>
@@ -75,7 +85,7 @@ const DefaultVal<T>& get_default_val(const DefaultVal<T>& _field) noexcept {
 
 template <class T>
   requires is_default_val_v<T>
-const auto& get_default_val(const T& _field) noexcept {
+const auto& get_default_val(const T& _field) {
   return get_default_val(_field.value());
 }
 

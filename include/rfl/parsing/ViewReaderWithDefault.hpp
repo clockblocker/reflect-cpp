@@ -11,6 +11,7 @@
 #include "../Ref.hpp"
 #include "../Tuple.hpp"
 #include "../internal/default_if_null_v.hpp"
+#include "../internal/field_aliases.hpp"
 #include "../internal/is_array.hpp"
 #include "../internal/no_extra_fields_v.hpp"
 #include "FieldErrors.hpp"
@@ -70,6 +71,18 @@ class ViewReaderWithDefault {
   static constexpr size_t size() { return size_; }
 
  private:
+  template <class FieldType>
+  static bool is_matching(const std::string_view& _current_name) {
+    if (_current_name == FieldType::name()) {
+      return true;
+    }
+    using Aliases = internal::field_aliases_t<typename FieldType::Type>;
+    if constexpr (Aliases::size > 0) {
+      return Aliases::contains(_current_name);
+    }
+    return false;
+  }
+
   template <int i>
   static void assign_if_field_matches(const R& _r,
                                       const std::string_view& _current_name,
@@ -80,26 +93,60 @@ class ViewReaderWithDefault {
     using OriginalType = typename FieldType::Type;
     using T =
         std::remove_cvref_t<std::remove_pointer_t<typename FieldType::Type>>;
+    using Aliases = internal::field_aliases_t<OriginalType>;
     constexpr auto name = FieldType::name();
-    if (!(*_already_assigned) && !std::get<i>(*_found) &&
-        _current_name == name) {
-      std::get<i>(*_found) = true;
-      *_already_assigned = true;
-      if constexpr (internal::default_if_null_v<ProcessorsType> &&
-                    !is_nullable_v<T>) {
-        if (_r.is_empty(_var)) {
+    if constexpr (Aliases::size == 0) {
+      if (!(*_already_assigned) && !std::get<i>(*_found) &&
+          _current_name == name) {
+        std::get<i>(*_found) = true;
+        *_already_assigned = true;
+        if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                      !is_nullable_v<T>) {
+          if (_r.is_empty(_var)) {
+            return;
+          }
+        }
+        auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
+        if (!res) {
+          _errors->emplace_back(wrap_field_error(name, std::move(res).error()));
           return;
         }
+        if constexpr (std::is_pointer_v<OriginalType>) {
+          move_to(rfl::get<i>(*_view), &(*res));
+        } else {
+          rfl::get<i>(*_view) = std::move(*res);
+        }
       }
-      auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
-      if (!res) {
-        _errors->emplace_back(wrap_field_error(name, std::move(res).error()));
-        return;
-      }
-      if constexpr (std::is_pointer_v<OriginalType>) {
-        move_to(rfl::get<i>(*_view), &(*res));
-      } else {
-        rfl::get<i>(*_view) = std::move(*res);
+    } else {
+      if (!(*_already_assigned) && is_matching<FieldType>(_current_name)) {
+        if (std::get<i>(*_found)) [[unlikely]] {
+          *_already_assigned = true;
+          std::stringstream stream;
+          stream << "Field named '" << name
+                 << "' was specified more than once (conflicting key '"
+                 << _current_name << "').";
+          _errors->emplace_back(
+              make_nested_error(std::string(_current_name), stream.str()));
+          return;
+        }
+        std::get<i>(*_found) = true;
+        *_already_assigned = true;
+        if constexpr (internal::default_if_null_v<ProcessorsType> &&
+                      !is_nullable_v<T>) {
+          if (_r.is_empty(_var)) {
+            return;
+          }
+        }
+        auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
+        if (!res) {
+          _errors->emplace_back(wrap_field_error(name, std::move(res).error()));
+          return;
+        }
+        if constexpr (std::is_pointer_v<OriginalType>) {
+          move_to(rfl::get<i>(*_view), &(*res));
+        } else {
+          rfl::get<i>(*_view) = std::move(*res);
+        }
       }
     }
   }

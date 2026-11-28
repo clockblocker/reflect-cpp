@@ -15,6 +15,7 @@
 #include "../Variant.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/has_reflector.hpp"
+#include "../internal/is_alias.hpp"
 #include "../internal/is_positional.hpp"
 #include "../internal/is_rename.hpp"
 #include "../internal/is_short.hpp"
@@ -122,7 +123,8 @@ consteval bool is_nullable() {
                        internal_nullable::is_rfl_variant<U>::value) {
     return internal_nullable::has_nullable_alternative<U, U, Seen...>::value;
   } else if constexpr (internal::is_rename_v<U> || internal::is_short_v<U> ||
-                       internal::is_positional_v<U>) {
+                       internal::is_positional_v<U> ||
+                       internal::is_alias_v<U>) {
     return is_nullable<typename U::Type, U, Seen...>();
   } else if constexpr (internal_nullable::is_default_val<U>::value) {
     return is_nullable<

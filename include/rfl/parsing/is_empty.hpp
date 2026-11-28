@@ -7,6 +7,7 @@
 #include "../TriState.hpp"
 #include "../internal/has_reflection_method_v.hpp"
 #include "../internal/has_reflection_type_v.hpp"
+#include "../internal/is_alias.hpp"
 #include "../internal/is_default_val_v.hpp"
 #include "../internal/is_positional.hpp"
 #include "../internal/is_rename.hpp"
@@ -30,6 +31,12 @@ static bool is_empty(const T& _var) {
   using Type = std::remove_cvref_t<T>;
   if constexpr (std::is_pointer_v<Type>) {
     return !_var || is_empty(*_var);
+  } else if constexpr (internal::is_rename_v<Type> ||
+                       internal::is_short_v<Type> ||
+                       internal::is_positional_v<Type> ||
+                       internal::is_alias_v<Type> ||
+                       internal::is_default_val_v<Type>) {
+    return is_empty(_var.value());
   } else if constexpr (internal::is_skip_v<Type>) {
     return Type::skip_serialization_;
   } else if constexpr (internal::is_nullable_wrapper_v<Type>) {
@@ -45,11 +52,6 @@ static bool is_empty(const T& _var) {
       const auto& [r] = _var;
       return is_empty(r);
     }
-  } else if constexpr (internal::is_rename_v<Type> ||
-                       internal::is_short_v<Type> ||
-                       internal::is_positional_v<Type> ||
-                       internal::is_default_val_v<Type>) {
-    return is_empty(_var.value());
   } else if constexpr (is_map_like_v<Type> || is_vector_like_v<Type>) {
     return _var.begin() == _var.end();
   } else {

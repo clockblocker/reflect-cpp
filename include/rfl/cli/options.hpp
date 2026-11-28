@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "../Alias.hpp"
 #include "../DefaultVal.hpp"
 #include "../Deprecated.hpp"
 #include "../Description.hpp"
@@ -20,8 +21,11 @@
 #include "../TriState.hpp"
 #include "../Tuple.hpp"
 #include "../internal/StringLiteral.hpp"
+#include "../internal/field_aliases.hpp"
+#include "../internal/has_flattened_tagged_union.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/has_reflector.hpp"
+#include "../internal/is_alias.hpp"
 #include "../internal/is_extra_fields.hpp"
 #include "../internal/is_named_tuple.hpp"
 #include "../internal/is_positional.hpp"
@@ -60,8 +64,12 @@ struct Option {
 /// aliases and positional arguments to fields. Names are the field names
 /// after processors (kebab-case, rfl::Rename) are applied.
 struct Options {
-  /// The options of the top-level fields, by name.
+  /// The options of the top-level fields, by name (including rfl::Alias names).
   std::map<std::string, Option> long_options;
+
+  /// Read-only long option aliases given by rfl::Alias (`old-name` for
+  /// `--old-name`), mapped to the canonical name of their field.
+  std::map<std::string, std::string> long_aliases;
 
   /// The short aliases given by rfl::Short (`p` for `-p`), mapped to the path
   /// of their field.
@@ -148,6 +156,9 @@ struct cli_annotations<Deprecated<_deprecation_message, _description, T>>
 template <rfl::internal::StringLiteral _name, class T>
 struct cli_annotations<Rename<_name, T>> : cli_annotations_t<T> {};
 
+template <rfl::internal::StringLiteral _name, class T>
+struct cli_annotations<Alias<_name, T>> : cli_annotations_t<T> {};
+
 template <class T>
 struct cli_annotations<Positional<T>> : cli_annotations_t<T> {
   static constexpr bool is_short = false;
@@ -224,6 +235,7 @@ auto unwrap_option_type() {
   }
   else if constexpr (rfl::internal::is_short_v<U>
                      || rfl::internal::is_positional_v<U>
+                     || rfl::internal::is_alias_v<U>
                      || parsing::is_rename_v<U>
                      || parsing::is_default_val_v<U>
                      || parsing::is_skip_v<U>) {
@@ -297,14 +309,32 @@ template <class FieldType, class ProcessorsType>
 void add_option_for_field(Options* _options) {
   using T = std::remove_cvref_t<typename FieldType::Type>;
   if constexpr (!rfl::internal::is_extra_fields_v<T>) {
-    add_option<T, ProcessorsType>(std::string(FieldType::name()), _options);
+    const auto canonical = std::string(FieldType::name());
+    add_option<T, ProcessorsType>(canonical, _options);
+    using Aliases = rfl::internal::field_aliases_t<T>;
+    if constexpr (Aliases::size > 0) {
+      for (const auto alias : Aliases::to_array()) {
+        const auto alias_str = std::string(alias);
+        add_option<T, ProcessorsType>(alias_str, _options);
+        if (alias_str != canonical) {
+          _options->long_aliases.emplace(alias_str, canonical);
+        }
+      }
+    }
   }
 }
 
 /// Adds the options of the top-level fields of T.
 template <class T, class ProcessorsType>
 void collect_options(Options* _options) {
+  static_assert(
+      !rfl::internal::has_flattened_tagged_union_v<T>,
+      "rfl::cli::read is not supported for structs containing "
+      "rfl::Flatten<rfl::TaggedUnion<...>>.");
   using NT = option_fields_t<T, ProcessorsType>;
+  static_assert(
+      rfl::internal::no_alias_collisions<typename NT::Fields>(),
+      "Field alias collides with another field's name or alias.");
   [&]<size_t... _is>(std::index_sequence<_is...>) {
     (add_option_for_field<rfl::tuple_element_t<_is, typename NT::Fields>,
                           ProcessorsType>(_options),

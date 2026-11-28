@@ -39,3 +39,68 @@ add_library(generic-compile-fail-flatten-cross-type-move-assign OBJECT EXCLUDE_F
 )
 target_link_libraries(generic-compile-fail-flatten-cross-type-move-assign PRIVATE reflectcpp_tests_crt)
 
+# Compile-time alias collision checks must fail to compile (WILL_FAIL TRUE).
+add_test(
+  NAME compile_fail.alias_collides_with_primary
+  COMMAND ${CMAKE_COMMAND}
+    --build ${CMAKE_BINARY_DIR}
+    --target generic-compile-fail-alias-collides-with-primary
+    --config $<CONFIG>
+)
+set_tests_properties(
+  compile_fail.alias_collides_with_primary
+  PROPERTIES WILL_FAIL TRUE
+)
+add_library(generic-compile-fail-alias-collides-with-primary OBJECT EXCLUDE_FROM_ALL
+  compile_fail/alias_collides_with_primary.cpp
+)
+target_link_libraries(generic-compile-fail-alias-collides-with-primary PRIVATE reflectcpp_tests_crt)
+
+add_test(
+  NAME compile_fail.alias_collides_with_alias
+  COMMAND ${CMAKE_COMMAND}
+    --build ${CMAKE_BINARY_DIR}
+    --target generic-compile-fail-alias-collides-with-alias
+    --config $<CONFIG>
+)
+set_tests_properties(
+  compile_fail.alias_collides_with_alias
+  PROPERTIES WILL_FAIL TRUE
+)
+add_library(generic-compile-fail-alias-collides-with-alias OBJECT EXCLUDE_FROM_ALL
+  compile_fail/alias_collides_with_alias.cpp
+)
+target_link_libraries(generic-compile-fail-alias-collides-with-alias PRIVATE reflectcpp_tests_crt)
+
+add_test(
+  NAME compile_fail.nested_tu_duplicate_discriminator
+  COMMAND ${CMAKE_COMMAND}
+    --build ${CMAKE_BINARY_DIR}
+    --target generic-compile-fail-nested-tu-duplicate-discriminator
+    --config $<CONFIG>
+)
+set_tests_properties(
+  compile_fail.nested_tu_duplicate_discriminator
+  PROPERTIES WILL_FAIL TRUE
+)
+add_library(generic-compile-fail-nested-tu-duplicate-discriminator OBJECT EXCLUDE_FROM_ALL
+  compile_fail/nested_tu_duplicate_discriminator.cpp
+)
+target_link_libraries(generic-compile-fail-nested-tu-duplicate-discriminator PRIVATE reflectcpp_tests_crt)
+
+add_test(
+  NAME compile_fail.nested_tu_duplicate_field
+  COMMAND ${CMAKE_COMMAND}
+    --build ${CMAKE_BINARY_DIR}
+    --target generic-compile-fail-nested-tu-duplicate-field
+    --config $<CONFIG>
+)
+set_tests_properties(
+  compile_fail.nested_tu_duplicate_field
+  PROPERTIES WILL_FAIL TRUE
+)
+add_library(generic-compile-fail-nested-tu-duplicate-field OBJECT EXCLUDE_FROM_ALL
+  compile_fail/nested_tu_duplicate_field.cpp
+)
+target_link_libraries(generic-compile-fail-nested-tu-duplicate-field PRIVATE reflectcpp_tests_crt)
+

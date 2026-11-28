@@ -12,10 +12,12 @@
 #include "../internal/add_tags_to_variants_v.hpp"
 #include "../internal/default_if_null_v.hpp"
 #include "../internal/is_safe_default_constructible.hpp"
+#include "../internal/make_tag.hpp"
 #include "../internal/no_field_names_v.hpp"
 #include "../internal/strings/strings.hpp"
 #include "../named_tuple_t.hpp"
 #include "../visit.hpp"
+#include "FlattenedTaggedUnionParser.hpp"
 #include "Parser_base.hpp"
 #include "TaggedUnionWrapper.hpp"
 #include "default_construct.hpp"
@@ -86,6 +88,9 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
           });
 
     } else {
+      validate_tagged_union_no_collisions<
+          TaggedUnion<_discriminator, AlternativeTypes...>, ProcessorsType>();
+
       const auto get_disc =
           [&_r](InputObjectOrArrayType _obj_or_arr) -> Result<std::string> {
         return get_discriminator(_r, _obj_or_arr);
@@ -123,6 +128,9 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
       Parser<R, W, Variant<AlternativeTypes...>, ProcessorsType>::write(
           _w, _tagged_union.variant(), _parent);
     } else {
+      validate_tagged_union_no_collisions<
+          TaggedUnion<_discriminator, AlternativeTypes...>, ProcessorsType>();
+
       rfl::visit([&](const auto& _val) { write_wrapped(_w, _val, _parent); },
                  _tagged_union.variant());
     }
@@ -141,9 +149,12 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
       return Parser<R, W, Variant<AlternativeTypes...>,
                     ProcessorsType>::to_schema(_definitions);
     } else {
-      using VariantType = std::variant<decltype(
-          wrap_if_necessary<AlternativeTypes>(std::declval<AlternativeTypes>()))
-                                           ...>;
+      validate_tagged_union_no_collisions<
+          TaggedUnion<_discriminator, AlternativeTypes...>, ProcessorsType>();
+
+      using VariantType = std::variant<std::remove_cvref_t<decltype(
+          wrap_if_necessary<AlternativeTypes>(
+              std::declval<const AlternativeTypes&>()))>...>;
       auto type =
           Parser<R, W, VariantType, ProcessorsType>::to_schema(_definitions);
       if constexpr (!internal::add_tags_to_variants_v<ProcessorsType> &&
@@ -218,9 +229,9 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
         return wrap_error(stream.str(), std::move(_e));
       };
 
-      using T = tagged_union_wrapper_no_ptr_t<decltype(
-          wrap_if_necessary<AlternativeType>(std::declval<AlternativeType>()
-                                             ))>;
+      using T = tagged_union_wrapper_no_ptr_t<std::remove_cvref_t<decltype(
+          wrap_if_necessary<AlternativeType>(
+              std::declval<const AlternativeType&>()))>>;
 
       *_result = Parser<R, W, T, ProcessorsType>::read(_r, _var)
                      .transform(get_fields)
@@ -270,8 +281,7 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
   /// Writes a wrapped version of the original object, which contains the tag.
   template <class T, class P>
   static void write_wrapped(const W& _w, const T& _val, const P& _parent) {
-    if constexpr (named_tuple_t<T>::Names::template contains<
-                      _discriminator>()) {
+    if constexpr (internal::contains_discriminator_v<T, _discriminator>) {
       // The object already contains the tag, so it can be written as it is,
       // without the copy that wrap_if_necessary would make.
       Parser<R, W, T, ProcessorsType>::write(_w, _val, _parent);
@@ -285,9 +295,8 @@ struct ParserTaggedUnion<R, W, TaggedUnion<_discriminator, AlternativeTypes...>,
   /// Generates a wrapped version of the original object, which contains the
   /// tag, if the object doesn't already contain the wrap.
   template <class T>
-  static auto wrap_if_necessary(const T& _val) {
-    if constexpr (named_tuple_t<T>::Names::template contains<
-                      _discriminator>()) {
+  static decltype(auto) wrap_if_necessary(const T& _val) {
+    if constexpr (internal::contains_discriminator_v<T, _discriminator>) {
       return _val;
     } else {
       const auto tag = internal::make_tag<_discriminator, T>(_val);

@@ -25,6 +25,7 @@
 #include <expected>
 #endif
 
+#include "../Alias.hpp"
 #include "../Attribute.hpp"
 #include "../Box.hpp"
 #include "../Commented.hpp"
@@ -55,10 +56,12 @@
 #include "../internal/always_inline.hpp"
 #include "../internal/default_if_missing_v.hpp"
 #include "../internal/default_if_null_v.hpp"
+#include "../internal/field_aliases.hpp"
 #include "../internal/has_default_val_v.hpp"
 #include "../internal/has_reflection_method_v.hpp"
 #include "../internal/has_reflection_type_v.hpp"
 #include "../internal/has_reflector.hpp"
+#include "../internal/is_alias.hpp"
 #include "../internal/is_attribute.hpp"
 #include "../internal/is_basic_type.hpp"
 #include "../internal/is_default_val_v.hpp"
@@ -444,12 +447,13 @@ consteval bool contains_tri_state_wrapper() {
     return contains_tri_state_wrapper<std::remove_pointer_t<U>>();
   } else if constexpr (internal::is_tri_state_v<U>) {
     return true;
-  } else if constexpr (internal::is_skip_v<U>) {
-    return false;
-  } else if constexpr (internal::is_rename_v<U> || internal::is_short_v<U> ||
+  } else if constexpr (internal::is_rename_v<U> || internal::is_alias_v<U> ||
+                       internal::is_short_v<U> ||
                        internal::is_positional_v<U> ||
                        internal::is_default_val_v<U>) {
     return contains_tri_state_wrapper<typename U::Type>();
+  } else if constexpr (internal::is_skip_v<U>) {
+    return false;
   } else if constexpr (internal::has_reflection_type_v<U> &&
                        !std::is_same_v<U, rfl::Generic>) {
     return contains_tri_state_wrapper<typename U::ReflectionType>();
@@ -463,12 +467,13 @@ consteval bool contains_skip_serialization_wrapper() {
   using U = std::remove_cvref_t<T>;
   if constexpr (std::is_pointer_v<U>) {
     return contains_skip_serialization_wrapper<std::remove_pointer_t<U>>();
-  } else if constexpr (internal::is_skip_v<U>) {
-    return U::skip_serialization_;
-  } else if constexpr (internal::is_rename_v<U> || internal::is_short_v<U> ||
+  } else if constexpr (internal::is_rename_v<U> || internal::is_alias_v<U> ||
+                       internal::is_short_v<U> ||
                        internal::is_positional_v<U> ||
                        internal::is_default_val_v<U>) {
     return contains_skip_serialization_wrapper<typename U::Type>();
+  } else if constexpr (internal::is_skip_v<U>) {
+    return U::skip_serialization_;
   } else if constexpr (internal::has_reflection_type_v<U> &&
                        !std::is_same_v<U, rfl::Generic>) {
     return contains_skip_serialization_wrapper<typename U::ReflectionType>();
@@ -507,6 +512,9 @@ struct is_transparent_default_wrapper<DefaultVal<T>> : std::true_type {};
 
 template <internal::StringLiteral _name, class T>
 struct is_transparent_default_wrapper<Rename<_name, T>> : std::true_type {};
+
+template <internal::StringLiteral _name, class T>
+struct is_transparent_default_wrapper<Alias<_name, T>> : std::true_type {};
 
 template <internal::StringLiteral _name, class T>
 struct is_transparent_default_wrapper<Short<_name, T>> : std::true_type {};
@@ -706,6 +714,10 @@ struct NamedTupleParser {
                 "You cannot use the rfl::NoFieldNames processor if you are "
                 "including rfl::ExtraFields.");
 
+  static_assert(
+      internal::no_alias_collisions<typename NamedTupleType::Fields>(),
+      "Field alias collides with another field's name or alias.");
+
  public:
   /**
    * @brief Reads a named tuple from the input.
@@ -832,6 +844,25 @@ struct NamedTupleParser {
       build_object(_w, _tup, &obj, std::make_integer_sequence<int, size_>());
       _w.end_object(&obj);
     }
+  }
+
+  template <int _i>
+  static void write_single_field(const W& _w,
+                                 const NamedTuple<FieldTypes...>& _tup,
+                                 OutputObjectOrArrayType* _ptr) {
+    add_field_to_object<_i>(_w, _tup, _ptr);
+  }
+
+  static void write_fields(const W& _w, const NamedTuple<FieldTypes...>& _tup,
+                           OutputObjectOrArrayType* _ptr) {
+    build_object(_w, _tup, _ptr, std::make_integer_sequence<int, size_>());
+  }
+
+  template <typename View, size_t _i>
+  static void add_single_field_to_schema(
+      std::map<std::string, schema::Type>* _definitions, SchemaType* _schema,
+      View* _view) noexcept {
+    add_field_to_schema<View, _i>(_definitions, _schema, _view);
   }
 
   /**

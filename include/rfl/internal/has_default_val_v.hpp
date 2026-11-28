@@ -7,6 +7,7 @@
 #include "../NamedTuple.hpp"
 #include "../named_tuple_t.hpp"
 #include "is_default_val_v.hpp"
+#include "is_tagged_union.hpp"
 
 namespace rfl::internal {
 
@@ -32,7 +33,8 @@ struct HasDefaultVal<NamedTuple<Fields...>, _unwrapped_only> {
 };
 
 template <class T, bool _unwrapped_only>
-  requires(std::is_class_v<T> && std::is_aggregate_v<T>)
+  requires(std::is_class_v<T> && std::is_aggregate_v<T> &&
+           !is_tagged_union_based<T>)
 struct HasDefaultVal<T, _unwrapped_only>
     : HasDefaultVal<named_tuple_t<T>, _unwrapped_only> {};
 
