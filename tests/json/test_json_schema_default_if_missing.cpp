@@ -167,7 +167,7 @@ TEST(json, test_schema_default_if_missing_basic) {
       rfl::json::to_schema<ServerConfig, rfl::DefaultIfMissing>();
 
   const std::string expected =
-      R"({"$schema":"https://json-schema.org/draft/2020-12/schema","$ref":"#/$defs/test_json_schema_default_if_missing__ServerConfig","$defs":{"test_json_schema_default_if_missing__ServerConfig":{"type":"object","properties":{"port":{"type":"integer","default":8080},"host":{"type":"string","default":"localhost"},"verbose":{"default":true,"type":"boolean"},"ratio":{"type":"number","default":0.75},"level":{"type":"string","default":"info","enum":["debug","info","warn","error"]},"tags":{"type":"array","default":["web","api"],"items":{"type":"string"}},"empty_vec":{"type":"array","default":[],"items":{"type":"integer"}}},"required":[]}}})";
+      R"({"$schema":"https://json-schema.org/draft/2020-12/schema","$ref":"#/$defs/test_json_schema_default_if_missing__ServerConfig","$defs":{"test_json_schema_default_if_missing__ServerConfig":{"type":"object","properties":{"port":{"type":"integer","default":8080},"host":{"type":"string","default":"localhost"},"verbose":{"type":"boolean","default":true},"ratio":{"type":"number","default":0.75},"level":{"type":"string","default":"info","enum":["debug","info","warn","error"]},"tags":{"type":"array","default":["web","api"],"items":{"type":"string"}},"empty_vec":{"type":"array","default":[],"items":{"type":"integer"}}},"required":[]}}})";
 
   EXPECT_EQ(schema, expected) << schema;
 }

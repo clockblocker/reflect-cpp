@@ -26,6 +26,8 @@ SOFTWARE.
 
 #include "rfl/capnproto/to_schema.hpp"
 
+#include <cstdint>
+#include <limits>
 #include <map>
 #include <sstream>
 #include <string>
@@ -139,6 +141,17 @@ schema::Type reference_to_capnproto_schema_type(
   }
 }
 
+bool is_literal_definition(const parsing::schema::Type& _type) {
+  return _type.variant_.visit([](const auto& _def) -> bool {
+    using D = std::remove_cvref_t<decltype(_def)>;
+    if constexpr (std::is_same_v<D, parsing::schema::Type::Annotated>) {
+      return is_literal_definition(*_def.type_);
+    } else {
+      return std::is_same_v<D, parsing::schema::Type::Literal>;
+    }
+  });
+}
+
 schema::Type string_map_to_capnproto_schema_type(
     const parsing::schema::Type::StringMap& _map,
     const std::map<std::string, parsing::schema::Type>& _definitions,
@@ -151,12 +164,7 @@ schema::Type string_map_to_capnproto_schema_type(
     if constexpr (std::is_same_v<T, Type::Reference>) {
       const auto it = _definitions.find(_value.type_name);
       return _cnp_types->enums_.contains(_value.type_name) ||
-             (it != _definitions.end() &&
-              it->second.variant_.visit([](const auto& _definition) {
-                return std::is_same_v<
-                    std::remove_cvref_t<decltype(_definition)>,
-                    parsing::schema::Type::Literal>;
-              }));
+             (it != _definitions.end() && is_literal_definition(it->second));
     } else {
       return !std::is_same_v<T, Type::Data> && !std::is_same_v<T, Type::Text> &&
              !std::is_same_v<T, Type::List> && !std::is_same_v<T, Type::Map> &&
@@ -196,6 +204,33 @@ schema::Type type_to_capnproto_schema_type(
                          std::is_same<T, Type::Integer>()) {
       return schema::Type{.value = schema::Type::Int32{}};
 
+    } else if constexpr (std::is_same<T, Type::BoundedInteger>()) {
+      if (_t.minimum_ < 0) {
+        const bool fits_i32 =
+            _t.minimum_ >= std::numeric_limits<int32_t>::min() &&
+            _t.maximum_.visit([](const auto _m) {
+              if constexpr (std::is_signed_v<decltype(_m)>) {
+                return _m <= std::numeric_limits<int32_t>::max();
+              } else {
+                return _m <= static_cast<uint64_t>(
+                                 std::numeric_limits<int32_t>::max());
+              }
+            });
+        return fits_i32 ? schema::Type{.value = schema::Type::Int32{}}
+                        : schema::Type{.value = schema::Type::Int64{}};
+      }
+      const bool fits_u32 = _t.maximum_.visit([](const auto _m) {
+        if constexpr (std::is_signed_v<decltype(_m)>) {
+          return _m >= 0 &&
+                 static_cast<uint64_t>(_m) <=
+                     std::numeric_limits<uint32_t>::max();
+        } else {
+          return _m <= std::numeric_limits<uint32_t>::max();
+        }
+      });
+      return fits_u32 ? schema::Type{.value = schema::Type::UInt32{}}
+                      : schema::Type{.value = schema::Type::UInt64{}};
+
     } else if constexpr (std::is_same<T, Type::Int64>()) {
       return schema::Type{.value = schema::Type::Int64{}};
 
@@ -222,7 +257,8 @@ schema::Type type_to_capnproto_schema_type(
       return type_to_capnproto_schema_type(*_t.type_, _definitions, _parent,
                                            _cnp_types);
 
-    } else if constexpr (std::is_same<T, Type::Description>()) {
+    } else if constexpr (std::is_same<T, Type::Description>() ||
+                         std::is_same<T, Type::Annotated>()) {
       return type_to_capnproto_schema_type(*_t.type_, _definitions, _parent,
                                            _cnp_types);
 
