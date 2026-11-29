@@ -4,10 +4,14 @@
 #include <array>
 #include <exception>
 #include <map>
+#include <span>
 #include <sstream>
+#include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
+#include "../Metadata.hpp"
 #include "../NamedTuple.hpp"
 #include "../Result.hpp"
 #include "../internal/always_inline.hpp"
@@ -62,10 +66,9 @@ concept IsReflectionTypeWrapper =
 /// `default` can be produced for it. Every type is writable, except those that
 /// can be constructed from `ReflectionType`, but not converted back to it.
 template <class T>
-concept CanWriteGeneric =
-    !has_reflection_type_v<std::remove_cvref_t<T>> ||
-    has_reflection_method_v<std::remove_cvref_t<T>> ||
-    IsReflectionTypeWrapper<std::remove_cvref_t<T>>;
+concept CanWriteGeneric = !has_reflection_type_v<std::remove_cvref_t<T>> ||
+                          has_reflection_method_v<std::remove_cvref_t<T>> ||
+                          IsReflectionTypeWrapper<std::remove_cvref_t<T>>;
 
 /// Satisfied when a schema `default` can be emitted for the field type `T`:
 /// it must be a `DefaultVal` that satisfies `CanWriteGeneric`.
@@ -75,6 +78,30 @@ concept CanEmitDefault =
 
 }  // namespace internal
 }  // namespace rfl
+
+namespace rfl::internal::parsing {
+
+/// Applies out-of-band `rfl::FieldMeta` (description / deprecation) to a field
+/// schema node without embedding long StringLiteral NTTPs in field types.
+inline void apply_field_metadata(rfl::parsing::schema::Type* _schema,
+                                 const FieldMeta& _meta) {
+  if (!_meta.deprecation_message.empty()) {
+    *_schema =
+        rfl::parsing::schema::Type{rfl::parsing::schema::Type::Deprecated{
+            .deprecation_message_ = std::string(_meta.deprecation_message),
+            .description_ = std::string(_meta.description),
+            .type_ =
+                Ref<rfl::parsing::schema::Type>::make(std::move(*_schema))}};
+  } else if (!_meta.description.empty()) {
+    *_schema =
+        rfl::parsing::schema::Type{rfl::parsing::schema::Type::Description{
+            .description_ = std::string(_meta.description),
+            .type_ =
+                Ref<rfl::parsing::schema::Type>::make(std::move(*_schema))}};
+  }
+}
+
+}  // namespace rfl::internal::parsing
 
 namespace rfl::parsing {
 
@@ -233,14 +260,19 @@ struct NamedTupleParser {
    * @brief Generates the schema for the named tuple.
    *
    * @param _definitions The map of definitions to add to.
+   * @param _view Optional view into a default-constructed instance.
+   * @param _field_meta Optional out-of-band field metadata
+   * (`rfl::Metadata<U>`).
+   * @param _raw_names Optional pre-processor field names for metadata lookup.
    * @return The schema type.
    */
   template <typename View = void>
   static schema::Type to_schema(
-      std::map<std::string, schema::Type>* _definitions,
-      View* _view = nullptr) noexcept {
+      std::map<std::string, schema::Type>* _definitions, View* _view = nullptr,
+      const std::span<const FieldMeta> _field_meta = {},
+      const std::span<const std::string_view> _raw_names = {}) noexcept {
     SchemaType schema;
-    build_schema(_definitions, &schema, _view,
+    build_schema(_definitions, &schema, _view, _field_meta, _raw_names,
                  std::make_integer_sequence<int, size_>());
     return schema::Type{schema};
   }
@@ -285,22 +317,34 @@ struct NamedTupleParser {
 
   template <typename View, size_t _i>
   static void add_field_to_schema(
-      std::map<std::string, schema::Type>* _definitions,
-      SchemaType* _schema,
-      View* _view) noexcept {
+      std::map<std::string, schema::Type>* _definitions, SchemaType* _schema,
+      View* _view, const std::span<const FieldMeta> _field_meta,
+      const std::span<const std::string_view> _raw_names) noexcept {
     using F = internal::nth_element_t<_i, FieldTypes...>;
     using U = std::remove_cvref_t<typename F::Type>;
     if constexpr (!internal::is_skip_v<U> && !internal::is_extra_fields_v<U>) {
       // Add default value here
       auto s = Parser<R, W, U, ProcessorsType>::to_schema(_definitions);
-      if constexpr (!std::is_same_v<View, void> && internal::CanEmitDefault<U>) {
-        s.variant_.visit([&](auto& value) {
-          if constexpr (std::is_same_v<std::remove_cvref_t<decltype(value)>,
-                                       schema::Type::DefaultVal>) {
-            value.default_value_ =
-                rfl::to_generic<ProcessorsType>((*rfl::get<_i>(*_view)).get());
-          }
-        });
+      if constexpr (!std::is_same_v<View, void> &&
+                    internal::CanEmitDefault<U>) {
+        if (_view != nullptr) {
+          s.variant_.visit([&](auto& value) {
+            if constexpr (std::is_same_v<std::remove_cvref_t<decltype(value)>,
+                                         schema::Type::DefaultVal>) {
+              value.default_value_ = rfl::to_generic<ProcessorsType>(
+                  (*rfl::get<_i>(*_view)).get());
+            }
+          });
+        }
+      }
+      if (!_field_meta.empty()) {
+        const std::string_view raw_name =
+            _i < _raw_names.size() ? _raw_names[_i] : std::string_view{};
+        if (const auto meta =
+                internal::find_field_metadata(_field_meta, F::name(), raw_name);
+            meta.has_value()) {
+          internal::parsing::apply_field_metadata(&s, *meta);
+        }
       }
       if constexpr (_no_field_names) {
         _schema->types_.emplace_back(std::move(s));
@@ -308,7 +352,7 @@ struct NamedTupleParser {
         _schema->types_[std::string(F::name())] = std::move(s);
       }
     }
-  };
+  }
 
   template <int... _is>
   static void build_object(const W& _w, const NamedTuple<FieldTypes...>& _tup,
@@ -317,12 +361,15 @@ struct NamedTupleParser {
     (add_field_to_object<_is>(_w, _tup, _ptr), ...);
   }
 
-  template <typename View,  int... _is>
+  template <typename View, int... _is>
   static void build_schema(std::map<std::string, schema::Type>* _definitions,
-                           SchemaType* _schema,
-                           View* _view,
+                           SchemaType* _schema, View* _view,
+                           const std::span<const FieldMeta> _field_meta,
+                           const std::span<const std::string_view> _raw_names,
                            std::integer_sequence<int, _is...>) noexcept {
-    (add_field_to_schema<View, _is>(_definitions, _schema, _view), ...);
+    (add_field_to_schema<View, _is>(_definitions, _schema, _view, _field_meta,
+                                    _raw_names),
+     ...);
 
     if constexpr (NamedTupleType::pos_extra_fields() != -1) {
       using F = internal::nth_element_t<NamedTupleType::pos_extra_fields(),

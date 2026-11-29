@@ -1,11 +1,18 @@
 #ifndef RFL_PARSING_PARSER_DEFAULT_HPP_
 #define RFL_PARSING_PARSER_DEFAULT_HPP_
 
+#include <array>
+#include <cstddef>
 #include <map>
+#include <span>
 #include <string>
+#include <string_view>
 #include <type_traits>
+#include <utility>
 
+#include "../Metadata.hpp"
 #include "../Result.hpp"
+#include "../Tuple.hpp"
 #include "../always_false.hpp"
 #include "../internal/HasFromReflectionMethod.hpp"
 #include "../internal/always_inline.hpp"
@@ -23,6 +30,7 @@
 #include "../internal/processed_t.hpp"
 #include "../internal/ptr_cast.hpp"
 #include "../internal/to_ptr_named_tuple.hpp"
+#include "../named_tuple_t.hpp"
 #include "../to_view.hpp"
 #include "AreReaderAndWriter.hpp"
 #include "MapParser.hpp"
@@ -653,6 +661,8 @@ struct Parser {
       (*_definitions)[name] =
           Type{Type::Integer{}};  // Placeholder to avoid infinite loop.
 
+      using MetaType = unwrap_tagged_union_wrapper_t<U>;
+
       if constexpr (internal::has_reflection_type_v<U>) {
         (*_definitions)[name] =
             Parser<R, W, typename U::ReflectionType, ProcessorsType>::to_schema(
@@ -670,7 +680,46 @@ struct Parser {
         // alternative through a pointer that U{} leaves null, so we construct
         // the wrapper that holds the alternative by value instead.
         using DefaultsType = tagged_union_wrapper_no_ptr_t<U>;
-        if constexpr (internal::has_default_val_v<U>) {
+
+        if constexpr (internal::has_field_metadata_v<MetaType>) {
+          const auto field_meta = internal::get_field_metadata<MetaType>();
+          std::span<const std::string_view> raw_names_span;
+          using RawNT = named_tuple_t<U>;
+          if constexpr (RawNT::size() > 0 &&
+                        NamedTupleType::size() >= RawNT::size()) {
+            // Processors such as rfl::AddStructName prepend synthetic fields
+            // before U's real members. Shift raw_names by the prefix length so
+            // index i aligns with NamedTupleType's field i.
+            static constexpr auto raw_names =
+                []<size_t... _is>(std::index_sequence<_is...>) {
+                  constexpr size_t prefix =
+                      NamedTupleType::size() - RawNT::size();
+                  std::array<std::string_view, NamedTupleType::size()> arr{};
+                  ((arr[prefix + _is] =
+                        tuple_element_t<_is, typename RawNT::Fields>::name()),
+                   ...);
+                  return arr;
+                }(std::make_index_sequence<RawNT::size()>());
+            raw_names_span = raw_names;
+          }
+          if constexpr (internal::has_default_val_v<U>) {
+            static_assert(requires { DefaultsType{}; },
+                          "A struct with rfl::DefaultVal fields must be "
+                          "default-constructible, because the default values "
+                          "come from a default-constructed instance.");
+            auto defaults = DefaultsType{};
+            auto view = ProcessorsType::template process<DefaultsType>(
+                to_view(defaults));
+            (*_definitions)[name] =
+                Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
+                    _definitions, &view, field_meta, raw_names_span);
+          } else {
+            (*_definitions)[name] =
+                Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
+                    _definitions, static_cast<void*>(nullptr), field_meta,
+                    raw_names_span);
+          }
+        } else if constexpr (internal::has_default_val_v<U>) {
           static_assert(requires { DefaultsType{}; },
                         "A struct with rfl::DefaultVal fields must be "
                         "default-constructible, because the default values "
@@ -685,6 +734,15 @@ struct Parser {
           (*_definitions)[name] =
               Parser<R, W, NamedTupleType, ProcessorsType>::to_schema(
                   _definitions);
+        }
+      }
+
+      if constexpr (internal::has_struct_description_v<MetaType>) {
+        auto desc = internal::get_struct_description<MetaType>();
+        if (!desc.empty()) {
+          (*_definitions)[name] = Type{Type::Description{
+              .description_ = std::move(desc),
+              .type_ = Ref<Type>::make(std::move((*_definitions)[name]))}};
         }
       }
     }
