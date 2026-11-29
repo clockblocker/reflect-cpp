@@ -2,12 +2,19 @@
 #define RFL_PARSING_NAMEDTUPLEPARSER_HPP_
 
 #include <array>
+#include <cstdint>
 #include <exception>
+#include <limits>
 #include <map>
+#include <optional>
 #include <sstream>
+#include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
+#include "../Generic.hpp"
 #include "../NamedTuple.hpp"
 #include "../Result.hpp"
 #include "../internal/always_inline.hpp"
@@ -62,10 +69,9 @@ concept IsReflectionTypeWrapper =
 /// `default` can be produced for it. Every type is writable, except those that
 /// can be constructed from `ReflectionType`, but not converted back to it.
 template <class T>
-concept CanWriteGeneric =
-    !has_reflection_type_v<std::remove_cvref_t<T>> ||
-    has_reflection_method_v<std::remove_cvref_t<T>> ||
-    IsReflectionTypeWrapper<std::remove_cvref_t<T>>;
+concept CanWriteGeneric = !has_reflection_type_v<std::remove_cvref_t<T>> ||
+                          has_reflection_method_v<std::remove_cvref_t<T>> ||
+                          IsReflectionTypeWrapper<std::remove_cvref_t<T>>;
 
 /// Satisfied when a schema `default` can be emitted for the field type `T`:
 /// it must be a `DefaultVal` that satisfies `CanWriteGeneric`.
@@ -75,6 +81,261 @@ concept CanEmitDefault =
 
 }  // namespace internal
 }  // namespace rfl
+
+namespace rfl::internal::parsing {
+
+template <class T>
+struct is_std_optional_for_default : std::false_type {};
+
+template <class T>
+struct is_std_optional_for_default<std::optional<T>> : std::true_type {};
+
+template <class T>
+constexpr bool is_plain_integer_for_default_v =
+    std::is_integral_v<T> && !std::is_same_v<T, bool> &&
+    !std::is_same_v<T, char> && !std::is_same_v<T, wchar_t> &&
+    !std::is_same_v<T, char8_t> && !std::is_same_v<T, char16_t> &&
+    !std::is_same_v<T, char32_t>;
+
+/// Fast-path conversion of a default field value to `rfl::Generic` for schema
+/// emission. Basic scalars construct `rfl::Generic` directly without
+/// instantiating `rfl::to_generic<ProcessorsType>` / `rfl::generic::Writer`.
+template <class ProcessorsType, class U>
+inline Generic to_default_generic(const U& _val) {
+  using T = std::remove_cvref_t<U>;
+  if constexpr (std::is_same_v<T, bool>) {
+    return Generic(_val);
+  } else if constexpr (is_plain_integer_for_default_v<T>) {
+    if constexpr (std::is_unsigned_v<T> && sizeof(T) >= sizeof(int64_t)) {
+      if (_val <= static_cast<T>(std::numeric_limits<int64_t>::max())) {
+        return Generic(static_cast<int64_t>(_val));
+      }
+      return rfl::to_generic<ProcessorsType>(_val);
+    } else {
+      return Generic(static_cast<int64_t>(_val));
+    }
+  } else if constexpr (std::is_floating_point_v<T>) {
+    return Generic(static_cast<double>(_val));
+  } else if constexpr (std::is_same_v<T, std::string>) {
+    return Generic(_val);
+  } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
+    Generic::Array arr;
+    arr.reserve(_val.size());
+    for (const auto& s : _val) {
+      arr.emplace_back(s);
+    }
+    return Generic(std::move(arr));
+  } else if constexpr (is_std_optional_for_default<T>::value) {
+    if (_val.has_value()) {
+      return to_default_generic<ProcessorsType>(*_val);
+    }
+    return Generic();
+  } else {
+    return rfl::to_generic<ProcessorsType>(_val);
+  }
+}
+
+/// Sets the default value of the DefaultVal node in `_schema`.
+inline void set_schema_default_value(Generic _default,
+                                     rfl::parsing::schema::Type* _schema) {
+  _schema->variant_.visit([&](auto& _s) {
+    if constexpr (std::is_same_v<std::remove_cvref_t<decltype(_s)>,
+                                 rfl::parsing::schema::Type::DefaultVal>) {
+      _s.default_value_ = std::move(_default);
+    }
+  });
+}
+
+/// Free per-field serialization helper parameterized only by ValueType (never
+/// the enclosing NamedTuple's FieldTypes... pack).
+template <class R, class W, bool _ignore_empty_containers, bool _all_required,
+          bool _no_field_names, class ProcessorsType, class ValueType,
+          class OutputObjectOrArrayType>
+void write_named_tuple_field(const W& _w, const std::string_view _name,
+                             const ValueType& _value,
+                             OutputObjectOrArrayType* _ptr) {
+  using ParentType = rfl::parsing::Parent<W>;
+  const auto make_parent = [](const std::string_view _n,
+                              OutputObjectOrArrayType* _p) {
+    if constexpr (_no_field_names) {
+      return typename ParentType::Array{_p};
+    } else {
+      return typename ParentType::Object{_n, _p};
+    }
+  };
+  if constexpr (is_extra_fields_v<ValueType>) {
+    for (const auto& [k, v] : *_value) {
+      const auto new_parent = make_parent(k, _ptr);
+      rfl::parsing::Parser<R, W, std::remove_cvref_t<decltype(v)>,
+                           ProcessorsType>::write(_w, v, new_parent);
+    }
+  } else if constexpr (!_all_required && !_no_field_names &&
+                       !rfl::parsing::is_required<ValueType,
+                                                  _ignore_empty_containers>()) {
+    const auto new_parent = make_parent(_name, _ptr);
+    if (!rfl::parsing::is_empty(_value)) {
+      if constexpr (is_attribute_v<ValueType>) {
+        rfl::parsing::Parser<R, W, ValueType, ProcessorsType>::write(
+            _w, _value, new_parent.as_attribute());
+      } else {
+        rfl::parsing::Parser<R, W, ValueType, ProcessorsType>::write(
+            _w, _value, new_parent);
+      }
+    }
+  } else {
+    const auto new_parent = make_parent(_name, _ptr);
+    if constexpr (is_attribute_v<ValueType>) {
+      rfl::parsing::Parser<R, W, ValueType, ProcessorsType>::write(
+          _w, _value, new_parent.as_attribute());
+    } else {
+      rfl::parsing::Parser<R, W, ValueType, ProcessorsType>::write(_w, _value,
+                                                                   new_parent);
+    }
+  }
+}
+
+/// Extracts a pointer to a view slot for schema default inspection.
+/// Pointer slots (including `T*` and C-array pointers `T (*)[N]`) are returned
+/// directly without dereferencing; non-pointer processor-added slots (such as
+/// `rfl::AddStructName`'s `rfl::Literal<...>`) return `nullptr`.
+template <class SlotT>
+RFL_ALWAYS_INLINE auto extract_schema_field_ptr(const SlotT& _slot) noexcept {
+  if constexpr (std::is_pointer_v<SlotT>) {
+    return _slot;
+  } else {
+    return static_cast<const void*>(nullptr);
+  }
+}
+
+/// Free per-field schema helper parameterized only by field type U and its
+/// view-slot pointer type (never the enclosing NamedTuple's FieldTypes...
+/// pack). Deduces `FieldValPtrT` independently of `U` so both raw C-array
+/// pointers (`T (*)[N]` vs `rfl::internal::Array<T[N]>`) and non-pointer
+/// processor-added slots (`const void*` / `nullptr`) work cleanly.
+template <class R, class W, bool _no_field_names, class ProcessorsType, class U,
+          class SchemaType, class FieldValPtrT>
+void build_named_tuple_field_schema(
+    std::map<std::string, rfl::parsing::schema::Type>* _definitions,
+    SchemaType* _schema, const std::string_view _name,
+    const FieldValPtrT _field_val) noexcept {
+  using PtrT = std::remove_cvref_t<FieldValPtrT>;
+  if constexpr (!is_skip_v<U> && !is_extra_fields_v<U>) {
+    auto s =
+        rfl::parsing::Parser<R, W, U, ProcessorsType>::to_schema(_definitions);
+    if constexpr (!std::is_same_v<PtrT, const void*> &&
+                  !std::is_same_v<PtrT, void*> &&
+                  !std::is_same_v<PtrT, std::nullptr_t> && CanEmitDefault<U>) {
+      if (_field_val != nullptr) {
+        set_schema_default_value(to_default_generic<ProcessorsType>(
+                                     get_default_val(*_field_val).get()),
+                                 &s);
+      }
+    }
+    if constexpr (_no_field_names) {
+      _schema->types_.emplace_back(std::move(s));
+    } else {
+      _schema->types_[std::string(_name)] = std::move(s);
+    }
+  }
+}
+
+/// Whether a missing rfl::DefaultVal field can be value-initialized. Only
+/// an rfl::NamedTuple does this at runtime, and it cannot have const fields,
+/// so const fields of structs need no instantiation.
+template <class ValueType>
+constexpr bool can_value_initialize_default_val() {
+  using T = typename default_val_t<ValueType>::Type;
+  return !std::is_const_v<ValueType> && std::is_default_constructible_v<T> &&
+         std::is_default_constructible_v<ValueType>;
+}
+
+/// Free per-field missing-field handler parameterized only by FieldSlotType
+/// (never the enclosing NamedTuple's FieldTypes... pack).
+/// Precondition: `_is_set_ptr` is non-null whenever `_defaults_constructed` is
+/// false (the uninitialized-memory read path).
+template <bool _ignore_empty_containers, bool _all_required,
+          bool _defaults_constructed, class ProcessorsType, class FieldSlotType>
+RFL_ALWAYS_INLINE void handle_missing_named_tuple_field(
+    const std::string_view _name, const bool _is_found,
+    const FieldSlotType& _field_slot, bool* _is_set_ptr,
+    rfl::parsing::FieldErrors<ProcessorsType>* _errors,
+    const bool _value_initialize_default_vals) noexcept {
+  using SlotT = std::remove_cvref_t<FieldSlotType>;
+  using ValueType = std::remove_reference_t<std::remove_pointer_t<SlotT>>;
+  constexpr bool is_default_val_field = is_default_val_v<ValueType>;
+  constexpr bool is_required_field =
+      !is_default_val_field && !is_extra_fields_v<ValueType> &&
+      (_all_required ||
+       rfl::parsing::is_required<ValueType, _ignore_empty_containers>());
+
+  // When the struct was default-constructed, missing optional or DefaultVal
+  // fields already hold their default values, so nothing is needed.
+  if constexpr (_defaults_constructed && !is_required_field) {
+    return;
+  } else {
+    if (rfl::parsing::should_stop_on_field_error<ProcessorsType>(*_errors))
+      return;
+    if (!_is_found) {
+      if constexpr (std::is_pointer_v<SlotT> && !_defaults_constructed &&
+                    is_default_val_field) {
+        if constexpr (can_value_initialize_default_val<ValueType>()) {
+          if (_value_initialize_default_vals) {
+            // The value's constructor can throw, for instance a Validator
+            // whose zero value is invalid.
+            try {
+              ::new (_field_slot) ValueType();
+            } catch (std::exception& e) {
+              _errors->emplace_back(rfl::parsing::make_nested_error(
+                  std::string(_name),
+                  "Field named '" + std::string(_name) +
+                      "' not found, and its default value could not be "
+                      "constructed: " +
+                      e.what()));
+              return;
+            }
+            *_is_set_ptr = true;
+            return;
+          }
+        }
+      }
+
+      if constexpr (is_required_field ||
+                    (is_default_val_field && !_defaults_constructed)) {
+        std::stringstream stream;
+        stream << "Field named '" << std::string(_name) << "' not found.";
+        _errors->emplace_back(
+            rfl::parsing::make_nested_error(std::string(_name), stream.str()));
+        return;
+      }
+
+      if constexpr (std::is_pointer_v<SlotT> && !_defaults_constructed &&
+                    !is_required_field && !is_default_val_field) {
+        using NonConstT = std::remove_const_t<ValueType>;
+        const auto ptr = const_cast<NonConstT*>(_field_slot);
+        if constexpr (std::is_nothrow_default_constructible_v<NonConstT>) {
+          ::new (ptr) NonConstT();
+        } else {
+          // The default value can throw, for instance a Validator whose
+          // default value is invalid.
+          try {
+            ::new (ptr) NonConstT();
+          } catch (std::exception& e) {
+            _errors->emplace_back(rfl::parsing::make_nested_error(
+                std::string(_name),
+                "Field named '" + std::string(_name) +
+                    "' not found, and its default value could not be "
+                    "constructed: " +
+                    e.what()));
+            return;
+          }
+        }
+        *_is_set_ptr = true;
+      }
+    }
+  }
+}
+
+}  // namespace rfl::internal::parsing
 
 namespace rfl::parsing {
 
@@ -246,83 +507,42 @@ struct NamedTupleParser {
   }
 
  private:
-  template <int _i>
-  static void add_field_to_object(const W& _w,
-                                  const NamedTuple<FieldTypes...>& _tup,
-                                  OutputObjectOrArrayType* _ptr) {
-    using FieldType = internal::nth_element_t<_i, FieldTypes...>;
-    using ValueType = std::remove_cvref_t<typename FieldType::Type>;
-    const auto value = rfl::get<_i>(_tup);
-    if constexpr (internal::is_extra_fields_v<ValueType>) {
-      for (const auto& [k, v] : *value) {
-        const auto new_parent = make_parent(k, _ptr);
-        Parser<R, W, std::remove_cvref_t<decltype(v)>, ProcessorsType>::write(
-            _w, v, new_parent);
-      }
-    } else if constexpr (!_all_required && !_no_field_names &&
-                         !is_required<ValueType, _ignore_empty_containers>()) {
-      constexpr auto name = FieldType::name_.string_view();
-      const auto new_parent = make_parent(name, _ptr);
-      if (!is_empty(value)) {
-        if constexpr (internal::is_attribute_v<ValueType>) {
-          Parser<R, W, ValueType, ProcessorsType>::write(
-              _w, value, new_parent.as_attribute());
-        } else {
-          Parser<R, W, ValueType, ProcessorsType>::write(_w, value, new_parent);
-        }
-      }
-    } else {
-      constexpr auto name = FieldType::name_.string_view();
-      const auto new_parent = make_parent(name, _ptr);
-      if constexpr (internal::is_attribute_v<ValueType>) {
-        Parser<R, W, ValueType, ProcessorsType>::write(
-            _w, value, new_parent.as_attribute());
-      } else {
-        Parser<R, W, ValueType, ProcessorsType>::write(_w, value, new_parent);
-      }
-    }
-  }
-
-  template <typename View, size_t _i>
-  static void add_field_to_schema(
-      std::map<std::string, schema::Type>* _definitions,
-      SchemaType* _schema,
-      View* _view) noexcept {
-    using F = internal::nth_element_t<_i, FieldTypes...>;
-    using U = std::remove_cvref_t<typename F::Type>;
-    if constexpr (!internal::is_skip_v<U> && !internal::is_extra_fields_v<U>) {
-      // Add default value here
-      auto s = Parser<R, W, U, ProcessorsType>::to_schema(_definitions);
-      if constexpr (!std::is_same_v<View, void> && internal::CanEmitDefault<U>) {
-        s.variant_.visit([&](auto& value) {
-          if constexpr (std::is_same_v<std::remove_cvref_t<decltype(value)>,
-                                       schema::Type::DefaultVal>) {
-            value.default_value_ =
-                rfl::to_generic<ProcessorsType>((*rfl::get<_i>(*_view)).get());
-          }
-        });
-      }
-      if constexpr (_no_field_names) {
-        _schema->types_.emplace_back(std::move(s));
-      } else {
-        _schema->types_[std::string(F::name())] = std::move(s);
-      }
-    }
-  };
-
   template <int... _is>
   static void build_object(const W& _w, const NamedTuple<FieldTypes...>& _tup,
                            OutputObjectOrArrayType* _ptr,
                            std::integer_sequence<int, _is...>) {
-    (add_field_to_object<_is>(_w, _tup, _ptr), ...);
+    (internal::parsing::write_named_tuple_field<R, W, _ignore_empty_containers,
+                                                _all_required, _no_field_names,
+                                                ProcessorsType>(
+         _w, internal::nth_element_t<_is, FieldTypes...>::name_.string_view(),
+         rfl::get<_is>(_tup), _ptr),
+     ...);
   }
 
-  template <typename View,  int... _is>
+  template <typename View, int... _is>
   static void build_schema(std::map<std::string, schema::Type>* _definitions,
-                           SchemaType* _schema,
-                           View* _view,
+                           SchemaType* _schema, View* _view,
                            std::integer_sequence<int, _is...>) noexcept {
-    (add_field_to_schema<View, _is>(_definitions, _schema, _view), ...);
+    if constexpr (!std::is_same_v<View, void>) {
+      (internal::parsing::build_named_tuple_field_schema<
+           R, W, _no_field_names, ProcessorsType,
+           std::remove_cvref_t<
+               typename internal::nth_element_t<_is, FieldTypes...>::Type>>(
+           _definitions, _schema,
+           internal::nth_element_t<_is, FieldTypes...>::name(),
+           _view ? internal::parsing::extract_schema_field_ptr(
+                       rfl::get<_is>(*_view))
+                 : nullptr),
+       ...);
+    } else {
+      (internal::parsing::build_named_tuple_field_schema<
+           R, W, _no_field_names, ProcessorsType,
+           std::remove_cvref_t<
+               typename internal::nth_element_t<_is, FieldTypes...>::Type>>(
+           _definitions, _schema,
+           internal::nth_element_t<_is, FieldTypes...>::name(), nullptr),
+       ...);
+    }
 
     if constexpr (NamedTupleType::pos_extra_fields() != -1) {
       using F = internal::nth_element_t<NamedTupleType::pos_extra_fields(),
@@ -338,126 +558,19 @@ struct NamedTupleParser {
   }
 
   /// Generates error messages for when fields are missing.
-  template <int _i>
-  static RFL_ALWAYS_INLINE void handle_one_missing_field(
-      const std::array<bool, size_>& _found, const NamedTupleType& _view,
-      std::array<bool, size_>* _set, FieldErrors<ProcessorsType>* _errors,
-      const bool _value_initialize_default_vals) noexcept {
-    if (should_stop_on_field_error<ProcessorsType>(*_errors)) return;
-    using FieldType = internal::nth_element_t<_i, FieldTypes...>;
-    using ValueType = std::remove_reference_t<
-        std::remove_pointer_t<typename FieldType::Type>>;
-
-    if (!std::get<_i>(_found)) {
-      constexpr bool is_default_val_field =
-          internal::is_default_val_v<ValueType>;
-      constexpr bool is_required_field =
-          !is_default_val_field && !internal::is_extra_fields_v<ValueType> &&
-          (_all_required || is_required<ValueType, _ignore_empty_containers>());
-
-      // Without _set, the struct was default-constructed before it was read,
-      // so the field already holds its default value. With _set, the fields
-      // are constructed in raw memory. An rfl::NamedTuple has no in-class
-      // initializers, so a missing bare rfl::DefaultVal field is
-      // value-initialized there. Otherwise the field's default value is not
-      // available, so the field is required.
-      const bool defaults_constructed = _set == nullptr;
-
-      if constexpr (is_default_val_field) {
-        if constexpr (can_value_initialize_default_val<ValueType>()) {
-          if (_value_initialize_default_vals && !defaults_constructed) {
-            // The value's constructor can throw, for instance a Validator
-            // whose zero value is invalid.
-            try {
-              ::new (rfl::get<_i>(_view)) ValueType();
-            } catch (std::exception& e) {
-              constexpr auto current_name =
-                  internal::nth_element_t<_i, FieldTypes...>::name();
-              _errors->emplace_back(make_nested_error(
-                  std::string(current_name),
-                  "Field named '" + std::string(current_name) +
-                      "' not found, and its default value could not be "
-                      "constructed: " +
-                      e.what()));
-              return;
-            }
-            std::get<_i>(*_set) = true;
-            return;
-          }
-        }
-      }
-
-      if (is_required_field ||
-          (is_default_val_field && !defaults_constructed)) {
-        constexpr auto current_name =
-            internal::nth_element_t<_i, FieldTypes...>::name();
-        std::stringstream stream;
-        stream << "Field named '" << std::string(current_name)
-               << "' not found.";
-        _errors->emplace_back(
-            make_nested_error(std::string(current_name), stream.str()));
-        return;
-      }
-
-      if constexpr (!is_required_field && !is_default_val_field) {
-        if (defaults_constructed) {
-          return;
-        }
-        using NonConstT = std::remove_const_t<ValueType>;
-        const auto ptr = const_cast<NonConstT*>(rfl::get<_i>(_view));
-        if constexpr (std::is_nothrow_default_constructible_v<NonConstT>) {
-          ::new (ptr) NonConstT();
-        } else {
-          // The default value can throw, for instance a Validator whose
-          // default value is invalid.
-          try {
-            ::new (ptr) NonConstT();
-          } catch (std::exception& e) {
-            constexpr auto current_name =
-                internal::nth_element_t<_i, FieldTypes...>::name();
-            _errors->emplace_back(make_nested_error(
-                std::string(current_name),
-                "Field named '" + std::string(current_name) +
-                    "' not found, and its default value could not be "
-                    "constructed: " +
-                    e.what()));
-            return;
-          }
-        }
-        std::get<_i>(*_set) = true;
-      }
-    }
-  }
-
-  /// Whether a missing rfl::DefaultVal field can be value-initialized. Only
-  /// an rfl::NamedTuple does this at runtime, and it cannot have const fields,
-  /// so const fields of structs need no instantiation.
-  template <class ValueType>
-  static constexpr bool can_value_initialize_default_val() {
-    using T = typename internal::default_val_t<ValueType>::Type;
-    return !std::is_const_v<ValueType> && std::is_default_constructible_v<T> &&
-           std::is_default_constructible_v<ValueType>;
-  }
-
-  /// Generates error messages for when fields are missing.
-  template <int... _is>
+  template <bool _defaults_constructed, int... _is>
   static RFL_ALWAYS_INLINE void handle_missing_fields(
       const std::array<bool, size_>& _found, const NamedTupleType& _view,
       std::array<bool, size_>* _set, FieldErrors<ProcessorsType>* _errors,
       const bool _value_initialize_default_vals,
       std::integer_sequence<int, _is...>) noexcept {
-    (handle_one_missing_field<_is>(_found, _view, _set, _errors,
-                                   _value_initialize_default_vals),
+    (internal::parsing::handle_missing_named_tuple_field<
+         _ignore_empty_containers, _all_required, _defaults_constructed,
+         ProcessorsType>(internal::nth_element_t<_is, FieldTypes...>::name(),
+                         std::get<_is>(_found), rfl::get<_is>(_view),
+                         _set ? &std::get<_is>(*_set) : nullptr, _errors,
+                         _value_initialize_default_vals),
      ...);
-  }
-
-  static auto make_parent(const std::string_view& _name,
-                          OutputObjectOrArrayType* _ptr) {
-    if constexpr (_no_field_names) {
-      return typename ParentType::Array{_ptr};
-    } else {
-      return typename ParentType::Object{_name, _ptr};
-    }
   }
 
   static RFL_ALWAYS_INLINE
@@ -484,9 +597,9 @@ struct NamedTupleParser {
       }
     }
     if (!should_stop_on_field_error<ProcessorsType>(errors)) {
-      handle_missing_fields(found, *_view, &set, &errors,
-                            _value_initialize_default_vals,
-                            std::make_integer_sequence<int, size_>());
+      handle_missing_fields</*_defaults_constructed=*/false>(
+          found, *_view, &set, &errors, _value_initialize_default_vals,
+          std::make_integer_sequence<int, size_>());
     }
     if constexpr (internal::fail_fast_v<ProcessorsType>) {
       return std::make_pair(set, std::move(errors).error());
@@ -517,9 +630,10 @@ struct NamedTupleParser {
     if constexpr (internal::has_default_val_v<NamedTupleType> &&
                   !internal::default_if_missing_v<ProcessorsType>) {
       if (!should_stop_on_field_error<ProcessorsType>(errors)) {
-        handle_missing_fields(reader.found(), *_view, nullptr, &errors,
-                              /*_value_initialize_default_vals=*/false,
-                              std::make_integer_sequence<int, size_>());
+        handle_missing_fields</*_defaults_constructed=*/true>(
+            reader.found(), *_view, nullptr, &errors,
+            /*_value_initialize_default_vals=*/false,
+            std::make_integer_sequence<int, size_>());
       }
     }
     if constexpr (internal::fail_fast_v<ProcessorsType>) {

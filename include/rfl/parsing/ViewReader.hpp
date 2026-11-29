@@ -10,12 +10,109 @@
 
 #include "../Tuple.hpp"
 #include "../internal/always_inline.hpp"
+#include "../internal/cold.hpp"
 #include "../internal/is_array.hpp"
 #include "../internal/no_extra_fields_v.hpp"
 #include "FieldErrors.hpp"
 #include "Parser_base.hpp"
+#include "find_field_index.hpp"
 #include "schemaful/IsSchemafulReader.hpp"
 #include "wrap_error.hpp"
+
+namespace rfl::internal::parsing {
+
+/// Placement-moves a parsed field value into uninitialized struct storage.
+/// Free function parameterized only by (Target, Source)—never ViewType—so
+/// instantiations do not carry the enclosing NamedTuple in mangled symbol
+/// names or DWARF debug info.
+template <class Target, class Source>
+void placement_move_field(Target* _t, Source* _s) {
+  if constexpr (std::is_const_v<Target>) {
+    placement_move_field(const_cast<std::remove_const_t<Target>*>(_t), _s);
+  } else if constexpr (!is_array_v<Source> && !std::is_array_v<Target>) {
+    ::new (_t) Target(std::move(*_s));
+  } else if constexpr (is_array_v<Source>) {
+    static_assert(std::is_array_v<Target>, "Expected target to be a c-array.");
+    for (size_t i = 0; i < _s->arr_.size(); ++i) {
+      placement_move_field(&((*_t)[i]), &(_s->arr_[i]));
+    }
+  } else {
+    for (size_t i = 0; i < _s->size(); ++i) {
+      placement_move_field(&((*_t)[i]), &((*_s)[i]));
+    }
+  }
+}
+
+template <class FieldErrorsType>
+RFL_COLD void record_uninitialized_field_error(const std::string_view _name,
+                                               Error _err,
+                                               FieldErrorsType* _errors,
+                                               const size_t _reserve_errors) {
+  // Reserve lazily to avoid error-vector reallocations while keeping
+  // successful reads allocation-free.
+  _errors->reserve(_reserve_errors);
+  _errors->emplace_back(rfl::parsing::wrap_field_error(_name, std::move(_err)));
+}
+
+/// Reads one field into an uninitialized view slot. Free function parameterized
+/// only by (R, W, OriginalType, ProcessorsType)—never the enclosing ViewType—so
+/// instantiations do not repeat the full NamedTuple in mangled symbol names or
+/// DWARF debug info.
+template <class R, class W, class OriginalType, class ProcessorsType>
+RFL_ALWAYS_INLINE void assign_uninitialized_view_field_inline(
+    const R& _r, const typename R::InputVarType& _var,
+    const std::string_view _name, OriginalType& _slot, bool& _is_set,
+    rfl::parsing::FieldErrors<ProcessorsType>* _errors,
+    const size_t _reserve_errors) {
+  using T = std::remove_cvref_t<std::remove_pointer_t<OriginalType>>;
+  auto res = rfl::parsing::Parser<R, W, T, ProcessorsType>::read(_r, _var);
+  if (!res) [[unlikely]] {
+    record_uninitialized_field_error(_name, std::move(res).error(), _errors,
+                                     _reserve_errors);
+    return;
+  }
+  if constexpr (std::is_pointer_v<OriginalType>) {
+    placement_move_field(_slot, &(*res));
+  } else {
+    _slot = std::move(*res);
+  }
+  _is_set = true;
+}
+
+template <class R, class W, class OriginalType, class ProcessorsType>
+inline void assign_uninitialized_view_field(
+    const R& _r, const typename R::InputVarType& _var,
+    const std::string_view _name, OriginalType& _slot, bool& _is_set,
+    rfl::parsing::FieldErrors<ProcessorsType>* _errors,
+    const size_t _reserve_errors) {
+  assign_uninitialized_view_field_inline<R, W, OriginalType, ProcessorsType>(
+      _r, _var, _name, _slot, _is_set, _errors, _reserve_errors);
+}
+
+/// Reads one extra field into an uninitialized ExtraFields slot.
+template <class R, class W, class ExtraFieldsType, class ProcessorsType>
+void assign_extra_uninitialized_field(
+    const R& _r, const std::string_view _current_name,
+    const typename R::InputVarType& _var, ExtraFieldsType* _extra_fields,
+    bool& _is_found, bool& _is_set,
+    rfl::parsing::FieldErrors<ProcessorsType>* _errors) {
+  using T = std::remove_cvref_t<
+      std::remove_pointer_t<typename ExtraFieldsType::Type>>;
+  if (!_is_set) {
+    ::new (_extra_fields) ExtraFieldsType();
+    _is_set = true;
+    _is_found = true;
+  }
+  auto res = rfl::parsing::Parser<R, W, T, ProcessorsType>::read(_r, _var);
+  if (!res) [[unlikely]] {
+    _errors->emplace_back(
+        rfl::parsing::wrap_field_error(_current_name, std::move(res).error()));
+    return;
+  }
+  _extra_fields->emplace(std::string(_current_name), std::move(*res));
+}
+
+}  // namespace rfl::internal::parsing
 
 namespace rfl::parsing {
 
@@ -38,7 +135,8 @@ class ViewReader {
    * @param _errors The field error collector.
    */
   ViewReader(const R* _r, ViewType* _view, std::array<bool, size_>* _found,
-             std::array<bool, size_>* _set, FieldErrors<ProcessorsType>* _errors)
+             std::array<bool, size_>* _set,
+             FieldErrors<ProcessorsType>* _errors)
       : r_(_r), view_(_view), found_(_found), set_(_set), errors_(_errors) {}
 
   ~ViewReader() = default;
@@ -49,10 +147,12 @@ class ViewReader {
    * @param _name The name of the field.
    * @param _var The input variable to read from.
    */
-  void read(const std::string_view& _name, const InputVarType& _var) const {
+  RFL_ALWAYS_INLINE void read(const std::string_view& _name,
+                              const InputVarType& _var) const {
     if (should_stop_on_field_error<ProcessorsType>(*errors_)) return;
-    assign_to_matching_field(*r_, _name, _var, view_, errors_, found_, set_,
-                             std::make_integer_sequence<int, size_>());
+    assign_to_matching_name(*r_, _name, _var, view_, errors_, found_, set_,
+                            next_idx_,
+                            std::make_integer_sequence<int, size_>());
   }
 
   /**
@@ -63,7 +163,7 @@ class ViewReader {
    */
   void read(const int _index, const InputVarType& _var) const {
     if (should_stop_on_field_error<ProcessorsType>(*errors_)) return;
-    assign_to_matching_field(*r_, _index, _var, view_, errors_, found_, set_,
+    assign_to_matching_index(*r_, _index, _var, view_, errors_, found_, set_,
                              std::make_integer_sequence<int, size_>());
   }
 
@@ -71,8 +171,35 @@ class ViewReader {
   template <int i>
   void read(std::integral_constant<int, i>, const InputVarType& _var) const {
     if (should_stop_on_field_error<ProcessorsType>(*errors_)) return;
-    assign_to_matching_field(*r_, i, _var, view_, errors_, found_, set_,
-                             std::integer_sequence<int, i>());
+    bool already_assigned = false;
+    using FieldType = tuple_element_t<i, typename ViewType::Fields>;
+    if (!std::get<i>(*found_)) {
+      std::get<i>(*found_) = true;
+      already_assigned = true;
+      internal::parsing::assign_uninitialized_view_field<
+          R, W, typename FieldType::Type, ProcessorsType>(
+          *r_, _var, FieldType::name(), rfl::get<i>(*view_), std::get<i>(*set_),
+          errors_, size_);
+    }
+
+    if constexpr (ViewType::pos_extra_fields() != -1) {
+      static_assert(!schemaful::IsSchemafulReader<R>,
+                    "rfl::ExtraFields are not supported for schemaful formats, "
+                    "because schemaful formats cannot have extra fields.");
+      static_assert(ViewType::pos_extra_fields() == -1,
+                    "rfl::ExtraFields are not supported for positional reads.");
+    } else if constexpr (internal::no_extra_fields_v<ProcessorsType>) {
+      static_assert(
+          !schemaful::IsSchemafulReader<R>,
+          "Passing rfl::NoExtraFields to a schemaful format does not make "
+          "sense, because schemaful formats cannot have extra fields.");
+      if (!already_assigned) {
+        std::stringstream stream;
+        stream << "Value named '" << i << "' not used.";
+        errors_->emplace_back(
+            make_nested_error(static_cast<size_t>(i), stream.str()));
+      }
+    }
   }
 
   /**
@@ -83,91 +210,58 @@ class ViewReader {
   static constexpr size_t size() { return size_; }
 
  private:
-  template <int i, class FieldType>
-  static bool is_matching(const int _current_index) {
-    return _current_index == i;
-  }
-
-  template <int i, class FieldType>
-  static bool is_matching(const std::string_view& _current_name) {
-    return _current_name == FieldType::name();
-  }
-
-  static ErrorDetail::PathSegment to_path_segment(const int _current_index) {
-    return static_cast<size_t>(_current_index);
-  }
-
-  static ErrorDetail::PathSegment to_path_segment(
-      const std::string_view& _current_name) {
-    return std::string(_current_name);
-  }
-
-  template <int i>
-  static RFL_ALWAYS_INLINE void assign_if_field_matches(
-      const R& _r, const auto _current_name_or_index, const auto& _var,
-      auto* _view, auto* _errors, auto* _found, auto* _set,
-      bool* _already_assigned) {
-    using FieldType = tuple_element_t<i, typename ViewType::Fields>;
-    using OriginalType = typename FieldType::Type;
-    using T =
-        std::remove_cvref_t<std::remove_pointer_t<typename FieldType::Type>>;
-    if (!(*_already_assigned) && !std::get<i>(*_found) &&
-        is_matching<i, FieldType>(_current_name_or_index)) {
-      std::get<i>(*_found) = true;
-      *_already_assigned = true;
-      auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
-      if (!res) [[unlikely]] {
-        constexpr auto name = FieldType::name();
-        // Reserve lazily to avoid error-vector reallocations while keeping
-        // successful reads allocation-free.
-        _errors->reserve(size_);
-        _errors->emplace_back(wrap_field_error(name, std::move(res).error()));
-        return;
-      }
-      if constexpr (std::is_pointer_v<OriginalType>) {
-        move_to(rfl::get<i>(*_view), &(*res));
-      } else {
-        rfl::get<i>(*_view) = std::move(*res);
-      }
-      std::get<i>(*_set) = true;
+  template <int... is>
+  static RFL_ALWAYS_INLINE void assign_by_index(
+      const R& _r, const int _idx, const InputVarType& _var, ViewType* _view,
+      FieldErrors<ProcessorsType>* _errors, std::array<bool, size_>* _set,
+      std::integer_sequence<int, is...>) {
+    using Fields = typename ViewType::Fields;
+    if constexpr (size_ <= 4) {
+      static_cast<void>(
+          ((_idx == is
+                ? (internal::parsing::assign_uninitialized_view_field_inline<
+                       R, W, typename tuple_element_t<is, Fields>::Type,
+                       ProcessorsType>(_r, _var,
+                                       tuple_element_t<is, Fields>::name(),
+                                       rfl::get<is>(*_view),
+                                       std::get<is>(*_set), _errors, size_),
+                   true)
+                : false) ||
+           ...));
+    } else {
+      static_cast<void>(
+          ((_idx == is ? (internal::parsing::assign_uninitialized_view_field<
+                              R, W, typename tuple_element_t<is, Fields>::Type,
+                              ProcessorsType>(
+                              _r, _var, tuple_element_t<is, Fields>::name(),
+                              rfl::get<is>(*_view), std::get<is>(*_set),
+                              _errors, size_),
+                          true)
+                       : false) ||
+           ...));
     }
-  }
-
-  template <int _pos>
-  static void assign_to_extra_fields(const R& _r,
-                                     const std::string_view& _current_name,
-                                     const auto& _var, auto* _view,
-                                     auto* _errors, auto* _found, auto* _set) {
-    auto* extra_fields = _view->template get<_pos>();
-    using ExtraFieldsType =
-        std::remove_cvref_t<std::remove_pointer_t<decltype(extra_fields)>>;
-    using T = std::remove_cvref_t<
-        std::remove_pointer_t<typename ExtraFieldsType::Type>>;
-    if (!std::get<_pos>(*_set)) {
-      ::new (extra_fields) ExtraFieldsType();
-      std::get<_pos>(*_set) = true;
-      std::get<_pos>(*_found) = true;
-    }
-    auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
-    if (!res) [[unlikely]] {
-      _errors->emplace_back(
-          wrap_field_error(_current_name, std::move(res).error()));
-      return;
-    }
-    extra_fields->emplace(std::string(_current_name), std::move(*res));
   }
 
   template <int... is>
-  static void assign_to_matching_field(const R& _r,
-                                       const auto _current_name_or_index,
-                                       const auto& _var, auto* _view,
-                                       auto* _errors, auto* _found, auto* _set,
-                                       std::integer_sequence<int, is...>) {
+  static RFL_ALWAYS_INLINE void assign_to_matching_name(
+      const R& _r, const std::string_view _current_name,
+      const InputVarType& _var, ViewType* _view,
+      FieldErrors<ProcessorsType>* _errors, std::array<bool, size_>* _found,
+      std::array<bool, size_>* _set, size_t& _next_idx,
+      std::integer_sequence<int, is...> _seq) {
     bool already_assigned = false;
-
-    (assign_if_field_matches<is>(_r, _current_name_or_index, _var, _view,
-                                 _errors, _found, _set, &already_assigned),
-     ...);
+    if constexpr (size_ > 0) {
+      if (const int idx = internal::parsing::FieldNameLookup<
+              typename ViewType::Names>::find_with_hint(_current_name,
+                                                        _next_idx);
+          idx >= 0) {
+        if (!(*_found)[static_cast<size_t>(idx)]) {
+          (*_found)[static_cast<size_t>(idx)] = true;
+          already_assigned = true;
+          assign_by_index(_r, idx, _var, _view, _errors, _set, _seq);
+        }
+      }
+    }
 
     if constexpr (ViewType::pos_extra_fields() != -1) {
       static_assert(!schemaful::IsSchemafulReader<R>,
@@ -175,8 +269,13 @@ class ViewReader {
                     "because schemaful formats cannot have extra fields.");
       constexpr int pos = ViewType::pos_extra_fields();
       if (!already_assigned) {
-        assign_to_extra_fields<pos>(_r, _current_name_or_index, _var, _view,
-                                    _errors, _found, _set);
+        auto* extra_fields = _view->template get<pos>();
+        using ExtraFieldsType =
+            std::remove_cvref_t<std::remove_pointer_t<decltype(extra_fields)>>;
+        internal::parsing::assign_extra_uninitialized_field<
+            R, W, ExtraFieldsType, ProcessorsType>(
+            _r, _current_name, _var, extra_fields, std::get<pos>(*_found),
+            std::get<pos>(*_set), _errors);
       }
     } else if constexpr (internal::no_extra_fields_v<ProcessorsType>) {
       static_assert(
@@ -185,29 +284,44 @@ class ViewReader {
           "sense, because schemaful formats cannot have extra fields.");
       if (!already_assigned) {
         std::stringstream stream;
-        stream << "Value named '" << _current_name_or_index << "' not used.";
-        _errors->emplace_back(make_nested_error(
-            to_path_segment(_current_name_or_index), stream.str()));
+        stream << "Value named '" << _current_name << "' not used.";
+        _errors->emplace_back(
+            make_nested_error(std::string(_current_name), stream.str()));
       }
     }
   }
 
-  template <class Target, class Source>
-  static void move_to(Target* _t, Source* _s) {
-    if constexpr (std::is_const_v<Target>) {
-      return move_to(const_cast<std::remove_const_t<Target>*>(_t), _s);
-    } else if constexpr (!rfl::internal::is_array_v<Source> &&
-                         !std::is_array_v<Target>) {
-      ::new (_t) Target(std::move(*_s));
-    } else if constexpr (rfl::internal::is_array_v<Source>) {
-      static_assert(std::is_array_v<Target>,
-                    "Expected target to be a c-array.");
-      for (size_t i = 0; i < _s->arr_.size(); ++i) {
-        move_to(&((*_t)[i]), &(_s->arr_[i]));
+  template <int... is>
+  static void assign_to_matching_index(
+      const R& _r, const int _index, const InputVarType& _var, ViewType* _view,
+      FieldErrors<ProcessorsType>* _errors, std::array<bool, size_>* _found,
+      std::array<bool, size_>* _set, std::integer_sequence<int, is...> _seq) {
+    bool already_assigned = false;
+    if constexpr (size_ > 0) {
+      if (_index >= 0 && static_cast<size_t>(_index) < size_ &&
+          !(*_found)[static_cast<size_t>(_index)]) {
+        (*_found)[static_cast<size_t>(_index)] = true;
+        already_assigned = true;
+        assign_by_index(_r, _index, _var, _view, _errors, _set, _seq);
       }
-    } else {
-      for (size_t i = 0; i < _s->size(); ++i) {
-        move_to(&((*_t)[i]), &((*_s)[i]));
+    }
+
+    if constexpr (ViewType::pos_extra_fields() != -1) {
+      static_assert(!schemaful::IsSchemafulReader<R>,
+                    "rfl::ExtraFields are not supported for schemaful formats, "
+                    "because schemaful formats cannot have extra fields.");
+      static_assert(ViewType::pos_extra_fields() == -1,
+                    "rfl::ExtraFields are not supported for positional reads.");
+    } else if constexpr (internal::no_extra_fields_v<ProcessorsType>) {
+      static_assert(
+          !schemaful::IsSchemafulReader<R>,
+          "Passing rfl::NoExtraFields to a schemaful format does not make "
+          "sense, because schemaful formats cannot have extra fields.");
+      if (!already_assigned) {
+        std::stringstream stream;
+        stream << "Value named '" << _index << "' not used.";
+        _errors->emplace_back(
+            make_nested_error(static_cast<size_t>(_index), stream.str()));
       }
     }
   }
@@ -228,6 +342,10 @@ class ViewReader {
 
   /// Stores field errors according to the selected processor policy.
   FieldErrors<ProcessorsType>* errors_;
+
+  /// Sequential-key cursor hint for O(1) lookup when keys arrive in
+  /// declaration order.
+  mutable size_t next_idx_ = 0;
 };
 
 }  // namespace rfl::parsing
