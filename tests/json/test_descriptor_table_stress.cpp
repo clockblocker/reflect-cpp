@@ -618,8 +618,8 @@ TEST(descriptor_table_stress,
   EXPECT_GT(LiveCounter::constructed.load(), 0);
   EXPECT_EQ(LiveCounter::constructed.load(), LiveCounter::destroyed.load());
 
-  // 2. read_with_default must NOT be noexcept so Parser_default's try/catch
-  //    catches the exception and returns an rfl::Error cleanly.
+  // 2. read_with_default is noexcept and catches exceptions internally,
+  //    returning an rfl::Error cleanly without terminating.
   {
     const CustomThrowingReader::InputVarType input{
         .is_obj = true,
@@ -631,7 +631,13 @@ TEST(descriptor_table_stress,
   }
 
   // 3. External/custom named Reader without UnsizedObjectReader tag must still
-  //    compile and handle rfl::ExtraFields cleanly via SizedTableViewReader.
+  //    compile and handle rfl::ExtraFields cleanly via NamedTupleParser fallback.
+  static_assert(!rfl::parsing::can_use_table_struct_parser_v<
+                CustomThrowingReader, rfl::json::Writer, ExtraStringStruct,
+                rfl::Processors<>>);
+  static_assert(!rfl::parsing::can_use_table_struct_parser_v<
+                rfl::json::Reader, rfl::json::Writer, CamelStruct,
+                rfl::Processors<rfl::NoFieldNames>>);
   {
     const CustomThrowingReader::InputVarType input{
         .is_obj = true,
@@ -679,6 +685,69 @@ TEST(descriptor_table_stress, flatten_const_sub_and_multi_op_xml_content) {
   ASSERT_TRUE(rt.has_value()) << rt.error().what();
   EXPECT_EQ(rt->firstField, 1);
   EXPECT_EQ(rt->xmlContent, "body");
+}
+
+struct LeadingUnderscoreStruct {
+  int _leading_one = 1;
+  std::string __double_lead = "two";
+  int _a = 3;
+  int trailing_ = 4;
+};
+
+struct Wide66Fields {
+  int f00 = 0, f01 = 1, f02 = 2, f03 = 3, f04 = 4, f05 = 5, f06 = 6, f07 = 7;
+  int f08 = 8, f09 = 9, f10 = 10, f11 = 11, f12 = 12, f13 = 13, f14 = 14,
+      f15 = 15;
+  int f16 = 16, f17 = 17, f18 = 18, f19 = 19, f20 = 20, f21 = 21, f22 = 22,
+      f23 = 23;
+  int f24 = 24, f25 = 25, f26 = 26, f27 = 27, f28 = 28, f29 = 29, f30 = 30,
+      f31 = 31;
+  int f32 = 32, f33 = 33, f34 = 34, f35 = 35, f36 = 36, f37 = 37, f38 = 38,
+      f39 = 39;
+  int f40 = 40, f41 = 41, f42 = 42, f43 = 43, f44 = 44, f45 = 45, f46 = 46,
+      f47 = 47;
+  int f48 = 48, f49 = 49, f50 = 50, f51 = 51, f52 = 52, f53 = 53, f54 = 54,
+      f55 = 55;
+  int f56 = 56, f57 = 57, f58 = 58, f59 = 59, f60 = 60, f61 = 61, f62 = 62,
+      f63 = 63;
+  int f64 = 64;
+  std::string f65 = "tail";
+};
+
+TEST(descriptor_table_stress, leading_underscore_and_wide66_fallback) {
+  // Verify leading-underscore SnakeCaseToCamelCase / SnakeCaseToPascalCase
+  // parity between DirectFieldNames (TableStructParser) and transform_case
+  // (NamedTupleParser via AddStructName fallback).
+  const auto table_camel = rfl::json::write<rfl::SnakeCaseToCamelCase>(
+      LeadingUnderscoreStruct{});
+  EXPECT_EQ(
+      table_camel,
+      R"({"_LeadingOne":1,"_DoubleLead":"two","_A":3,"trailing":4})");
+  const auto nt_camel =
+      rfl::json::write<rfl::SnakeCaseToCamelCase, rfl::AddStructName<"k">>(
+          LeadingUnderscoreStruct{});
+  EXPECT_EQ(
+      nt_camel,
+      R"({"k":"LeadingUnderscoreStruct","_LeadingOne":1,"_DoubleLead":"two","_A":3,"trailing":4})");
+
+  // Exercise N > 64 (non-bitmask bool-array fallback) read/write/default.
+  Wide66Fields w{};
+  w.f00 = 100;
+  w.f64 = 164;
+  w.f65 = "sixty_five";
+  const auto j = rfl::json::write(w);
+  const auto rt = rfl::json::read<Wide66Fields>(j);
+  ASSERT_TRUE(rt.has_value()) << rt.error().what();
+  EXPECT_EQ(rt->f00, 100);
+  EXPECT_EQ(rt->f64, 164);
+  EXPECT_EQ(rt->f65, "sixty_five");
+
+  const auto def = rfl::json::read<Wide66Fields, rfl::DefaultIfMissing>(
+      R"({"f64":999,"f65":"patched"})");
+  ASSERT_TRUE(def.has_value()) << def.error().what();
+  EXPECT_EQ(def->f00, 0);
+  EXPECT_EQ(def->f64, 999);
+  EXPECT_EQ(def->f65, "patched");
 }
 
 }  // namespace test_descriptor_table_stress

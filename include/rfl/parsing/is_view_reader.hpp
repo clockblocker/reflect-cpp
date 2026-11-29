@@ -6,13 +6,14 @@
 
 #include "ViewReader.hpp"
 
-namespace rfl ::parsing {
+namespace rfl::parsing {
 
-template <class R, class W, class ProcessorsType>
+template <class R, class W, class ProcessorsType, bool _with_default,
+          bool _use_bitmask>
 class TableViewReader;
 
 template <class R, class W, class ProcessorsType, std::size_t _size,
-          bool _has_extra_fields>
+          bool _with_default, bool _use_bitmask>
 class SizedTableViewReader;
 
 /**
@@ -30,14 +31,15 @@ template <class R, class W, class NamedTupleType, class ProcessorsType>
 class is_view_reader<ViewReader<R, W, NamedTupleType, ProcessorsType>>
     : public std::true_type {};
 
-template <class R, class W, class ProcessorsType>
-class is_view_reader<TableViewReader<R, W, ProcessorsType>>
+template <class R, class W, class ProcessorsType, bool _use_bitmask>
+class is_view_reader<
+    TableViewReader<R, W, ProcessorsType, false, _use_bitmask>>
     : public std::true_type {};
 
 template <class R, class W, class ProcessorsType, std::size_t _size,
-          bool _has_extra_fields>
+          bool _use_bitmask>
 class is_view_reader<
-    SizedTableViewReader<R, W, ProcessorsType, _size, _has_extra_fields>>
+    SizedTableViewReader<R, W, ProcessorsType, _size, false, _use_bitmask>>
     : public std::true_type {};
 
 template <class T>

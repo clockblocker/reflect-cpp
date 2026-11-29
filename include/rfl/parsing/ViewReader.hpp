@@ -18,9 +18,7 @@
 #include "schemaful/IsSchemafulReader.hpp"
 #include "wrap_error.hpp"
 
-namespace rfl::parsing {
-
-namespace detail {
+namespace rfl::internal::parsing {
 
 /// Placement-moves a parsed field value into uninitialized struct storage.
 /// Free function parameterized only by (Target, Source)—never ViewType—so
@@ -29,19 +27,18 @@ namespace detail {
 template <class Target, class Source>
 void placement_move_field(Target* _t, Source* _s) {
   if constexpr (std::is_const_v<Target>) {
-    detail::placement_move_field(const_cast<std::remove_const_t<Target>*>(_t),
-                                 _s);
+    placement_move_field(const_cast<std::remove_const_t<Target>*>(_t), _s);
   } else if constexpr (!rfl::internal::is_array_v<Source> &&
                        !std::is_array_v<Target>) {
     ::new (_t) Target(std::move(*_s));
   } else if constexpr (rfl::internal::is_array_v<Source>) {
     static_assert(std::is_array_v<Target>, "Expected target to be a c-array.");
     for (size_t i = 0; i < _s->arr_.size(); ++i) {
-      detail::placement_move_field(&((*_t)[i]), &(_s->arr_[i]));
+      placement_move_field(&((*_t)[i]), &(_s->arr_[i]));
     }
   } else {
     for (size_t i = 0; i < _s->size(); ++i) {
-      detail::placement_move_field(&((*_t)[i]), &((*_s)[i]));
+      placement_move_field(&((*_t)[i]), &((*_s)[i]));
     }
   }
 }
@@ -54,18 +51,20 @@ template <class R, class W, class OriginalType, class ProcessorsType>
 RFL_ALWAYS_INLINE void assign_uninitialized_view_field(
     const R& _r, const typename R::InputVarType& _var,
     const std::string_view _name, OriginalType& _slot, bool& _is_set,
-    FieldErrors<ProcessorsType>* _errors, const size_t _reserve_errors) {
+    rfl::parsing::FieldErrors<ProcessorsType>* _errors,
+    const size_t _reserve_errors) {
   using T = std::remove_cvref_t<std::remove_pointer_t<OriginalType>>;
-  auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
+  auto res = rfl::parsing::Parser<R, W, T, ProcessorsType>::read(_r, _var);
   if (!res) [[unlikely]] {
     // Reserve lazily to avoid error-vector reallocations while keeping
     // successful reads allocation-free.
     _errors->reserve(_reserve_errors);
-    _errors->emplace_back(wrap_field_error(_name, std::move(res).error()));
+    _errors->emplace_back(
+        rfl::parsing::wrap_field_error(_name, std::move(res).error()));
     return;
   }
   if constexpr (std::is_pointer_v<OriginalType>) {
-    detail::placement_move_field(_slot, &(*res));
+    placement_move_field(_slot, &(*res));
   } else {
     _slot = std::move(*res);
   }
@@ -77,7 +76,8 @@ template <class R, class W, class ExtraFieldsType, class ProcessorsType>
 void assign_extra_uninitialized_field(
     const R& _r, const std::string_view _current_name,
     const typename R::InputVarType& _var, ExtraFieldsType* _extra_fields,
-    bool& _is_found, bool& _is_set, FieldErrors<ProcessorsType>* _errors) {
+    bool& _is_found, bool& _is_set,
+    rfl::parsing::FieldErrors<ProcessorsType>* _errors) {
   using T = std::remove_cvref_t<
       std::remove_pointer_t<typename ExtraFieldsType::Type>>;
   if (!_is_set) {
@@ -85,16 +85,18 @@ void assign_extra_uninitialized_field(
     _is_set = true;
     _is_found = true;
   }
-  auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
+  auto res = rfl::parsing::Parser<R, W, T, ProcessorsType>::read(_r, _var);
   if (!res) [[unlikely]] {
     _errors->emplace_back(
-        wrap_field_error(_current_name, std::move(res).error()));
+        rfl::parsing::wrap_field_error(_current_name, std::move(res).error()));
     return;
   }
   _extra_fields->emplace(std::string(_current_name), std::move(*res));
 }
 
-}  // namespace detail
+}  // namespace rfl::internal::parsing
+
+namespace rfl::parsing {
 
 template <class R, class W, class _ViewType, class ProcessorsType>
 class ViewReader {
@@ -153,8 +155,8 @@ class ViewReader {
     if (!std::get<i>(*found_)) {
       std::get<i>(*found_) = true;
       already_assigned = true;
-      detail::assign_uninitialized_view_field<R, W, typename FieldType::Type,
-                                              ProcessorsType>(
+      internal::parsing::assign_uninitialized_view_field<
+          R, W, typename FieldType::Type, ProcessorsType>(
           *r_, _var, FieldType::name(), rfl::get<i>(*view_), std::get<i>(*set_),
           errors_, size_);
     }
@@ -197,7 +199,7 @@ class ViewReader {
     using Fields = typename ViewType::Fields;
     static_cast<void>(
         ((_idx == is
-              ? (detail::assign_uninitialized_view_field<
+              ? (internal::parsing::assign_uninitialized_view_field<
                      R, W, typename tuple_element_t<is, Fields>::Type,
                      ProcessorsType>(_r, _var,
                                      tuple_element_t<is, Fields>::name(),
@@ -219,9 +221,9 @@ class ViewReader {
     bool already_assigned = false;
     if constexpr (size_ > 0) {
       if (const int idx =
-              detail::FieldNameLookup<typename ViewType::Names>::find(
+              internal::parsing::FieldNameLookup<typename ViewType::Names>::find(
                   _current_name);
-          idx >= 0) {
+          idx >= 0 && idx != ViewType::pos_extra_fields()) {
         if (!(*_found)[static_cast<size_t>(idx)]) {
           (*_found)[static_cast<size_t>(idx)] = true;
           already_assigned = true;
@@ -239,8 +241,8 @@ class ViewReader {
         auto* extra_fields = _view->template get<pos>();
         using ExtraFieldsType =
             std::remove_cvref_t<std::remove_pointer_t<decltype(extra_fields)>>;
-        detail::assign_extra_uninitialized_field<R, W, ExtraFieldsType,
-                                                 ProcessorsType>(
+        internal::parsing::assign_extra_uninitialized_field<
+            R, W, ExtraFieldsType, ProcessorsType>(
             _r, _current_name, _var, extra_fields, std::get<pos>(*_found),
             std::get<pos>(*_set), _errors);
       }

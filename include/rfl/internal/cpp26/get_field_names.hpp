@@ -41,7 +41,7 @@ consteval DirectFieldNameInfo get_direct_field_name_info() {
   constexpr auto members = std::define_static_array(get_members<Type>());
   using FieldType =
       std::remove_cvref_t<decltype(std::declval<Type&>().[:members[_i]:])>;
-  if constexpr (is_rename_v<FieldType>) {
+  if constexpr (is_rename<FieldType>::value) {
     return {single_literal_name_view<typename FieldType::Name>::value, true};
   } else {
     return {std::meta::identifier_of(members[_i]), false};
@@ -54,10 +54,10 @@ consteval auto get_field_names();
 template <class T, class FieldName>
 consteval auto get_field_names_impl() {
   using Type = std::remove_cvref_t<std::remove_pointer_t<T>>;
-  if constexpr (is_rename_v<Type>) {
+  if constexpr (is_rename<Type>::value) {
     using Name = typename Type::Name;
     return Name();
-  } else if constexpr (is_flatten_field_v<Type>) {
+  } else if constexpr (is_flatten_field<Type>::value) {
     return get_field_names<std::remove_cvref_t<typename Type::Type>>();
   } else {
     return FieldName();

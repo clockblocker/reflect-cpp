@@ -19,7 +19,9 @@ struct Parser<R, W, NamedTuple<FieldTypes...>, ProcessorsType>
           R, W, /*_ignore_empty_containers=*/false,
           /*_all_required=*/internal::no_optionals_v<ProcessorsType>,
           /*_no_field_names=*/internal::no_field_names_v<ProcessorsType>,
-          ProcessorsType, FieldTypes...> {};
+          ProcessorsType, FieldTypes...> {
+  static constexpr bool use_table_struct_parser_ = true;
+};
 
 }  // namespace rfl::parsing
 

@@ -30,7 +30,9 @@ void call_destructor_on_array(const size_t _size, T* _ptr) {
   }
 }
 
-namespace detail {
+}  // namespace rfl::parsing
+
+namespace rfl::internal::parsing {
 
 /**
  * @brief Calls the destructor on a single field pointer if it was set.
@@ -49,7 +51,8 @@ inline void destroy_field_if_set(const bool _is_set,
     if constexpr (!std::is_trivially_destructible_v<
                       std::remove_all_extents_t<ValueType>>) {
       if (_is_set) {
-        call_destructor_on_array(sizeof(*_slot) / sizeof(**_slot), *_slot);
+        rfl::parsing::call_destructor_on_array(sizeof(*_slot) / sizeof(**_slot),
+                                               *_slot);
       }
     }
   } else if constexpr (std::is_pointer_v<CleanOriginal> &&
@@ -61,7 +64,9 @@ inline void destroy_field_if_set(const bool _is_set,
   }
 }
 
-}  // namespace detail
+}  // namespace rfl::internal::parsing
+
+namespace rfl::parsing {
 
 /**
  * @brief Calls the destructors on the elements of a view, if necessary.
@@ -75,7 +80,8 @@ template <class ViewType, auto _size>
 void call_destructors_where_necessary(const std::array<bool, _size>& _set,
                                       ViewType* _view) {
   [&]<int... is>(std::integer_sequence<int, is...>) {
-    (detail::destroy_field_if_set(std::get<is>(_set), rfl::get<is>(*_view)),
+    (internal::parsing::destroy_field_if_set(std::get<is>(_set),
+                                             rfl::get<is>(*_view)),
      ...);
   }(std::make_integer_sequence<int, _size>());
 }

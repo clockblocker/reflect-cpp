@@ -57,11 +57,11 @@ consteval bool is_required() {
                 !std::is_same_v<Type, rfl::Generic>) {
     return is_required<typename Type::ReflectionType,
                        _ignore_empty_containers>();
-  } else if constexpr (internal::is_rename_v<Type>) {
+  } else if constexpr (internal::is_rename<Type>::value) {
     return is_required<typename Type::Type, _ignore_empty_containers>();
-  } else if constexpr (internal::is_positional_v<Type>) {
+  } else if constexpr (internal::is_positional<Type>::value) {
     return is_required<typename Type::Type, _ignore_empty_containers>();
-  } else if constexpr (internal::is_short_v<Type>) {
+  } else if constexpr (internal::is_short<Type>::value) {
     return is_required<typename Type::Type, _ignore_empty_containers>();
   } else {
     return !(is_never_required_v<Type> ||

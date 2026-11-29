@@ -26,7 +26,9 @@ struct Parser<xml::Reader, xml::Writer, NamedTuple<FieldTypes...>,
           xml::Reader, xml::Writer,
           /*_ignore_empty_containers=*/true,
           /*_all_required=*/internal::no_optionals_v<ProcessorsType>,
-          /*_no_field_names_=*/false, ProcessorsType, FieldTypes...> {};
+          /*_no_field_names_=*/false, ProcessorsType, FieldTypes...> {
+  static constexpr bool use_table_struct_parser_ = true;
+};
 
 /// The generic parser is also special, because we need to ignore empty
 /// containers, which means that we need to try to read the value as an array or

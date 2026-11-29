@@ -27,7 +27,9 @@ struct Parser<ubjson::Reader, ubjson::Writer, NamedTuple<FieldTypes...>,
           /*_ignore_empty_containers=*/false,
           /*_all_required=*/true,
           /*_no_field_names=*/internal::no_field_names_v<ProcessorsType>,
-          ProcessorsType, FieldTypes...> {};
+          ProcessorsType, FieldTypes...> {
+  static constexpr bool use_table_struct_parser_ = true;
+};
 
 template <class ProcessorsType, class... Ts>
   requires AreReaderAndWriter<ubjson::Reader, ubjson::Writer, rfl::Tuple<Ts...>>

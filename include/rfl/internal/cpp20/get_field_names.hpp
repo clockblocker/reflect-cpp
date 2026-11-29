@@ -92,7 +92,7 @@ consteval DirectFieldNameInfo get_direct_field_name_info() {
 #else
   using FieldType = std::remove_cvref_t<std::remove_pointer_t<decltype(ptr)>>;
 #endif
-  if constexpr (is_rename_v<FieldType>) {
+  if constexpr (is_rename<FieldType>::value) {
     return {single_literal_name_view<typename FieldType::Name>::value, true};
   } else {
     return {get_field_name_str_view<T, ptr>(), false};
@@ -119,10 +119,10 @@ consteval auto get_field_name() {
 #else
   using Type = std::remove_cvref_t<std::remove_pointer_t<decltype(ptr)>>;
 #endif
-  if constexpr (is_rename_v<Type>) {
+  if constexpr (is_rename<Type>::value) {
     using Name = typename Type::Name;
     return Name();
-  } else if constexpr (is_flatten_field_v<Type>) {
+  } else if constexpr (is_flatten_field<Type>::value) {
     return get_field_names<std::remove_cvref_t<typename Type::Type>>();
   } else {
     return rfl::Literal<get_field_name_str_lit<T, ptr>()>();

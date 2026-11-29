@@ -34,7 +34,9 @@ struct Parser<env::Reader, env::Writer, NamedTuple<FieldTypes...>,
           env::Reader, env::Writer,
           /*_ignore_empty_containers=*/true,
           /*_all_required=*/internal::no_optionals_v<ProcessorsType>,
-          /*_no_field_names_=*/false, ProcessorsType, FieldTypes...> {};
+          /*_no_field_names_=*/false, ProcessorsType, FieldTypes...> {
+  static constexpr bool use_table_struct_parser_ = true;
+};
 
 }  // namespace rfl::parsing
 

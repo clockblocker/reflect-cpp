@@ -2,6 +2,7 @@
 #define RFL_PARSING_VIEWREADERWITHDEFAULT_HPP_
 
 #include <array>
+#include <exception>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -19,9 +20,7 @@
 #include "find_field_index.hpp"
 #include "wrap_error.hpp"
 
-namespace rfl::parsing {
-
-namespace detail {
+namespace rfl::internal::parsing {
 
 /// Move-assigns a parsed field value into an already-constructed struct field.
 /// Free function parameterized only by (Target, Source)—never ViewType—so
@@ -33,24 +32,48 @@ void move_assign_field(Target* _t, Source* _s) {
                 !std::is_array_v<Target>) {
     if constexpr (std::is_const_v<Target>) {
       // The struct was default-constructed, so *_t is a live const object
-      // and must not be assigned to. Re-create it in place instead. If the
-      // constructor throws, we are inside a noexcept function, so it cannot
-      // be destroyed twice.
+      // and must not be assigned to. Re-create it in place instead. If a
+      // potentially-throwing move constructor throws after destroy_at, restore
+      // a live default-constructed object before rethrowing (or terminate if
+      // restoration is impossible) so the enclosing struct's destructor never
+      // double-destroys *_t.
       using NonConstTarget = std::remove_const_t<Target>;
       auto* const ptr = const_cast<NonConstTarget*>(_t);
-      std::destroy_at(ptr);
-      ::new (ptr) NonConstTarget(std::move(*_s));
+      if constexpr (std::is_nothrow_move_constructible_v<NonConstTarget>) {
+        std::destroy_at(ptr);
+        ::new (ptr) NonConstTarget(std::move(*_s));
+      } else {
+        std::destroy_at(ptr);
+        try {
+          ::new (ptr) NonConstTarget(std::move(*_s));
+        } catch (...) {
+          if constexpr (std::is_nothrow_default_constructible_v<
+                            NonConstTarget>) {
+            ::new (ptr) NonConstTarget();
+          } else if constexpr (std::is_default_constructible_v<
+                                   NonConstTarget>) {
+            try {
+              ::new (ptr) NonConstTarget();
+            } catch (...) {
+              std::terminate();
+            }
+          } else {
+            std::terminate();
+          }
+          throw;
+        }
+      }
     } else {
       *_t = Target(std::move(*_s));
     }
   } else if constexpr (rfl::internal::is_array_v<Source>) {
     static_assert(std::is_array_v<Target>, "Expected target to be a c-array.");
     for (size_t i = 0; i < _s->arr_.size(); ++i) {
-      detail::move_assign_field(&((*_t)[i]), &(_s->arr_[i]));
+      move_assign_field(&((*_t)[i]), &(_s->arr_[i]));
     }
   } else {
     for (size_t i = 0; i < _s->size(); ++i) {
-      detail::move_assign_field(&((*_t)[i]), &((*_s)[i]));
+      move_assign_field(&((*_t)[i]), &((*_s)[i]));
     }
   }
 }
@@ -63,15 +86,16 @@ template <class R, class W, class OriginalType, class ProcessorsType>
 RFL_ALWAYS_INLINE void assign_default_view_field(
     const R& _r, const typename R::InputVarType& _var,
     const std::string_view _name, OriginalType& _slot,
-    FieldErrors<ProcessorsType>* _errors) {
+    rfl::parsing::FieldErrors<ProcessorsType>* _errors) {
   using T = std::remove_cvref_t<std::remove_pointer_t<OriginalType>>;
-  auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
+  auto res = rfl::parsing::Parser<R, W, T, ProcessorsType>::read(_r, _var);
   if (!res) [[unlikely]] {
-    _errors->emplace_back(wrap_field_error(_name, std::move(res).error()));
+    _errors->emplace_back(
+        rfl::parsing::wrap_field_error(_name, std::move(res).error()));
     return;
   }
   if constexpr (std::is_pointer_v<OriginalType>) {
-    detail::move_assign_field(_slot, &(*res));
+    move_assign_field(_slot, &(*res));
   } else {
     _slot = std::move(*res);
   }
@@ -79,23 +103,24 @@ RFL_ALWAYS_INLINE void assign_default_view_field(
 
 /// Reads one extra field into an already-constructed ExtraFields slot.
 template <class R, class W, class ExtraFieldsType, class ProcessorsType>
-void assign_extra_default_field(const R& _r,
-                                const std::string_view _current_name,
-                                const typename R::InputVarType& _var,
-                                ExtraFieldsType* _extra_fields,
-                                FieldErrors<ProcessorsType>* _errors) {
+void assign_extra_default_field(
+    const R& _r, const std::string_view _current_name,
+    const typename R::InputVarType& _var, ExtraFieldsType* _extra_fields,
+    rfl::parsing::FieldErrors<ProcessorsType>* _errors) {
   using T = std::remove_cvref_t<
       std::remove_pointer_t<typename ExtraFieldsType::Type>>;
-  auto res = Parser<R, W, T, ProcessorsType>::read(_r, _var);
+  auto res = rfl::parsing::Parser<R, W, T, ProcessorsType>::read(_r, _var);
   if (!res) [[unlikely]] {
     _errors->emplace_back(
-        wrap_field_error(_current_name, std::move(res).error()));
+        rfl::parsing::wrap_field_error(_current_name, std::move(res).error()));
     return;
   }
   _extra_fields->emplace(std::string(_current_name), std::move(*res));
 }
 
-}  // namespace detail
+}  // namespace rfl::internal::parsing
+
+namespace rfl::parsing {
 
 template <class R, class W, class _ViewType, class ProcessorsType>
 class ViewReaderWithDefault {
@@ -159,15 +184,15 @@ class ViewReaderWithDefault {
     bool already_assigned = false;
     if constexpr (size_ > 0) {
       if (const int idx =
-              detail::FieldNameLookup<typename ViewType::Names>::find(
+              internal::parsing::FieldNameLookup<typename ViewType::Names>::find(
                   _current_name);
-          idx >= 0) {
+          idx >= 0 && idx != ViewType::pos_extra_fields()) {
         if (!(*_found)[static_cast<size_t>(idx)]) {
           (*_found)[static_cast<size_t>(idx)] = true;
           already_assigned = true;
           static_cast<void>(
               ((idx == is
-                    ? (detail::assign_default_view_field<
+                    ? (internal::parsing::assign_default_view_field<
                            R, W, typename tuple_element_t<is, Fields>::Type,
                            ProcessorsType>(_r, _var,
                                            tuple_element_t<is, Fields>::name(),
@@ -185,8 +210,8 @@ class ViewReaderWithDefault {
         auto* extra_fields = _view->template get<pos>();
         using ExtraFieldsType =
             std::remove_cvref_t<std::remove_pointer_t<decltype(extra_fields)>>;
-        detail::assign_extra_default_field<R, W, ExtraFieldsType,
-                                           ProcessorsType>(
+        internal::parsing::assign_extra_default_field<R, W, ExtraFieldsType,
+                                                      ProcessorsType>(
             _r, _current_name, _var, extra_fields, _errors);
       }
     } else if constexpr (internal::no_extra_fields_v<ProcessorsType>) {
